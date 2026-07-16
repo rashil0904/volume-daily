@@ -1,0 +1,4 @@
+symbol,market_cap_cr,entry_price_315pm,prev_day_vwap_close,return_pct_vs_prev_close,cum_volume_to_3pm,avg_36day_volume,volume_ratio,passes_volume,passes_return
+CYIENTDLM,4659.87,587.75,539.5868,8.7499,2679379,425528.94,6.2966,True,True
+FILATEX,3218.62,72.04,70.4422,6.4702,24061114,3289343.83,7.3149,True,True
+JINDWORLD,3214.34,32.12,30.1169,8.6103,54175606,4181422.78,12.9563,True,True

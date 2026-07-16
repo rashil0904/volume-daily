@@ -1,0 +1,8 @@
+{
+  "date": "2026-07-16",
+  "status": "fresh",
+  "file": "/Users/rashilshah/Desktop/Projects/Volume_1500_5000/market_cap_daily/market_cap_2026-07-16.csv",
+  "rows": 491,
+  "fallback_date": null,
+  "message": "Already fetched today (491 rows) \u2014 skipping."
+}
