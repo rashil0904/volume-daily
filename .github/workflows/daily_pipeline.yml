@@ -2,7 +2,8 @@ name: NSE Daily Pipeline
 
 on:
   schedule:
-    - cron: '20 4 * * 1-5'   # 9:50 AM IST (UTC+5:30), Mon–Fri
+    - cron: '20 4 * * 1-5'   # 9:50 AM IST (UTC+5:30), Mon–Fri — test run
+    - cron: '31 9 * * 1-5'   # 3:01 PM IST (UTC+5:30), Mon–Fri — main run
   workflow_dispatch:           # manual trigger for testing
 
 env:
