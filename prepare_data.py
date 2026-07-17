@@ -4,18 +4,23 @@ prepare_data.py
 ===============
 Produces today's trade list using today's live market cap fetch + candle history.
 
-Signal conditions (ALL 3 must pass):
+Signal conditions (ALL must pass):
   1. Market cap : symbol present in market_cap_daily/market_cap_<today>.csv
   2. Volume     : cum volume 09:15–14:45 >= 6× 36-day rolling avg full-day volume
                   (prior trading days only; zero-volume days excluded; min_periods=36)
   3. Return     : OPEN of 15:00 candle >= 5% above prev trading day's VWAP close
                   (VWAP = volume-weighted (H+L+C)/3 from prev day's 15:00 + 15:15 candles)
 
-Entry price = OPEN of the 15:15 candle.
+Capital allocation (TOTAL_CAPITAL = 5,00,000):
+  signals <= 4  →  1,25,000 per stock
+  signals >= 5  →  1,00,000 per stock
+  shares = floor(allocation / open_of_3pm_candle)
+
 Output: results/trade_list_<today>.csv  (not written if no signals fire)
 """
 
 import csv
+import math
 import sys
 from datetime import date
 from pathlib import Path
@@ -32,12 +37,9 @@ VOLUME_MULT      = 6
 MIN_PERIODS      = 36
 RETURN_THRESHOLD = 5.0   # percent
 
-FIELDNAMES = [
-    "symbol", "market_cap_cr", "entry_price_315pm",
-    "prev_day_vwap_close", "return_pct_vs_prev_close",
-    "cum_volume_to_3pm", "avg_36day_volume", "volume_ratio",
-    "passes_volume", "passes_return",
-]
+TOTAL_CAPITAL    = 500_000   # ₹5,00,000
+
+FIELDNAMES = ["symbol", "shares", "ref_price"]
 
 
 def load_today_mcap():
@@ -53,7 +55,7 @@ def load_today_mcap():
     return universe
 
 
-def check_symbol(symbol, mcap):
+def check_symbol(symbol):
     csv_path = CANDLES_DIR / f"{symbol}.csv"
     if not csv_path.exists():
         return None
@@ -76,18 +78,16 @@ def check_symbol(symbol, mcap):
         return None
 
     # 36-day rolling avg of full-day volume (prior trading days, non-zero only)
-    full_day_vol = df.groupby("date")["volume"].sum()
-    dates        = sorted(full_day_vol.index.tolist())
+    full_day_vol  = df.groupby("date")["volume"].sum()
+    dates         = sorted(full_day_vol.index.tolist())
     prior_nonzero = [full_day_vol[d] for d in dates if d < TODAY and full_day_vol[d] > 0]
     if len(prior_nonzero) < MIN_PERIODS:
-        return None   # insufficient history
+        return None
 
-    avg_36 = sum(prior_nonzero[-MIN_PERIODS:]) / MIN_PERIODS
-
-    # Cumulative volume 09:15–14:45
+    avg_36  = sum(prior_nonzero[-MIN_PERIODS:]) / MIN_PERIODS
     cum_vol = today_df[(today_df["hhmm"] >= 915) & (today_df["hhmm"] <= 1445)]["volume"].sum()
 
-    # Open of today's 15:00 candle
+    # Open of today's 15:00 candle — used for signal check and share sizing
     c300 = today_df[today_df["hhmm"] == 1500]
     if c300.empty:
         return None
@@ -106,57 +106,54 @@ def check_symbol(symbol, mcap):
     prev_vwap = float((tp * vwap_rows["volume"]).sum() / vwap_rows["volume"].sum())
 
     return_pct    = (open_300 / prev_vwap - 1) * 100
-    volume_ratio  = cum_vol / avg_36 if avg_36 > 0 else 0.0
     passes_volume = bool(cum_vol >= VOLUME_MULT * avg_36)
     passes_return = bool(return_pct >= RETURN_THRESHOLD)
 
     if not (passes_volume and passes_return):
         return None
 
-    # Entry price: open of 15:15 candle
-    c315 = today_df[today_df["hhmm"] == 1515]
-    entry_price = float(c315["open"].iloc[0]) if not c315.empty else None
-
-    return {
-        "symbol":                   symbol,
-        "market_cap_cr":            round(mcap, 2),
-        "entry_price_315pm":        round(entry_price, 2) if entry_price is not None else "",
-        "prev_day_vwap_close":      round(prev_vwap, 4),
-        "return_pct_vs_prev_close": round(return_pct, 4),
-        "cum_volume_to_3pm":        int(cum_vol),
-        "avg_36day_volume":         round(avg_36, 2),
-        "volume_ratio":             round(volume_ratio, 4),
-        "passes_volume":            passes_volume,
-        "passes_return":            passes_return,
-    }
+    return {"symbol": symbol, "open_300": open_300}
 
 
 def main():
     universe = load_today_mcap()
     print(f"prepare_data.py — {TODAY.isoformat()}  ({len(universe):,} symbols in mcap file)")
 
-    signals    = []
-    no_candles = 0
-    no_signal  = 0
+    raw_signals = []
+    no_candles  = 0
+    no_signal   = 0
 
-    for sym, mcap in sorted(universe.items()):
-        result = check_symbol(sym, mcap)
+    for sym in sorted(universe):
+        result = check_symbol(sym)
         if result is None:
-            csv_path = CANDLES_DIR / f"{sym}.csv"
-            if not csv_path.exists():
+            if not (CANDLES_DIR / f"{sym}.csv").exists():
                 no_candles += 1
             else:
                 no_signal += 1
         else:
-            signals.append(result)
+            raw_signals.append(result)
 
-    print(f"  Symbols with no candle file: {no_candles}")
-    print(f"  No signal (conditions not met or <36 days history): {no_signal}")
-    print(f"  Signals today              : {len(signals)}")
+    print(f"  Symbols with no candle file : {no_candles}")
+    print(f"  No signal (<36d history or conditions not met): {no_signal}")
+    print(f"  Signals today               : {len(raw_signals)}")
 
-    if not signals:
+    if not raw_signals:
         print(f"\n  No signals for {TODAY.isoformat()} — trade list not written.")
         return
+
+    # Capital allocation
+    n          = len(raw_signals)
+    allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
+    print(f"\n  Capital: ₹{TOTAL_CAPITAL:,.0f}  |  {n} signal(s)  →  ₹{allocation:,.0f} per stock")
+
+    signals = []
+    for s in raw_signals:
+        shares = math.floor(allocation / s["open_300"]) if s["open_300"] > 0 else 0
+        signals.append({
+            "symbol":    s["symbol"],
+            "shares":    shares,
+            "ref_price": round(s["open_300"], 2),
+        })
 
     trade_path = RESULTS_DIR / f"trade_list_{TODAY.isoformat()}.csv"
     with open(trade_path, "w", newline="") as f:
@@ -164,13 +161,12 @@ def main():
         w.writeheader()
         w.writerows(signals)
 
-    print(f"\n  Trade list → {trade_path}")
-    print(f"\n  {'Symbol':<15}  {'Entry':>8}  {'Ret%':>7}  {'VolRatio':>9}  MCap Cr")
-    print(f"  {'-'*15}  {'-'*8}  {'-'*7}  {'-'*9}  {'-'*9}")
+    print(f"\n  {'Symbol':<15}  {'Shares':>7}  {'Ref Price (3PM Open)':>20}")
+    print(f"  {'-'*15}  {'-'*7}  {'-'*20}")
     for r in signals:
-        print(f"  {r['symbol']:<15}  {str(r['entry_price_315pm']):>8}  "
-              f"{r['return_pct_vs_prev_close']:>7.2f}  {r['volume_ratio']:>9.2f}x  "
-              f"{r['market_cap_cr']:>9,.0f}")
+        print(f"  {r['symbol']:<15}  {r['shares']:>7}  ₹{r['ref_price']:>19,.2f}")
+
+    print(f"\n  Trade list → {trade_path}")
 
 
 if __name__ == "__main__":
