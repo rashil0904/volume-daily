@@ -44,11 +44,12 @@ if not ACCESS_TOKEN:
         "https://upstox.com/developer/api-documentation/authentication before each run."
     )
 
-UNIVERSE_FILE   = Path("universe_combined.csv")
-INSTRUMENTS_DIR = Path("instruments")
-CANDLES_DIR     = Path("candles")
-INSTRUMENTS_DIR.mkdir(exist_ok=True)
-CANDLES_DIR.mkdir(exist_ok=True)
+_ROOT           = Path(__file__).resolve().parent.parent
+UNIVERSE_FILE   = _ROOT / "data" / "universe_combined.csv"
+INSTRUMENTS_DIR = _ROOT / "data" / "instruments"
+CANDLES_DIR     = _ROOT / "data" / "candles"
+INSTRUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+CANDLES_DIR.mkdir(parents=True, exist_ok=True)
 
 NSE_INSTRUMENTS_URL = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 BASE_API            = "https://api.upstox.com/v3"

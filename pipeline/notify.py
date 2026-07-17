@@ -51,11 +51,11 @@ SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 # ──────────────────────────────────────────────────────────────────────────────
 
-PROJECT_DIR = Path(__file__).parent
+PROJECT_DIR = Path(__file__).resolve().parent.parent   # repo root
 
 
 def _load_mcap_status() -> dict:
-    path = PROJECT_DIR / "market_cap_daily" / "mcap_status.json"
+    path = PROJECT_DIR / "data" / "market_cap_daily" / "mcap_status.json"
     if not path.exists():
         return {}
     try:
@@ -331,6 +331,7 @@ def _send(msg: MIMEMultipart) -> None:
 
 def send_success(date_str: str, start_ts, mcap_status: str = "fresh") -> None:
     trade_list_path = PROJECT_DIR / "results" / f"trade_list_{date_str}.csv"
+
     n_signals = _count_signals(trade_list_path)
     msg = _build_success_email(date_str, n_signals, trade_list_path, start_ts, mcap_status)
     _send(msg)

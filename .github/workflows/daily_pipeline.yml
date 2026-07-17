@@ -24,17 +24,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-${{ hashFiles('requirements.txt') }}
+          key: pip-${{ hashFiles('pipeline/requirements.txt') }}
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r pipeline/requirements.txt
 
       - name: Get date (IST)
         id: date
         run: echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
       - name: Create output directories
-        run: mkdir -p market_cap_daily results
+        run: mkdir -p data/market_cap_daily data/candles data/instruments results
 
       - name: Run pipeline
         env:
@@ -43,7 +43,7 @@ jobs:
           SCREENER_PASSWORD: ${{ secrets.SCREENER_PASSWORD }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_APP_PASSWORD: ${{ secrets.SENDER_APP_PASSWORD }}
-        run: python run_daily.py
+        run: python pipeline/run_daily.py
 
       - name: Upload trade list
         if: always()

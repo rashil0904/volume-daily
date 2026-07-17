@@ -33,15 +33,17 @@ if not os.environ.get("UPSTOX_ACCESS_TOKEN"):
     sys.exit("ERROR: Set UPSTOX_ACCESS_TOKEN in .env or environment.")
 
 # Import after env is set (fetch_candles checks for the token at import time)
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_PIPELINE_DIR = Path(__file__).resolve().parent
+_ROOT         = _PIPELINE_DIR.parent
+sys.path.insert(0, str(_PIPELINE_DIR))
 import fetch_candles as fc
 import notify
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-UNIVERSE_FILE   = Path("universe_combined.csv")
-INSTRUMENTS_DIR = Path("instruments")
-CANDLES_DIR     = Path("candles")
-MCAP_DAILY_DIR  = Path("market_cap_daily")
+UNIVERSE_FILE   = _ROOT / "data" / "universe_combined.csv"
+INSTRUMENTS_DIR = _ROOT / "data" / "instruments"
+CANDLES_DIR     = _ROOT / "data" / "candles"
+MCAP_DAILY_DIR  = _ROOT / "data" / "market_cap_daily"
 TODAY           = date.today()
 ONE_YEAR_AGO    = TODAY - timedelta(days=365)
 
@@ -124,7 +126,7 @@ def main():
         # ── Step 1: Fetch market cap ───────────────────────────────────────────
         failed_step = "Step 1: fetch_market_cap"
         print("\n── Step 1: Fetch market cap ────────────────────────────────")
-        result = subprocess.run([sys.executable, "fetch_market_cap.py"], env=os.environ)
+        result = subprocess.run([sys.executable, str(_PIPELINE_DIR / "fetch_market_cap.py")], env=os.environ)
         if result.returncode == 2:
             mcap_status = "stale"
         elif result.returncode != 0:
@@ -179,7 +181,7 @@ def main():
         # ── Step 4: Generate today's trade list ───────────────────────────────
         failed_step = "Step 4: prepare_data"
         print("\n── Step 4: Generate trade list ─────────────────────────────")
-        result = subprocess.run([sys.executable, "prepare_data.py"], env=os.environ)
+        result = subprocess.run([sys.executable, str(_PIPELINE_DIR / "prepare_data.py")], env=os.environ)
         if result.returncode != 0:
             raise RuntimeError(f"prepare_data.py exited with code {result.returncode}")
 

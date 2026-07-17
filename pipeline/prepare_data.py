@@ -27,10 +27,11 @@ from pathlib import Path
 
 import pandas as pd
 
-MCAP_DAILY_DIR   = Path("market_cap_daily")
-CANDLES_DIR      = Path("candles")
-RESULTS_DIR      = Path("results")
-RESULTS_DIR.mkdir(exist_ok=True)
+_ROOT            = Path(__file__).resolve().parent.parent
+MCAP_DAILY_DIR   = _ROOT / "data" / "market_cap_daily"
+CANDLES_DIR      = _ROOT / "data" / "candles"
+RESULTS_DIR      = _ROOT / "results"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY            = date.today()
 VOLUME_MULT      = 6

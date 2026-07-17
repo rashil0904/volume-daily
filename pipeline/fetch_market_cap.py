@@ -58,8 +58,8 @@ MCAP_MAX_CR = 5_000
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE        = Path(__file__).resolve().parent
-MCAP_DIR    = BASE / "market_cap_daily"
-MCAP_DIR.mkdir(exist_ok=True)
+MCAP_DIR    = BASE.parent / "data" / "market_cap_daily"
+MCAP_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY      = date.today().isoformat()           # "2026-07-15"
 OUT_PATH   = MCAP_DIR / f"market_cap_{TODAY}.csv"
