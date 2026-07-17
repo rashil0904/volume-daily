@@ -48,7 +48,8 @@ def load_today_mcap():
     with open(mcap_file, newline="") as f:
         for row in csv.DictReader(f):
             sym = row["symbol"].strip().upper()
-            universe[sym] = float(row.get("mcap_cr", 0))
+            mcap_str = (row.get("mcap_cr") or "").strip()
+            universe[sym] = float(mcap_str) if mcap_str else 0.0
     return universe
 
 
@@ -57,8 +58,10 @@ def check_symbol(symbol, mcap):
     if not csv_path.exists():
         return None
 
-    df = pd.read_csv(csv_path, dtype={"volume": float, "open": float,
-                                       "high": float, "low": float, "close": float})
+    df = pd.read_csv(csv_path)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
     if df.empty:
         return None
 
