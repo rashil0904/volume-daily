@@ -36,13 +36,6 @@ jobs:
         id: date
         run: echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
-      - name: Restore candle cache
-        uses: actions/cache@v4
-        with:
-          path: candles/
-          key: candles-${{ steps.date.outputs.date }}
-          restore-keys: candles-
-
       - name: Create output directories
         run: mkdir -p market_cap_daily results
 
