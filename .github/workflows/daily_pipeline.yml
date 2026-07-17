@@ -1,0 +1,63 @@
+name: NSE Daily Pipeline
+
+on:
+  schedule:
+    - cron: '20 4 * * 1-5'   # 9:50 AM IST (UTC+5:30), Mon–Fri
+  workflow_dispatch:           # manual trigger for testing
+
+env:
+  TZ: Asia/Kolkata
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Get date (IST)
+        id: date
+        run: echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Restore candle cache
+        uses: actions/cache@v4
+        with:
+          path: candles/
+          key: candles-${{ steps.date.outputs.date }}
+          restore-keys: candles-
+
+      - name: Create output directories
+        run: mkdir -p market_cap_daily results
+
+      - name: Run pipeline
+        env:
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+          SCREENER_EMAIL: ${{ secrets.SCREENER_EMAIL }}
+          SCREENER_PASSWORD: ${{ secrets.SCREENER_PASSWORD }}
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_APP_PASSWORD: ${{ secrets.SENDER_APP_PASSWORD }}
+        run: python run_daily.py
+
+      - name: Upload trade list
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trade-list-${{ steps.date.outputs.date }}
+          path: results/trade_list_*.csv
+          if-no-files-found: ignore

@@ -1,0 +1,69 @@
+name: Seed Candles (Run Once)
+# Run this manually ONCE after the first push to build 1 year of candle history
+# on the GitHub Actions runner. After it completes, daily_pipeline.yml takes over.
+# Runtime: ~60–90 minutes for 466 symbols.
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Kolkata
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Get date (IST)
+        id: date
+        run: echo "date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Create candles directory
+        run: mkdir -p candles
+
+      - name: Fetch 1 year of historical candles
+        env:
+          UPSTOX_ACCESS_TOKEN: ${{ secrets.UPSTOX_ACCESS_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          import sys, csv
+          from pathlib import Path
+          from datetime import date, timedelta
+
+          sys.path.insert(0, '.')
+          import fetch_candles as fc
+
+          instruments_file = Path('instruments/upstox_instruments.csv')
+          with open(instruments_file) as f:
+              instruments = list(csv.DictReader(f))
+
+          today = date.today()
+          one_year_ago = today - timedelta(days=365)
+          print(f"Seeding {len(instruments)} symbols from {one_year_ago} → {today}")
+          fc.fetch_all_candles(instruments, from_date=one_year_ago)
+          PYEOF
+
+      - name: Save candle cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: candles/
+          key: candles-${{ steps.date.outputs.date }}

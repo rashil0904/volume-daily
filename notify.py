@@ -37,8 +37,10 @@ if _env_file.exists():
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip())
 
-SENDER_EMAIL        = os.environ.get("SENDER_EMAIL",        "rashilshah2@gmail.com")
-SENDER_APP_PASSWORD = os.environ.get("SENDER_APP_PASSWORD", "bmvxiiajotkpkjvv")
+SENDER_EMAIL        = os.environ.get("SENDER_EMAIL")
+SENDER_APP_PASSWORD = os.environ.get("SENDER_APP_PASSWORD")
+if not SENDER_EMAIL or not SENDER_APP_PASSWORD:
+    raise EnvironmentError("Set SENDER_EMAIL and SENDER_APP_PASSWORD in .env before sending notifications.")
 RECIPIENT_EMAILS    = [
     "paramshah1510@gmail.com",
     "khannakartik145@gmail.com",
