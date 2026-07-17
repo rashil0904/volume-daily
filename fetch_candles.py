@@ -36,7 +36,7 @@ from urllib.parse import quote
 import requests
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-ACCESS_TOKEN = os.environ.get("UPSTOX_ACCESS_TOKEN")
+ACCESS_TOKEN = (os.environ.get("UPSTOX_ACCESS_TOKEN") or "").strip()
 if not ACCESS_TOKEN:
     sys.exit(
         "ERROR: Set UPSTOX_ACCESS_TOKEN environment variable.\n"
