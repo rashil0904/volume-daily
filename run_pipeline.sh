@@ -1,5 +1,5 @@
 #!/bin/bash
-# Daily pipeline runner — called by cron at 9:31 AM UTC (3:01 PM IST) Mon–Fri.
+# Daily pipeline runner — called by cron at 3:01 PM IST Mon–Fri (VM timezone: Asia/Kolkata).
 # Logs go to ~/pipeline.log
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"

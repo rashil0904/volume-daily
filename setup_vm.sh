@@ -12,9 +12,11 @@ REPO_URL="git@github.com:rashil0904/volume-daily.git"
 PROJECT_DIR="$HOME/volume-daily"
 PYTHON="python3.11"
 
-echo "=== Step 1: System packages ==="
+echo "=== Step 1: System packages + timezone ==="
 apt-get update -qq
 apt-get install -y python3.11 python3.11-venv python3-pip git
+timedatectl set-timezone Asia/Kolkata
+echo "  Timezone set to: $(timedatectl | grep 'Time zone')"
 
 echo "=== Step 2: Clone repo ==="
 if [ -d "$PROJECT_DIR" ]; then
@@ -70,14 +72,14 @@ fi
 
 echo "=== Step 6: Cron job ==="
 CRON_SCRIPT="$PROJECT_DIR/run_pipeline.sh"
-CRON_LINE="31 9 * * 1-5 /bin/bash $CRON_SCRIPT >> $HOME/pipeline.log 2>&1"
+CRON_LINE="1 15 * * 1-5 /bin/bash $CRON_SCRIPT >> $HOME/pipeline.log 2>&1"
 
 # Check if cron already set
 if crontab -l 2>/dev/null | grep -qF "$CRON_SCRIPT"; then
     echo "  Cron already set — skipping."
 else
     (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab -
-    echo "  Cron set: runs at 9:31 AM UTC (3:01 PM IST) Mon–Fri."
+    echo "  Cron set: runs at 3:01 PM IST Mon–Fri."
 fi
 
 echo ""
