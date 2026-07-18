@@ -61,9 +61,9 @@ UPSTOX_SANDBOX_ACCESS_TOKEN=
 # Default mode
 UPSTOX_MODE=live
 
-# Email notifications
-SENDER_EMAIL=
-SENDER_APP_PASSWORD=
+# Telegram notifications
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 EOF
     echo "  Edit $ENV_FILE and fill in your credentials before running the pipeline."
 fi
