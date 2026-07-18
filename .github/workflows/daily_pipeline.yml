@@ -45,6 +45,18 @@ jobs:
           SENDER_APP_PASSWORD: ${{ secrets.SENDER_APP_PASSWORD }}
         run: python pipeline/run_daily.py
 
+      - name: Commit and push results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/market_cap_daily/ data/candles/ results/
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Pipeline results ${{ steps.date.outputs.date }}"
+            git push
+          fi
+
       - name: Upload trade list
         if: always()
         uses: actions/upload-artifact@v4
