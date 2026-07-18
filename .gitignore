@@ -1,6 +1,9 @@
 # Credentials — never commit
 .env
 zerodha/.token.json
+.zerodha_token.json
+upstox/.token_live.json
+upstox/.token_sandbox.json
 
 
 # Python cache

@@ -21,6 +21,9 @@ Supported values:
 
 import json
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from zerodha.auth import BASE_URL, get_session
 
@@ -37,10 +40,11 @@ def place_order(
     product: str     = "CNC",       # CNC (delivery) | MIS (intraday) | NRML
     variety: str     = "regular",   # regular | amo
     tag: str         = "",          # optional identifier (max 20 chars)
+    dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
     """
     Places an order and returns the order_id.
-
+    Pass dry_run=True to validate params and print the payload without sending.
     Raises RuntimeError on failure with the exact error from Kite.
     """
     transaction_type = transaction_type.upper()
@@ -57,21 +61,30 @@ def place_order(
     if order_type in ("SL", "SL-M") and not trigger_price:
         raise ValueError("trigger_price is required for SL/SL-M orders")
 
-    session, _ = get_session()
-
     payload = {
-        "tradingsymbol":   symbol.upper(),
-        "exchange":        exchange,
+        "tradingsymbol":    symbol.upper(),
+        "exchange":         exchange,
         "transaction_type": transaction_type,
-        "order_type":      order_type,
-        "quantity":        quantity,
-        "product":         product,
-        "price":           price,
-        "trigger_price":   trigger_price,
-        "validity":        "DAY",
+        "order_type":       order_type,
+        "quantity":         quantity,
+        "product":          product,
+        "price":            price,
+        "trigger_price":    trigger_price,
+        "validity":         "DAY",
     }
     if tag:
         payload["tag"] = tag[:20]
+
+    if dry_run:
+        print("[trade] ── DRY RUN — no real order placed ──────────────────")
+        print(f"[trade] POST {BASE_URL}/orders/{variety}")
+        print("[trade] Payload:")
+        for k, v in payload.items():
+            print(f"  {k:20} = {v}")
+        print("[trade] ───────────────────────────────────────────────────")
+        return "DRY_RUN"
+
+    session, _ = get_session()
 
     print(f"[trade] Placing {transaction_type} {quantity}× {symbol} @ {order_type}"
           + (f" ₹{price}" if price else "")
@@ -166,11 +179,13 @@ if __name__ == "__main__":
     if not args:
         _usage()
 
+    dry_run = "--dry-run" in args
+    args = [a for a in args if a != "--dry-run"]
     cmd = args[0].lower()
 
     try:
         if cmd in ("buy", "sell") and len(args) >= 5:
-            # buy/sell SYMBOL EXCHANGE QTY ORDER_TYPE [PRICE]
+            # buy/sell SYMBOL EXCHANGE QTY ORDER_TYPE [PRICE] [--dry-run]
             symbol    = args[1]
             exchange  = args[2]
             qty       = int(args[3])
@@ -178,7 +193,7 @@ if __name__ == "__main__":
             price     = float(args[5]) if len(args) > 5 else 0
             product   = args[6].upper() if len(args) > 6 else "CNC"
             place_order(symbol, exchange, cmd.upper(), qty,
-                        order_type=otype, price=price, product=product)
+                        order_type=otype, price=price, product=product, dry_run=dry_run)
 
         elif cmd == "cancel" and len(args) == 2:
             cancel_order(args[1])

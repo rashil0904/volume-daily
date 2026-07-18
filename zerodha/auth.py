@@ -22,6 +22,7 @@ import os
 import sys
 import threading
 import webbrowser
+from pathlib import Path
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -30,7 +31,8 @@ from zoneinfo import ZoneInfo
 import requests
 from dotenv import load_dotenv
 
-load_dotenv()
+_ENV_FILE = Path(__file__).resolve().parent.parent / "pipeline" / ".env"
+load_dotenv(_ENV_FILE)
 
 _BASE_URL    = "https://api.kite.trade"
 _LOGIN_URL   = "https://kite.zerodha.com/connect/login"
