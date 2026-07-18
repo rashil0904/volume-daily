@@ -1,0 +1,33 @@
+#!/bin/bash
+# Daily pipeline runner — called by cron at 9:31 AM UTC (3:01 PM IST) Mon–Fri.
+# Logs go to ~/pipeline.log
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON="python3.11"
+LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S')"
+
+echo ""
+echo "=========================================="
+echo "$LOG_PREFIX  Starting NSE Daily Pipeline"
+echo "=========================================="
+
+cd "$PROJECT_DIR"
+
+# Pull latest code changes (not data — data stays local)
+echo "$LOG_PREFIX  Pulling latest code..."
+git pull --rebase origin main
+
+# Run pipeline
+echo "$LOG_PREFIX  Running pipeline..."
+$PYTHON pipeline/run_daily.py
+
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "$LOG_PREFIX  Pipeline completed successfully."
+else
+    echo "$LOG_PREFIX  Pipeline FAILED (exit $EXIT_CODE)."
+fi
+
+echo "=========================================="
+exit $EXIT_CODE
