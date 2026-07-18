@@ -46,7 +46,11 @@ FIELDNAMES = ["symbol", "shares", "ref_price"]
 def load_today_mcap():
     mcap_file = MCAP_DAILY_DIR / f"market_cap_{TODAY.isoformat()}.csv"
     if not mcap_file.exists():
-        sys.exit(f"ERROR: {mcap_file} not found — run fetch_market_cap.py first.")
+        candidates = sorted(MCAP_DAILY_DIR.glob("market_cap_*.csv"))
+        if not candidates:
+            sys.exit(f"ERROR: {mcap_file} not found — run fetch_market_cap.py first.")
+        mcap_file = candidates[-1]
+        print(f"  [prepare_data] market_cap for {TODAY} not found — using {mcap_file.name}")
     universe = {}
     with open(mcap_file, newline="") as f:
         for row in csv.DictReader(f):
