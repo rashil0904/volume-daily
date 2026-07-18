@@ -1,6 +1,9 @@
 name: NSE Daily Pipeline
 
 on:
+  schedule:
+    - cron: '31 9 18 7 *'   # 3:01 PM IST Jul 18 — test run, remove after 2026-07-19
+    - cron: '31 9 19 7 *'   # 3:01 PM IST Jul 19 — test run, remove after 2026-07-20
   workflow_dispatch:           # triggered by Mac launchd at 3:01 PM IST (5:31 AM EDT)
 
 env:
