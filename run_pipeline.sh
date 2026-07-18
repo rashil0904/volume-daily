@@ -13,10 +13,6 @@ echo "=========================================="
 
 cd "$PROJECT_DIR"
 
-# Pull latest code changes (not data — data stays local)
-echo "$LOG_PREFIX  Pulling latest code..."
-git pull --rebase origin main
-
 # Run pipeline
 echo "$LOG_PREFIX  Running pipeline..."
 $PYTHON pipeline/run_daily.py

@@ -11,6 +11,12 @@ Flow:
   3b. No new symbols     → log and skip to step 4
   4. ALL symbols with candle files → append today's intraday 15-min candles
 """
+import socket
+
+_orig_getaddrinfo = socket.getaddrinfo
+def _ipv4_only_getaddrinfo(*args, **kwargs):
+    return [r for r in _orig_getaddrinfo(*args, **kwargs) if r[0] == socket.AF_INET]
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 import csv
 import os
