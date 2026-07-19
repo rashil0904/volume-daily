@@ -20,6 +20,7 @@ Rate limits (confirmed from Upstox docs):
 Estimated runtime: ~14 hours for 936 symbols × 55 monthly chunks. Run overnight.
 """
 
+import argparse
 import calendar
 import csv
 import gzip
@@ -455,9 +456,55 @@ def fetch_all_intraday(matched):
     print(f"  Failed         : {counter['failed']:,}")
 
 
+# ── EOD fill ──────────────────────────────────────────────────────────────────
+
+def run_eod_fill():
+    """Append any missing late-day candles (e.g. 15:00, 15:15) via the historical endpoint.
+
+    Reads the already-matched instrument list; calls fetch_append_historical() for today only.
+    Safe to re-run — already-present timestamps are skipped automatically.
+    """
+    today = date.today()
+    print("=" * 60)
+    print(f"EOD Fill Pass — {today.isoformat()}")
+    print("=" * 60)
+
+    inst_file = INSTRUMENTS_DIR / "upstox_instruments.csv"
+    if not inst_file.exists():
+        sys.exit(
+            f"ERROR: {inst_file} not found.\n"
+            "Run the full pipeline at least once first to generate the instrument list."
+        )
+
+    with open(inst_file, newline="") as f:
+        matched = list(csv.DictReader(f))
+
+    print(f"  Instruments : {len(matched):,}  ({inst_file.name})")
+    print(f"  Date range  : {today.isoformat()} → {today.isoformat()}  (today only)")
+    print(f"  Endpoint    : historical (settled data)\n")
+
+    fetch_append_historical(matched, today, today)
+
+    print("\n" + "=" * 60)
+    print("EOD Fill complete.")
+    print("=" * 60)
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    parser = argparse.ArgumentParser(description="NSE 15-min candle fetch pipeline")
+    parser.add_argument(
+        "--eod-fill",
+        action="store_true",
+        help="Skip full pipeline; append missing late-day candles via the historical endpoint.",
+    )
+    args = parser.parse_args()
+
+    if args.eod_fill:
+        run_eod_fill()
+        return
+
     # ── Part 1 ────────────────────────────────────────────────────────────────
     print("=" * 60)
     print("PART 1 — Instrument Matching")
