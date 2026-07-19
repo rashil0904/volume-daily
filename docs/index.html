@@ -1,0 +1,1053 @@
+<title>NSE Volume Pipeline — Documentation</title>
+<style>
+  /* ── Tokens ──────────────────────────────────────────────────────────────── */
+  :root {
+    --bg:         #EEEBE6;
+    --surface:    #FFFFFF;
+    --surface2:   #F5F2EE;
+    --border:     #D8D3CD;
+    --text:       #1A1F2A;
+    --muted:      #7A7570;
+    --accent:     #E8721A;
+    --accent-dim: rgba(232, 114, 26, 0.12);
+    --green:      #1DA84A;
+    --green-dim:  rgba(29, 168, 74, 0.10);
+    --red:        #D93D3D;
+    --code-bg:    #101820;
+    --code-text:  #CBD8E4;
+    --code-green: #5EC27A;
+    --code-orange:#E8A46A;
+    --code-blue:  #6EA8D4;
+    --radius:     6px;
+    --mono:       ui-monospace, 'Cascadia Mono', SFMono-Regular, Menlo, Monaco,
+                  Consolas, 'Liberation Mono', 'Courier New', monospace;
+    --sans:       -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui,
+                  'Helvetica Neue', Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:         #0B1018;
+      --surface:    #111A25;
+      --surface2:   #0E1620;
+      --border:     #1E2D3E;
+      --text:       #CDD6E0;
+      --muted:      #4E6070;
+      --accent:     #E8721A;
+      --accent-dim: rgba(232, 114, 26, 0.14);
+      --green:      #2BC76A;
+      --green-dim:  rgba(43, 199, 106, 0.10);
+      --red:        #E05555;
+      --code-bg:    #080E16;
+      --code-text:  #CBD8E4;
+    }
+  }
+
+  :root[data-theme="light"] {
+    --bg:         #EEEBE6;
+    --surface:    #FFFFFF;
+    --surface2:   #F5F2EE;
+    --border:     #D8D3CD;
+    --text:       #1A1F2A;
+    --muted:      #7A7570;
+    --accent:     #E8721A;
+    --accent-dim: rgba(232, 114, 26, 0.12);
+    --green:      #1DA84A;
+    --green-dim:  rgba(29, 168, 74, 0.10);
+    --red:        #D93D3D;
+    --code-bg:    #101820;
+    --code-text:  #CBD8E4;
+  }
+
+  :root[data-theme="dark"] {
+    --bg:         #0B1018;
+    --surface:    #111A25;
+    --surface2:   #0E1620;
+    --border:     #1E2D3E;
+    --text:       #CDD6E0;
+    --muted:      #4E6070;
+    --accent:     #E8721A;
+    --accent-dim: rgba(232, 114, 26, 0.14);
+    --green:      #2BC76A;
+    --green-dim:  rgba(43, 199, 106, 0.10);
+    --red:        #E05555;
+    --code-bg:    #080E16;
+    --code-text:  #CBD8E4;
+  }
+
+  /* ── Reset + Base ────────────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.94rem;
+    line-height: 1.7;
+    padding: 0 1.25rem 5rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Layout ──────────────────────────────────────────────────────────────── */
+  .page {
+    max-width: 820px;
+    margin: 0 auto;
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────────────── */
+  .site-header {
+    padding: 3.5rem 0 2.5rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2.5rem;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 0.6rem;
+  }
+
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(1.6rem, 4vw, 2.4rem);
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin-bottom: 0.75rem;
+  }
+
+  .tagline {
+    font-size: 1rem;
+    color: var(--muted);
+    margin-bottom: 1.4rem;
+    max-width: 60ch;
+  }
+
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .badge {
+    font-family: var(--mono);
+    font-size: 0.70rem;
+    letter-spacing: 0.04em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    background: var(--surface);
+  }
+
+  .badge.accent { border-color: var(--accent); color: var(--accent); }
+  .badge.green  { border-color: var(--green);  color: var(--green);  }
+
+  /* ── TOC ──────────────────────────────────────────────────────────────────── */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 3rem;
+  }
+
+  .toc-title {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.75rem;
+  }
+
+  .toc ol {
+    padding-left: 1.2em;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.1rem 1.5rem;
+    font-size: 0.88rem;
+  }
+
+  @media (max-width: 560px) {
+    .toc ol { grid-template-columns: 1fr; }
+  }
+
+  .toc a {
+    color: var(--text);
+    text-decoration: none;
+    opacity: 0.75;
+    transition: opacity 0.15s, color 0.15s;
+  }
+  .toc a:hover { color: var(--accent); opacity: 1; }
+
+  /* ── Sections ────────────────────────────────────────────────────────────── */
+  section { margin-bottom: 3.5rem; }
+
+  h2 {
+    font-family: var(--mono);
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text);
+    padding-bottom: 0.6rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  h2 .section-num {
+    font-size: 0.68rem;
+    color: var(--accent);
+    background: var(--accent-dim);
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    letter-spacing: 0.06em;
+  }
+
+  h3 {
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin: 1.75rem 0 0.75rem;
+  }
+
+  p { margin-bottom: 0.9rem; max-width: 72ch; }
+  p:last-child { margin-bottom: 0; }
+
+  strong { font-weight: 600; color: var(--text); }
+
+  /* ── Overview table ──────────────────────────────────────────────────────── */
+  .overview-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+  }
+
+  @media (max-width: 560px) {
+    .overview-grid { grid-template-columns: 1fr; }
+  }
+
+  .kv {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.7rem 0.9rem;
+  }
+
+  .kv-key {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.2rem;
+  }
+
+  .kv-val {
+    font-size: 0.88rem;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  /* ── Signal cards ────────────────────────────────────────────────────────── */
+  .signal-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  @media (max-width: 680px) {
+    .signal-grid { grid-template-columns: 1fr; }
+  }
+
+  .signal-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.1rem;
+  }
+
+  .signal-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .check {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--green-dim);
+    border: 1.5px solid var(--green);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--green);
+    font-size: 0.65rem;
+    font-weight: 700;
+  }
+
+  .signal-title {
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .signal-formula {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.5rem 0.65rem;
+    color: var(--accent);
+    line-height: 1.5;
+    margin-bottom: 0.6rem;
+    overflow-x: auto;
+  }
+
+  .signal-note {
+    font-size: 0.80rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  /* ── Capital table ───────────────────────────────────────────────────────── */
+  .cap-table {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin-top: 1rem;
+  }
+
+  .cap-table-row {
+    display: grid;
+    grid-template-columns: 80px 1fr 1fr;
+    padding: 0.55rem 1rem;
+    font-size: 0.86rem;
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+    align-items: center;
+  }
+
+  .cap-table-row:last-child { border-bottom: none; }
+
+  .cap-table-row.header {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface2);
+  }
+
+  .cap-table-row.highlight {
+    background: var(--accent-dim);
+    border-left: 3px solid var(--accent);
+  }
+
+  .cap-table-row .n { font-family: var(--mono); font-weight: 600; }
+  .cap-table-row .alloc { color: var(--text); }
+  .cap-table-row .total { color: var(--muted); }
+  .cap-table-row.highlight .total { color: var(--accent); font-weight: 600; }
+
+  .cap-note {
+    margin-top: 0.75rem;
+    font-family: var(--mono);
+    font-size: 0.80rem;
+    color: var(--muted);
+  }
+
+  /* ── Pipeline flow ───────────────────────────────────────────────────────── */
+  .pipeline {
+    margin-top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .pipe-step {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 0 1rem;
+  }
+
+  .pipe-track {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .pipe-num {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .pipe-num.notify {
+    background: var(--surface2);
+    border: 1.5px solid var(--green);
+    color: var(--green);
+  }
+
+  .pipe-line {
+    width: 1.5px;
+    flex: 1;
+    background: var(--border);
+    min-height: 24px;
+  }
+
+  .pipe-content {
+    padding: 0.15rem 0 2rem;
+  }
+
+  .pipe-step:last-child .pipe-content { padding-bottom: 0; }
+  .pipe-step:last-child .pipe-line { display: none; }
+
+  .pipe-name {
+    font-family: var(--mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 0.4rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .pipe-file {
+    font-size: 0.73rem;
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .pipe-desc {
+    font-size: 0.86rem;
+    color: var(--muted);
+    max-width: 66ch;
+    line-height: 1.6;
+  }
+
+  .pipe-desc strong { color: var(--text); }
+
+  /* ── File tree ───────────────────────────────────────────────────────────── */
+  .file-tree {
+    background: var(--code-bg);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    overflow-x: auto;
+    margin-top: 1rem;
+  }
+
+  .file-tree pre {
+    font-family: var(--mono);
+    font-size: 0.79rem;
+    line-height: 1.65;
+    color: var(--code-text);
+    white-space: pre;
+  }
+
+  .file-tree .dir   { color: var(--code-blue); }
+  .file-tree .note  { color: #5C7080; }
+  .file-tree .hi    { color: var(--code-green); }
+  .file-tree .warn  { color: #E07850; }
+
+  /* ── Code blocks ─────────────────────────────────────────────────────────── */
+  .code-block {
+    background: var(--code-bg);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin: 1rem 0;
+  }
+
+  .code-header {
+    display: flex;
+    align-items: center;
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    gap: 0.5rem;
+  }
+
+  .code-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #3A4A58;
+  }
+
+  .code-label {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #4E6070;
+    margin-left: auto;
+  }
+
+  .code-block pre {
+    padding: 1rem 1.25rem;
+    font-family: var(--mono);
+    font-size: 0.80rem;
+    line-height: 1.7;
+    color: var(--code-text);
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.84em;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.1em 0.35em;
+    color: var(--accent);
+  }
+
+  /* ── Tables ──────────────────────────────────────────────────────────────── */
+  .data-table-wrap { overflow-x: auto; margin: 1rem 0; }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.86rem;
+    background: var(--surface);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+
+  .data-table th {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface2);
+    padding: 0.6rem 1rem;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .data-table td {
+    padding: 0.55rem 1rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    vertical-align: top;
+  }
+
+  .data-table tr:last-child td { border-bottom: none; }
+  .data-table tr:nth-child(even) td { background: var(--surface2); }
+  .data-table td:first-child { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); }
+
+  /* ── Info callout ────────────────────────────────────────────────────────── */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: 0.9rem 1.1rem;
+    font-size: 0.86rem;
+    color: var(--muted);
+    margin: 1rem 0;
+  }
+
+  .callout strong { color: var(--text); }
+
+  /* ── Setup steps ─────────────────────────────────────────────────────────── */
+  .setup-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin: 1rem 0;
+  }
+
+  .setup-step {
+    display: flex;
+    gap: 0.9rem;
+    align-items: flex-start;
+    font-size: 0.88rem;
+  }
+
+  .step-badge {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.1rem;
+  }
+
+  /* ── Token lifecycle ─────────────────────────────────────────────────────── */
+  .token-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  @media (max-width: 560px) {
+    .token-cards { grid-template-columns: 1fr; }
+  }
+
+  .token-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1rem;
+  }
+
+  .token-name {
+    font-family: var(--mono);
+    font-size: 0.73rem;
+    color: var(--accent);
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+  }
+
+  .token-key {
+    font-family: var(--mono);
+    font-size: 0.69rem;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    display: inline-block;
+    margin-bottom: 0.55rem;
+  }
+
+  .token-expires {
+    font-size: 0.80rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  .token-expires strong { color: var(--text); }
+
+  /* ── Footer ──────────────────────────────────────────────────────────────── */
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding-top: 2rem;
+    margin-top: 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .footer-text {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  .footer-dot {
+    color: var(--border);
+    margin: 0 0.4em;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<div class="page">
+
+  <!-- ── HEADER ───────────────────────────────────────────────────────── -->
+  <header class="site-header">
+    <div class="eyebrow">Automated Trading · NSE India</div>
+    <h1>NSE Volume Pipeline</h1>
+    <p class="tagline">Mid-cap momentum scanner that fires daily at 3:01 PM IST, scans ~940 symbols in the ₹1,500–5,000 Cr band, and sends trade signals to Telegram.</p>
+    <div class="badges">
+      <span class="badge accent">● Live</span>
+      <span class="badge green">3:01 PM IST · Mon–Fri</span>
+      <span class="badge">Python 3.11</span>
+      <span class="badge">Upstox V3 API</span>
+      <span class="badge">DigitalOcean VM</span>
+      <span class="badge">NSE EQ · ₹1,500–5,000 Cr</span>
+    </div>
+  </header>
+
+  <!-- ── TOC ──────────────────────────────────────────────────────────── -->
+  <nav class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#overview">Strategy Overview</a></li>
+      <li><a href="#signals">Signal Logic</a></li>
+      <li><a href="#capital">Capital Allocation</a></li>
+      <li><a href="#pipeline">How It Works</a></li>
+      <li><a href="#structure">Repository Structure</a></li>
+      <li><a href="#setup">First-Time VM Setup</a></li>
+      <li><a href="#config">Configuration</a></li>
+      <li><a href="#operations">Daily Operations</a></li>
+      <li><a href="#commands">Manual Commands</a></li>
+      <li><a href="#telegram">Telegram Notifications</a></li>
+    </ol>
+  </nav>
+
+  <!-- ── 1. OVERVIEW ──────────────────────────────────────────────────── -->
+  <section id="overview">
+    <h2><span class="section-num">01</span> Strategy Overview</h2>
+    <p>The pipeline targets <strong>NSE equities with market cap ₹1,500–5,000 Cr</strong> (small-to-mid cap). It screens for stocks where unusual volume has built through the day <em>and</em> the price has broken above the prior day's close — entering at the 3:15 PM market open with a defined capital budget.</p>
+    <div class="overview-grid">
+      <div class="kv"><div class="kv-key">Universe</div><div class="kv-val">NSE EQ/BE · ₹1,500–5,000 Cr</div></div>
+      <div class="kv"><div class="kv-key">Candle Interval</div><div class="kv-val">15-minute OHLCV</div></div>
+      <div class="kv"><div class="kv-key">Data Source</div><div class="kv-val">Upstox V3 API</div></div>
+      <div class="kv"><div class="kv-key">Market Cap Source</div><div class="kv-val">Screener.in Premium (daily export)</div></div>
+      <div class="kv"><div class="kv-key">Entry</div><div class="kv-val">Market buy · 3:15 PM IST open</div></div>
+      <div class="kv"><div class="kv-key">Product</div><div class="kv-val">Delivery (CNC)</div></div>
+      <div class="kv"><div class="kv-key">Total Capital</div><div class="kv-val">₹5,00,000</div></div>
+      <div class="kv"><div class="kv-key">Schedule</div><div class="kv-val">Mon–Fri at 3:01 PM IST via cron</div></div>
+    </div>
+  </section>
+
+  <!-- ── 2. SIGNALS ───────────────────────────────────────────────────── -->
+  <section id="signals">
+    <h2><span class="section-num">02</span> Signal Logic</h2>
+    <p>All three conditions must pass for a symbol to appear in the trade list. Evaluation happens at 3:00 PM using the candles present at that point.</p>
+    <div class="signal-grid">
+      <div class="signal-card">
+        <div class="signal-card-head">
+          <div class="check">✓</div>
+          <div class="signal-title">Market Cap</div>
+        </div>
+        <div class="signal-formula">₹1,500 Cr &lt; mcap &lt; ₹5,000 Cr</div>
+        <p class="signal-note">Symbol must be present in today's Screener.in export. First gate — only tracked universe is evaluated.</p>
+      </div>
+      <div class="signal-card">
+        <div class="signal-card-head">
+          <div class="check">✓</div>
+          <div class="signal-title">Volume</div>
+        </div>
+        <div class="signal-formula">cum_vol(9:15–14:45)
+≥ 6× avg_36d_vol</div>
+        <p class="signal-note">36-day rolling average of full-day volume (non-zero trading days only). Minimum 36 days of history required.</p>
+      </div>
+      <div class="signal-card">
+        <div class="signal-card-head">
+          <div class="check">✓</div>
+          <div class="signal-title">Return</div>
+        </div>
+        <div class="signal-formula">open(15:00)
+≥ prev_vwap × 1.05</div>
+        <p class="signal-note">Prev-day VWAP from 15:00 + 15:15 candles: Σ((H+L+C)/3 × vol) / Σ(vol). Threshold: +5%.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 3. CAPITAL ───────────────────────────────────────────────────── -->
+  <section id="capital">
+    <h2><span class="section-num">03</span> Capital Allocation</h2>
+    <p>Total capital is hard-capped at <strong>₹5,00,000</strong> regardless of how many signals fire. Shares per stock = <code>floor(allocation / open_of_3pm_candle)</code>.</p>
+    <div class="cap-table">
+      <div class="cap-table-row header">
+        <span>Signals</span><span>Per Stock</span><span>Total Deployed</span>
+      </div>
+      <div class="cap-table-row"><span class="n">1</span><span class="alloc">₹1,25,000</span><span class="total">₹1,25,000</span></div>
+      <div class="cap-table-row"><span class="n">2</span><span class="alloc">₹1,25,000</span><span class="total">₹2,50,000</span></div>
+      <div class="cap-table-row"><span class="n">3</span><span class="alloc">₹1,25,000</span><span class="total">₹3,75,000</span></div>
+      <div class="cap-table-row highlight"><span class="n">4</span><span class="alloc">₹1,25,000</span><span class="total">₹5,00,000</span></div>
+      <div class="cap-table-row highlight"><span class="n">5</span><span class="alloc">₹1,00,000</span><span class="total">₹5,00,000</span></div>
+      <div class="cap-table-row highlight"><span class="n">6</span><span class="alloc">₹83,333</span><span class="total">₹5,00,000</span></div>
+      <div class="cap-table-row highlight"><span class="n">n ≥ 5</span><span class="alloc">₹5,00,000 ÷ n</span><span class="total">₹5,00,000</span></div>
+    </div>
+    <p class="cap-note">// 1–4 signals → fixed ₹1.25L each  ·  5+ signals → equal split, never exceeds ₹5L total</p>
+  </section>
+
+  <!-- ── 4. PIPELINE ──────────────────────────────────────────────────── -->
+  <section id="pipeline">
+    <h2><span class="section-num">04</span> How It Works</h2>
+    <p><code>run_pipeline.sh</code> is triggered by cron at 3:01 PM IST and calls <code>pipeline/run_daily.py</code>, which runs these steps in sequence:</p>
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-track"><div class="pipe-num">1</div><div class="pipe-line"></div></div>
+        <div class="pipe-content">
+          <div class="pipe-name">Fetch Market Cap <span class="pipe-file">fetch_market_cap.py</span></div>
+          <p class="pipe-desc">Logs into <strong>Screener.in Premium</strong>, runs the query <code>Market Capitalization > 1500 AND Market Capitalization &lt; 5000</code>, and exports today's symbol list to <code>data/market_cap_daily/market_cap_&lt;date&gt;.csv</code>. If Screener is unavailable, falls back to the most recent previous export and continues with a warning.</p>
+        </div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-track"><div class="pipe-num">2</div><div class="pipe-line"></div></div>
+        <div class="pipe-content">
+          <div class="pipe-name">Update Universe <span class="pipe-file">run_daily.py</span></div>
+          <p class="pipe-desc">Compares today's market-cap symbols against <code>data/universe_combined.csv</code>. Any symbols not previously tracked are <strong>appended automatically</strong> — the universe expands each day as new stocks enter the cap band.</p>
+        </div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-track"><div class="pipe-num">3</div><div class="pipe-line"></div></div>
+        <div class="pipe-content">
+          <div class="pipe-name">Candle Data Update <span class="pipe-file">fetch_candles.py</span></div>
+          <p class="pipe-desc">Two sub-operations: (a) <strong>new symbols</strong> — downloads the Upstox NSE instrument master, matches symbols to instrument keys, backfills 1 year of 15-min candles; (b) <strong>all symbols</strong> — fetches today's intraday 15-min candles and appends new rows to every candle file. 5 parallel workers · 0.8s call delay · ~66 req/min.</p>
+        </div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-track"><div class="pipe-num">4</div><div class="pipe-line"></div></div>
+        <div class="pipe-content">
+          <div class="pipe-name">Generate Trade List <span class="pipe-file">prepare_data.py</span></div>
+          <p class="pipe-desc">Applies all three signal conditions to every symbol with both a candle file and a current market-cap record. Passing symbols are written to <code>results/trade_list_&lt;date&gt;.csv</code> (columns: <code>symbol</code>, <code>shares</code>, <code>ref_price</code>). If no signals fire, no file is written.</p>
+        </div>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-track"><div class="pipe-num notify">✉</div></div>
+        <div class="pipe-content">
+          <div class="pipe-name">Telegram Notification <span class="pipe-file">notify.py</span></div>
+          <p class="pipe-desc">Sends a message to the <strong>NSE Volume Alerts</strong> Telegram group. Success: full trade table with symbol, shares, and entry price. Failure: failed step name and error detail. Notification errors are logged as warnings and never crash the pipeline.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 5. STRUCTURE ─────────────────────────────────────────────────── -->
+  <section id="structure">
+    <h2><span class="section-num">05</span> Repository Structure</h2>
+    <div class="file-tree">
+      <pre><span class="dir">volume-daily/</span>
+├── <span class="dir">pipeline/</span>
+│   ├── <span class="hi">run_daily.py</span>          <span class="note"># Daily orchestrator — called by cron</span>
+│   ├── fetch_market_cap.py   <span class="note"># Logs into Screener.in, exports market cap CSV</span>
+│   ├── fetch_candles.py      <span class="note"># Upstox V3 — historical + intraday 15-min candles</span>
+│   ├── prepare_data.py       <span class="note"># Signal scanner — produces trade_list_&lt;date&gt;.csv</span>
+│   ├── notify.py             <span class="note"># Telegram notifications (success / failure)</span>
+│   ├── requirements.txt      <span class="note"># pandas, requests, python-dotenv</span>
+│   └── <span class="warn">.env</span>                  <span class="note"># ← NOT in git — credentials live here</span>
+│
+├── <span class="dir">upstox/</span>
+│   ├── auth.py               <span class="note"># OAuth login + token persistence (live / sandbox)</span>
+│   ├── trade.py              <span class="note"># buy(), sell(), cancel_order(), order_status()</span>
+│   └── execute_trades.py     <span class="note"># Reads trade list CSV, places MARKET BUY orders</span>
+│
+├── <span class="dir">data/</span>
+│   ├── <span class="dir">candles/</span>              <span class="note"># ~940 per-symbol 15-min OHLCV CSV files</span>
+│   ├── <span class="dir">instruments/</span>
+│   │   ├── upstox_instruments.csv   <span class="note"># symbol → instrument_key mapping</span>
+│   │   └── upstox_unmatched.csv     <span class="note"># symbols with no Upstox match</span>
+│   ├── <span class="dir">market_cap_daily/</span>     <span class="note"># Daily Screener.in exports + mcap_status.json</span>
+│   └── universe_combined.csv <span class="note"># All symbols ever seen in the 1,500–5,000 Cr band</span>
+│
+├── <span class="dir">results/</span>               <span class="note"># trade_list_YYYY-MM-DD.csv (one per trading day)</span>
+├── <span class="hi">run_pipeline.sh</span>       <span class="note"># Cron entry point → calls pipeline/run_daily.py</span>
+├── <span class="hi">setup_vm.sh</span>           <span class="note"># One-time VM provisioning script</span>
+└── .env.example           <span class="note"># Credential template — copy to pipeline/.env</span></pre>
+    </div>
+  </section>
+
+  <!-- ── 6. SETUP ─────────────────────────────────────────────────────── -->
+  <section id="setup">
+    <h2><span class="section-num">06</span> First-Time VM Setup</h2>
+    <p>Prerequisites: DigitalOcean Ubuntu 22.04+ droplet with SSH access. The GitHub repo must be accessible from the VM (deploy key or HTTPS).</p>
+    <div class="code-block">
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">bash</span></div>
+      <pre><span style="color:#4E6070"># 1. SSH into the droplet</span>
+ssh root@&lt;DROPLET_IP&gt;
+
+<span style="color:#4E6070"># 2. Clone the repo</span>
+git clone git@github.com:rashil0904/volume-daily.git
+cd volume-daily
+
+<span style="color:#4E6070"># 3. Run the setup script (installs Python, sets IST timezone, wires up cron)</span>
+chmod +x setup_vm.sh
+./setup_vm.sh
+
+<span style="color:#4E6070"># 4. Fill in credentials</span>
+nano pipeline/.env
+
+<span style="color:#4E6070"># 5. Verify everything works</span>
+python3.11 pipeline/run_daily.py</pre>
+    </div>
+    <p><code>setup_vm.sh</code> handles automatically:</p>
+    <div class="setup-steps">
+      <div class="setup-step"><div class="step-badge">a</div><span>Installs <code>python3.11</code>, <code>python3.11-venv</code>, <code>git</code></span></div>
+      <div class="setup-step"><div class="step-badge">b</div><span>Sets system timezone: <code>timedatectl set-timezone Asia/Kolkata</code></span></div>
+      <div class="setup-step"><div class="step-badge">c</div><span>Installs Python dependencies from <code>pipeline/requirements.txt</code></span></div>
+      <div class="setup-step"><div class="step-badge">d</div><span>Creates <code>data/candles</code>, <code>data/instruments</code>, <code>data/market_cap_daily</code>, <code>results</code></span></div>
+      <div class="setup-step"><div class="step-badge">e</div><span>Writes a blank <code>pipeline/.env</code> (if not already present)</span></div>
+      <div class="setup-step"><div class="step-badge">f</div><span>Registers cron: <code>1 15 * * 1-5 /bin/bash ~/volume-daily/run_pipeline.sh >> ~/pipeline.log 2>&1</code></span></div>
+    </div>
+  </section>
+
+  <!-- ── 7. CONFIG ────────────────────────────────────────────────────── -->
+  <section id="config">
+    <h2><span class="section-num">07</span> Configuration</h2>
+    <p>Copy <code>.env.example</code> to <code>pipeline/.env</code> and fill in all values. This file is gitignored and must never be committed.</p>
+    <div class="callout"><strong>Security:</strong> <code>pipeline/.env</code> is in <code>.gitignore</code>. Never commit credentials. <code>.env.example</code> contains only key names — no values.</div>
+    <div class="data-table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Key</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>SCREENER_EMAIL</td><td>Screener.in login email (Premium account required)</td></tr>
+          <tr><td>SCREENER_PASSWORD</td><td>Screener.in password</td></tr>
+          <tr><td>UPSTOX_ACCESS_TOKEN</td><td>Long-lived data token for candle fetches (from Upstox developer portal)</td></tr>
+          <tr><td>UPSTOX_LIVE_API_KEY</td><td>Upstox live trading API key</td></tr>
+          <tr><td>UPSTOX_LIVE_API_SECRET</td><td>Upstox live trading API secret</td></tr>
+          <tr><td>UPSTOX_LIVE_REDIRECT_URI</td><td><code>http://127.0.0.1/</code></td></tr>
+          <tr><td>UPSTOX_SANDBOX_ACCESS_TOKEN</td><td>Upstox sandbox static token (~30 day expiry)</td></tr>
+          <tr><td>UPSTOX_MODE</td><td><code>live</code> or <code>sandbox</code> — controls order placement mode</td></tr>
+          <tr><td>TELEGRAM_BOT_TOKEN</td><td>Bot token from @BotFather</td></tr>
+          <tr><td>TELEGRAM_CHAT_ID</td><td>Group chat ID — negative integer for supergroups (e.g. <code>-1004409929427</code>)</td></tr>
+          <tr><td>ZERODHA_API_KEY</td><td>Zerodha Kite API key (not used by pipeline; for manual use)</td></tr>
+          <tr><td>ZERODHA_API_SECRET</td><td>Zerodha Kite API secret</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── 8. OPERATIONS ────────────────────────────────────────────────── -->
+  <section id="operations">
+    <h2><span class="section-num">08</span> Daily Operations</h2>
+    <h3>Token Refresh</h3>
+    <p>Two Upstox tokens with different lifecycles must both be valid for the pipeline to run:</p>
+    <div class="token-cards">
+      <div class="token-card">
+        <div class="token-name">Candle Data Token</div>
+        <div class="token-key">UPSTOX_ACCESS_TOKEN</div>
+        <p class="token-expires">Long-lived token from the Upstox developer portal. Used by <code>fetch_candles.py</code> to pull OHLCV data. Update in <code>pipeline/.env</code> when it eventually expires.</p>
+      </div>
+      <div class="token-card">
+        <div class="token-name">Live Trading Token</div>
+        <div class="token-key">upstox/.token_live.json</div>
+        <p class="token-expires"><strong>Expires at midnight IST every day.</strong> Refresh each morning before the 3 PM run. Saved automatically after OAuth — no manual file editing needed.</p>
+      </div>
+    </div>
+    <div class="code-block" style="margin-top:1rem">
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">refresh live token</span></div>
+      <pre>python -m upstox.auth live
+<span style="color:#4E6070"># Opens browser → log in → paste the redirect URL back</span></pre>
+    </div>
+    <h3>Monitoring</h3>
+    <div class="code-block">
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">vm shell</span></div>
+      <pre><span style="color:#4E6070"># Live log stream</span>
+tail -f ~/pipeline.log
+
+<span style="color:#4E6070"># Last run summary</span>
+grep -E "(Starting|completed|FAILED)" ~/pipeline.log | tail -20
+
+<span style="color:#4E6070"># Verify cron is registered</span>
+crontab -l
+
+<span style="color:#4E6070"># Verify system time is IST</span>
+date</pre>
+    </div>
+  </section>
+
+  <!-- ── 9. COMMANDS ──────────────────────────────────────────────────── -->
+  <section id="commands">
+    <h2><span class="section-num">09</span> Manual Commands</h2>
+    <div class="code-block">
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">cheat sheet</span></div>
+      <pre><span style="color:#4E6070"># Run the full pipeline manually</span>
+python3.11 pipeline/run_daily.py
+
+<span style="color:#4E6070"># Preview today's trades — no orders placed</span>
+python upstox/execute_trades.py --dry-run
+
+<span style="color:#4E6070"># Execute today's trades (live)</span>
+python upstox/execute_trades.py
+
+<span style="color:#4E6070"># Execute for a specific date</span>
+python upstox/execute_trades.py --date 2026-07-17
+
+<span style="color:#4E6070"># Sandbox mode dry run</span>
+python upstox/execute_trades.py --mode sandbox --dry-run
+
+<span style="color:#4E6070"># Test Telegram — success</span>
+python pipeline/notify.py --date 2026-07-17 --status success
+
+<span style="color:#4E6070"># Test Telegram — failure</span>
+python pipeline/notify.py --date 2026-07-17 --status failed \
+  --failed-step "Step 3" --error-msg "API timeout"
+
+<span style="color:#4E6070"># Manual single order</span>
+python upstox/trade.py buy  RELIANCE NSE 10 MARKET
+python upstox/trade.py sell RELIANCE NSE 10 MARKET
+
+<span style="color:#4E6070"># Order management</span>
+python upstox/trade.py orders               <span style="color:#4E6070"># all today's orders</span>
+python upstox/trade.py status &lt;order_id&gt;    <span style="color:#4E6070"># single order status</span>
+python upstox/trade.py cancel &lt;order_id&gt;    <span style="color:#4E6070"># cancel an order</span>
+
+<span style="color:#4E6070"># Auth</span>
+python -m upstox.auth live     <span style="color:#4E6070"># OAuth login + save token</span>
+python -m upstox.auth          <span style="color:#4E6070"># verify current auth</span></pre>
+    </div>
+  </section>
+
+  <!-- ── 10. TELEGRAM ─────────────────────────────────────────────────── -->
+  <section id="telegram">
+    <h2><span class="section-num">10</span> Telegram Notifications</h2>
+    <p>Notifications go to the <strong>NSE Volume Alerts</strong> Telegram group via <code>@nse_volume_alerts_bot</code>.</p>
+    <p>A <strong>success message</strong> includes: date, signal count, pipeline runtime, and a monospaced trade table with symbol · shares · entry price. A stale market-cap warning is prepended if Screener.in data is from a previous day.</p>
+    <p>A <strong>failure message</strong> includes: date, failed step name, runtime, and the full error string.</p>
+    <h3>Setting Up on a New Bot or Group</h3>
+    <div class="setup-steps" style="margin-bottom:1rem">
+      <div class="setup-step"><div class="step-badge">1</div><span>Create a bot via <code>@BotFather</code> → copy the token → set <code>TELEGRAM_BOT_TOKEN</code> in <code>pipeline/.env</code></span></div>
+      <div class="setup-step"><div class="step-badge">2</div><span>Add the bot to your Telegram group</span></div>
+      <div class="setup-step"><div class="step-badge">3</div><span>Send any message in the group, then call <code>getUpdates</code> to retrieve the chat ID</span></div>
+      <div class="setup-step"><div class="step-badge">4</div><span>Set <code>TELEGRAM_CHAT_ID</code> to the negative integer returned (supergroups always have negative IDs)</span></div>
+    </div>
+    <div class="code-block">
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">get chat id</span></div>
+      <pre>curl "https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates"
+<span style="color:#4E6070"># Find "chat": { "id": -1004xxxxxxxxx, ... } in the response</span></pre>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    <span class="footer-text">
+      Mon–Fri · 3:01 PM IST
+      <span class="footer-dot">·</span>
+      DigitalOcean Ubuntu 22.04
+      <span class="footer-dot">·</span>
+      Python 3.11
+      <span class="footer-dot">·</span>
+      Upstox V3 API
+    </span>
+    <span class="footer-text" style="color:var(--accent)">NSE Volume Pipeline</span>
+  </footer>
+
+</div>
