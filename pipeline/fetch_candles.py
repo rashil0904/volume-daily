@@ -373,9 +373,10 @@ def fetch_append_historical(matched, from_date, to_date):
 # ── Intraday fetch (today's data only) ────────────────────────────────────────
 
 def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
-    """Fetch today's 15-min intraday candles and append new rows to candles/<symbol>.csv."""
+    """Fetch today's 15-min intraday candles and merge new rows into candles/<symbol>.csv, kept sorted."""
     out_path = CANDLES_DIR / f"{symbol}.csv"
 
+    existing_rows = []
     existing_ts = set()
     if out_path.exists():
         with open(out_path, newline="") as f:
@@ -383,6 +384,7 @@ def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
             next(reader, None)
             for row in reader:
                 if row:
+                    existing_rows.append(row)
                     existing_ts.add(row[0])
 
     session = requests.Session()
@@ -424,12 +426,13 @@ def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
                 counter["skipped"] += 1
         return
 
-    write_header = not out_path.exists()
-    with open(out_path, "a", newline="") as f:
+    merged = existing_rows + new_candles
+    merged.sort(key=lambda r: r[0])
+
+    with open(out_path, "w", newline="") as f:
         w = csv.writer(f)
-        if write_header:
-            w.writerow(["timestamp", "open", "high", "low", "close", "volume", "oi"])
-        w.writerows(new_candles)
+        w.writerow(["timestamp", "open", "high", "low", "close", "volume", "oi"])
+        w.writerows(merged)
 
     with lock:
         counter["done"] += 1
@@ -468,9 +471,12 @@ def fetch_all_intraday(matched):
 # ── EOD fill ──────────────────────────────────────────────────────────────────
 
 def run_eod_fill():
-    """Append any missing late-day candles (e.g. 15:00, 15:15) via the historical endpoint.
+    """Append any missing late-day candles (e.g. 15:15, the final candle of the session).
 
-    Reads the already-matched instrument list; calls fetch_append_historical() for today only.
+    Reads the already-matched instrument list; calls fetch_all_intraday() so the run picks
+    up whatever the intraday endpoint has by now (e.g. the 15:15 candle, not yet closed when
+    the 3:01 PM main run fetched intraday data). The historical endpoint has no same-day data
+    at all — confirmed empirically returning 0 rows for today's date — so it can't be used here.
     Safe to re-run — already-present timestamps are skipped automatically.
     """
     today = date.today()
@@ -489,10 +495,10 @@ def run_eod_fill():
         matched = list(csv.DictReader(f))
 
     print(f"  Instruments : {len(matched):,}  ({inst_file.name})")
-    print(f"  Date range  : {today.isoformat()} → {today.isoformat()}  (today only)")
-    print(f"  Endpoint    : historical (settled data)\n")
+    print(f"  Date        : {today.isoformat()}  (today only)")
+    print(f"  Endpoint    : intraday (historical endpoint has no same-day data)\n")
 
-    fetch_append_historical(matched, today, today)
+    fetch_all_intraday(matched)
 
     print("\n" + "=" * 60)
     print("EOD Fill complete.")
