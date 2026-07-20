@@ -39,6 +39,7 @@ def place_order(
     trigger_price: float = 0,       # required for SL and SL-M
     product: str     = "CNC",       # CNC (delivery) | MIS (intraday) | NRML
     variety: str     = "regular",   # regular | amo
+    market_protection: float = -1,  # required by Kite for MARKET/SL-M; -1 = system default protection
     tag: str         = "",          # optional identifier (max 20 chars)
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
@@ -72,6 +73,8 @@ def place_order(
         "trigger_price":    trigger_price,
         "validity":         "DAY",
     }
+    if order_type in ("MARKET", "SL-M"):
+        payload["market_protection"] = market_protection
     if tag:
         payload["tag"] = tag[:20]
 
