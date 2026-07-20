@@ -3,8 +3,9 @@ zerodha/run_trades.py — 3-stage live trading via Zerodha Kite
 =============================================================
 Entry price : Upstox intraday V3 candle API  (UPSTOX_ACCESS_TOKEN from pipeline/.env) —
               close of 15:14 candle, falls back to 15:13 if 15:14 isn't published yet.
-Exit price  : Zerodha Kite live positions/holdings last_price (Stage 2) — not candle-based,
-              so it isn't affected by whether a specific candle has been published yet.
+Exit check  : Zerodha Kite's own computed pnl from /portfolio/positions or /portfolio/holdings
+              (Stage 2) — not candle-based, so it isn't affected by whether a specific
+              candle has been published yet.
 Orders      : Zerodha Kite API  (zerodha/trade.py)
 Positions   : results/positions_zerodha.json  (full persistent trade book)
 
