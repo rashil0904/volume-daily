@@ -707,7 +707,8 @@
       <span class="badge accent">● Live</span>
       <span class="badge green">3:01 PM IST · Mon–Fri</span>
       <span class="badge">Python 3.11</span>
-      <span class="badge">Upstox V3 API</span>
+      <span class="badge">Upstox V3 API (data)</span>
+      <span class="badge">Zerodha Kite Connect (execution)</span>
       <span class="badge">DigitalOcean VM</span>
       <span class="badge">NSE EQ · ₹1,500–5,000 Cr</span>
     </div>
@@ -856,10 +857,12 @@
 │   ├── requirements.txt      <span class="note"># pandas, requests, python-dotenv</span>
 │   └── <span class="warn">.env</span>                  <span class="note"># ← NOT in git — credentials live here</span>
 │
-├── <span class="dir">upstox/</span>
-│   ├── auth.py               <span class="note"># OAuth login + token persistence (live / sandbox)</span>
+├── <span class="dir">zerodha/</span>
+│   ├── auth.py               <span class="note"># Kite Connect login + token persistence</span>
 │   ├── trade.py              <span class="note"># buy(), sell(), cancel_order(), order_status()</span>
-│   └── execute_trades.py     <span class="note"># Reads trade list CSV, places MARKET BUY orders</span>
+│   ├── execute_trades.py     <span class="note"># Reads trade list CSV, places MARKET BUY orders</span>
+│   └── run_trades.py         <span class="note"># 3-stage intraday flow — entry / 9:45 exit / forced 12pm exit</span>
+│                              <span class="note"># Upstox is data/analytics-only — no trades placed via Upstox.</span>
 │
 ├── <span class="dir">data/</span>
 │   ├── <span class="dir">candles/</span>              <span class="note"># ~940 per-symbol 15-min OHLCV CSV files</span>
@@ -921,16 +924,12 @@ python3.11 pipeline/run_daily.py</pre>
         <tbody>
           <tr><td>SCREENER_EMAIL</td><td>Screener.in login email (Premium account required)</td></tr>
           <tr><td>SCREENER_PASSWORD</td><td>Screener.in password</td></tr>
-          <tr><td>UPSTOX_ACCESS_TOKEN</td><td>Long-lived data token for candle fetches (from Upstox developer portal)</td></tr>
-          <tr><td>UPSTOX_LIVE_API_KEY</td><td>Upstox live trading API key</td></tr>
-          <tr><td>UPSTOX_LIVE_API_SECRET</td><td>Upstox live trading API secret</td></tr>
-          <tr><td>UPSTOX_LIVE_REDIRECT_URI</td><td><code>http://127.0.0.1/</code></td></tr>
-          <tr><td>UPSTOX_SANDBOX_ACCESS_TOKEN</td><td>Upstox sandbox static token (~30 day expiry)</td></tr>
-          <tr><td>UPSTOX_MODE</td><td><code>live</code> or <code>sandbox</code> — controls order placement mode</td></tr>
+          <tr><td>UPSTOX_ACCESS_TOKEN</td><td>Long-lived data token for candle fetches (from Upstox developer portal). Analytics only — no Upstox trading.</td></tr>
           <tr><td>TELEGRAM_BOT_TOKEN</td><td>Bot token from @BotFather</td></tr>
           <tr><td>TELEGRAM_CHAT_ID</td><td>Group chat ID — negative integer for supergroups (e.g. <code>-1004409929427</code>)</td></tr>
-          <tr><td>ZERODHA_API_KEY</td><td>Zerodha Kite API key (not used by pipeline; for manual use)</td></tr>
+          <tr><td>ZERODHA_API_KEY</td><td>Zerodha Kite API key — used for order execution</td></tr>
           <tr><td>ZERODHA_API_SECRET</td><td>Zerodha Kite API secret</td></tr>
+          <tr><td>ZERODHA_REDIRECT_URI</td><td><code>https://kite.trade/</code></td></tr>
         </tbody>
       </table>
     </div>
@@ -940,22 +939,22 @@ python3.11 pipeline/run_daily.py</pre>
   <section id="operations">
     <h2><span class="section-num">08</span> Daily Operations</h2>
     <h3>Token Refresh</h3>
-    <p>Two Upstox tokens with different lifecycles must both be valid for the pipeline to run:</p>
+    <p>A data token and a trading token, with different lifecycles, both need to be valid for the pipeline to run end to end:</p>
     <div class="token-cards">
       <div class="token-card">
         <div class="token-name">Candle Data Token</div>
         <div class="token-key">UPSTOX_ACCESS_TOKEN</div>
-        <p class="token-expires">Long-lived token from the Upstox developer portal. Used by <code>fetch_candles.py</code> to pull OHLCV data. Update in <code>pipeline/.env</code> when it eventually expires.</p>
+        <p class="token-expires">Long-lived token from the Upstox developer portal. Used by <code>fetch_candles.py</code> to pull OHLCV data. Update in <code>pipeline/.env</code> when it eventually expires. Analytics only — no order placement.</p>
       </div>
       <div class="token-card">
-        <div class="token-name">Live Trading Token</div>
-        <div class="token-key">upstox/.token_live.json</div>
-        <p class="token-expires"><strong>Expires at midnight IST every day.</strong> Refresh each morning before the 3 PM run. Saved automatically after OAuth — no manual file editing needed.</p>
+        <div class="token-name">Zerodha Trading Token</div>
+        <div class="token-key">zerodha/.token.json</div>
+        <p class="token-expires"><strong>Expires at 6:00 AM IST every day</strong> (Kite Connect regulatory requirement). Refresh each morning before trading. Saved automatically after OAuth — no manual file editing needed.</p>
       </div>
     </div>
     <div class="code-block" style="margin-top:1rem">
-      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">refresh live token</span></div>
-      <pre>python -m upstox.auth live
+      <div class="code-header"><div class="code-dot"></div><div class="code-dot"></div><div class="code-dot"></div><span class="code-label">refresh trading token</span></div>
+      <pre>python -m zerodha.auth
 <span style="color:#4E6070"># Opens browser → log in → paste the redirect URL back</span></pre>
     </div>
     <h3>Monitoring</h3>
@@ -984,16 +983,13 @@ date</pre>
 python3.11 pipeline/run_daily.py
 
 <span style="color:#4E6070"># Preview today's trades — no orders placed</span>
-python upstox/execute_trades.py --dry-run
+python zerodha/execute_trades.py --dry-run
 
 <span style="color:#4E6070"># Execute today's trades (live)</span>
-python upstox/execute_trades.py
+python zerodha/execute_trades.py
 
 <span style="color:#4E6070"># Execute for a specific date</span>
-python upstox/execute_trades.py --date 2026-07-17
-
-<span style="color:#4E6070"># Sandbox mode dry run</span>
-python upstox/execute_trades.py --mode sandbox --dry-run
+python zerodha/execute_trades.py --date 2026-07-17
 
 <span style="color:#4E6070"># Test Telegram — success</span>
 python pipeline/notify.py --date 2026-07-17 --status success
@@ -1003,17 +999,16 @@ python pipeline/notify.py --date 2026-07-17 --status failed \
   --failed-step "Step 3" --error-msg "API timeout"
 
 <span style="color:#4E6070"># Manual single order</span>
-python upstox/trade.py buy  RELIANCE NSE 10 MARKET
-python upstox/trade.py sell RELIANCE NSE 10 MARKET
+python -m zerodha.trade buy  RELIANCE NSE 10 MARKET
+python -m zerodha.trade sell RELIANCE NSE 10 MARKET
 
 <span style="color:#4E6070"># Order management</span>
-python upstox/trade.py orders               <span style="color:#4E6070"># all today's orders</span>
-python upstox/trade.py status &lt;order_id&gt;    <span style="color:#4E6070"># single order status</span>
-python upstox/trade.py cancel &lt;order_id&gt;    <span style="color:#4E6070"># cancel an order</span>
+python -m zerodha.trade orders               <span style="color:#4E6070"># all today's orders</span>
+python -m zerodha.trade status &lt;order_id&gt;    <span style="color:#4E6070"># single order status</span>
+python -m zerodha.trade cancel &lt;order_id&gt;    <span style="color:#4E6070"># cancel an order</span>
 
 <span style="color:#4E6070"># Auth</span>
-python -m upstox.auth live     <span style="color:#4E6070"># OAuth login + save token</span>
-python -m upstox.auth          <span style="color:#4E6070"># verify current auth</span></pre>
+python -m zerodha.auth         <span style="color:#4E6070"># daily login + save token</span></pre>
     </div>
   </section>
 
@@ -1045,7 +1040,9 @@ python -m upstox.auth          <span style="color:#4E6070"># verify current auth
       <span class="footer-dot">·</span>
       Python 3.11
       <span class="footer-dot">·</span>
-      Upstox V3 API
+      Upstox V3 API (data)
+      <span class="footer-dot">·</span>
+      Zerodha Kite Connect (execution)
     </span>
     <span class="footer-text" style="color:var(--accent)">NSE Volume Pipeline</span>
   </footer>

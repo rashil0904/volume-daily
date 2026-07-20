@@ -135,12 +135,8 @@ volume-daily/
 │   ├── requirements.txt      # pandas, requests, python-dotenv
 │   └── .env                  # ← NOT in git — credentials live here
 │
-├── upstox/
-│   ├── auth.py               # OAuth login + token persistence (live / sandbox)
-│   ├── trade.py              # buy(), sell(), cancel_order(), order_status()
-│   └── execute_trades.py     # Reads trade list CSV, places MARKET BUY orders
-│
-├── zerodha/                  # Zerodha auth scaffold (not used in pipeline)
+├── zerodha/                  # Order execution — auth.py, trade.py, run_trades.py
+│                              # Upstox is data/analytics-only; no trades placed via Upstox.
 │
 ├── data/
 │   ├── candles/              # ~940 per-symbol 15-min OHLCV CSV files
@@ -202,15 +198,10 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 |---|---|
 | `SCREENER_EMAIL` | Screener.in login email (Premium account required for export) |
 | `SCREENER_PASSWORD` | Screener.in password |
-| `UPSTOX_ACCESS_TOKEN` | Upstox data token for candle fetches (long-lived; from developer portal) |
-| `UPSTOX_LIVE_API_KEY` | Upstox live trading API key |
-| `UPSTOX_LIVE_API_SECRET` | Upstox live trading API secret |
-| `UPSTOX_LIVE_REDIRECT_URI` | `http://127.0.0.1/` |
-| `UPSTOX_SANDBOX_ACCESS_TOKEN` | Upstox sandbox static token (~30 days) |
-| `UPSTOX_MODE` | `live` or `sandbox` — controls which mode `execute_trades.py` uses |
+| `UPSTOX_ACCESS_TOKEN` | Upstox data token for candle fetches (long-lived; from developer portal). Analytics only — no Upstox trading. |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `TELEGRAM_CHAT_ID` | Group chat ID (negative integer for supergroups, e.g. `-1004409929427`) |
-| `ZERODHA_API_KEY` | Zerodha Kite API key (not used by pipeline; for manual use) |
+| `ZERODHA_API_KEY` | Zerodha Kite API key — used for order execution |
 | `ZERODHA_API_SECRET` | Zerodha Kite API secret |
 | `ZERODHA_REDIRECT_URI` | `https://kite.trade/` |
 
@@ -222,18 +213,16 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 
 ### Token Refresh
 
-The pipeline uses two Upstox tokens with different lifecycles:
+**Candle data token** (`UPSTOX_ACCESS_TOKEN`): Used by `fetch_candles.py` to pull historical and intraday OHLCV data. This is a long-lived token obtained from the Upstox developer portal — update it in `.env` when it eventually expires. Analytics only, no order placement.
 
-**Candle data token** (`UPSTOX_ACCESS_TOKEN`): Used by `fetch_candles.py` to pull historical and intraday OHLCV data. This is a long-lived token obtained from the Upstox developer portal — update it in `.env` when it eventually expires.
-
-**Live trading token**: Used by `execute_trades.py` to place orders. This token **expires at midnight IST every day**. Refresh it each morning before the 3 PM run:
+**Zerodha trading token**: Used by `zerodha/trade.py` and `zerodha/run_trades.py` to place orders. Kite Connect access tokens **expire at 6:00 AM IST every day**. Refresh it each morning before trading:
 
 ```bash
-python -m upstox.auth live
+python -m zerodha.auth
 # Opens browser → log in → copy the redirect URL → paste it back
 ```
 
-The token is saved to `upstox/.token_live.json` and reused automatically until midnight.
+The token is saved to `zerodha/.token.json` and reused automatically until the next 6 AM IST expiry.
 
 ### Monitoring
 
@@ -267,16 +256,13 @@ git pull
 python3.11 pipeline/run_daily.py
 
 # Preview today's trades without placing orders
-python upstox/execute_trades.py --dry-run
+python zerodha/execute_trades.py --dry-run
 
 # Execute today's trades (live)
-python upstox/execute_trades.py
+python zerodha/execute_trades.py
 
 # Execute trades for a specific date
-python upstox/execute_trades.py --date 2026-07-17
-
-# Execute in sandbox mode (dry run)
-python upstox/execute_trades.py --mode sandbox --dry-run
+python zerodha/execute_trades.py --date 2026-07-17
 
 # Test Telegram — success notification
 python pipeline/notify.py --date 2026-07-17 --status success
@@ -286,25 +272,22 @@ python pipeline/notify.py --date 2026-07-17 --status failed \
   --failed-step "Step 3" --error-msg "API timeout"
 
 # Place a single manual buy order
-python upstox/trade.py buy RELIANCE NSE 10 MARKET
+python -m zerodha.trade buy RELIANCE NSE 10 MARKET
 
 # Place a manual sell order
-python upstox/trade.py sell RELIANCE NSE 10 MARKET
+python -m zerodha.trade sell RELIANCE NSE 10 MARKET
 
 # Check today's all orders
-python upstox/trade.py orders
+python -m zerodha.trade orders
 
 # Check a specific order's status
-python upstox/trade.py status <order_id>
+python -m zerodha.trade status <order_id>
 
 # Cancel an order
-python upstox/trade.py cancel <order_id>
+python -m zerodha.trade cancel <order_id>
 
-# Refresh live trading token
-python -m upstox.auth live
-
-# Verify current auth status
-python -m upstox.auth
+# Refresh trading token (daily, before market open)
+python -m zerodha.auth
 ```
 
 ---
@@ -334,4 +317,4 @@ Notifications go to the **"NSE Volume Alerts"** Telegram group via `@nse_volume_
 
 ---
 
-*Pipeline runs Mon–Fri at 3:01 PM IST · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API*
+*Pipeline runs Mon–Fri at 3:01 PM IST · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution)*
