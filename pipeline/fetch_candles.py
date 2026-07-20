@@ -36,6 +36,15 @@ from urllib.parse import quote
 
 import requests
 
+# ── Load .env (direct/cron invocations don't have it pre-loaded) ───────────────
+_env_file = Path(__file__).resolve().parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 ACCESS_TOKEN = (os.environ.get("UPSTOX_ACCESS_TOKEN") or "").strip()
 if not ACCESS_TOKEN:
