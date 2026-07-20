@@ -279,7 +279,8 @@ def _tg(fn: str, *args, **kwargs) -> None:
 # STAGE 1 — Entry at 3:15pm
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_entry_315(trade_date: date | None = None, dry_run: bool = False) -> None:
+def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
+                  capital: float | None = None) -> None:
     if trade_date is None:
         trade_date = date.today()
 
@@ -288,12 +289,19 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False) -> None
         print(f"[zerodha] Trade list empty for {trade_date} — nothing to enter.")
         return
 
-    n          = len(symbols)
-    allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
+    n = len(symbols)
+    if capital is not None:
+        # Testing mode — simple equal split across every signal, regardless of n.
+        # (The >=5-signal-only split rule below is a ₹5L-specific design; doesn't
+        # apply when running against an arbitrary reduced capital pool.)
+        allocation = capital / n
+    else:
+        capital    = TOTAL_CAPITAL
+        allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
 
     print(f"\n{'='*60}")
     print(f"[zerodha] Stage 1 — Entry {trade_date}{'  DRY RUN' if dry_run else ''}")
-    print(f"[zerodha] {n} signal(s)  ·  ₹{allocation:,.0f} per position")
+    print(f"[zerodha] {n} signal(s)  ·  ₹{capital:,.0f} total  ·  ₹{allocation:,.0f} per position")
     print(f"{'='*60}")
 
     positions     = _load_pos()
@@ -548,13 +556,17 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",    default=None,
                         help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
+    parser.add_argument("--capital", type=float, default=None,
+                        help="Override total capital for --entry (equal split across all "
+                             "signals, ignoring the >=5-signal split rule). For testing with "
+                             "a reduced capital pool; defaults to the real TOTAL_CAPITAL.")
     args = parser.parse_args()
 
     td = date.fromisoformat(args.date) if args.date else date.today()
 
     try:
         if args.entry:
-            run_entry_315(trade_date=td, dry_run=args.dry_run)
+            run_entry_315(trade_date=td, dry_run=args.dry_run, capital=args.capital)
         elif args.exit_945:
             check_exit_945(dry_run=args.dry_run)
         else:
