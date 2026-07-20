@@ -373,19 +373,23 @@ def fetch_append_historical(matched, from_date, to_date):
 # ── Intraday fetch (today's data only) ────────────────────────────────────────
 
 def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
-    """Fetch today's 15-min intraday candles and merge new rows into candles/<symbol>.csv, kept sorted."""
+    """Fetch today's 15-min intraday candles and merge into candles/<symbol>.csv, kept sorted.
+
+    Freshly fetched rows always overwrite any existing row with the same timestamp. The
+    candle "in progress" at fetch time (market still open) is necessarily incomplete —
+    OHLC collapsed to a single tick — and only reaches its true settled values once fully
+    closed, so a later fetch must be able to correct it, not just skip it as already-present.
+    """
     out_path = CANDLES_DIR / f"{symbol}.csv"
 
-    existing_rows = []
-    existing_ts = set()
+    existing_by_ts = {}
     if out_path.exists():
         with open(out_path, newline="") as f:
             reader = csv.reader(f)
             next(reader, None)
             for row in reader:
                 if row:
-                    existing_rows.append(row)
-                    existing_ts.add(row[0])
+                    existing_by_ts[row[0]] = row
 
     session = requests.Session()
     encoded = quote(instrument_key, safe="")
@@ -412,22 +416,23 @@ def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
                 return
             time.sleep(5 * attempt)
 
-    new_candles = [c for c in candles if c[0] not in existing_ts]
-    if not new_candles:
+    if not candles:
         with lock:
             counter["done"] += 1
-            # If API returned nothing AND we have no candle for today, flag it
             today_str = date.today().isoformat()
-            has_today = any(ts.startswith(today_str) for ts in existing_ts)
-            if not candles and not has_today:
+            has_today = any(ts.startswith(today_str) for ts in existing_by_ts)
+            if not has_today:
                 counter["no_data"] += 1
                 print(f"  [intraday {counter['done']}/{total}] {symbol} — no data from API (holiday/illiquid?)")
             else:
                 counter["skipped"] += 1
         return
 
-    merged = existing_rows + new_candles
-    merged.sort(key=lambda r: r[0])
+    new_count = sum(1 for c in candles if c[0] not in existing_by_ts)
+    for c in candles:
+        existing_by_ts[c[0]] = c
+
+    merged = sorted(existing_by_ts.values(), key=lambda r: r[0])
 
     with open(out_path, "w", newline="") as f:
         w = csv.writer(f)
@@ -437,7 +442,9 @@ def fetch_intraday_symbol(symbol, instrument_key, total, counter, lock):
     with lock:
         counter["done"] += 1
         counter["ok"] += 1
-        print(f"  [intraday {counter['done']}/{total}] {symbol} — +{len(new_candles)} candles")
+        refreshed = len(candles) - new_count
+        note = f"+{new_count} new" + (f", refreshed {refreshed}" if refreshed else "")
+        print(f"  [intraday {counter['done']}/{total}] {symbol} — {note}")
 
 
 def fetch_all_intraday(matched):
