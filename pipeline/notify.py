@@ -173,6 +173,88 @@ def send_failure(date_str: str, failed_step: str, error_msg: str,
     print("  Telegram failure notification sent")
 
 
+# ── Trade execution notifications (Stages 1 / 2 / 3) ─────────────────────────
+
+def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
+               order_id: str, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Ref price (15:13 close):</b> &#8377;{ref_price:,.2f}",
+        f"<b>Shares:</b> {shares}",
+        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
+    ])
+    _send(text)
+
+
+def send_exit_945(broker: str, symbol: str, exit_price: float,
+                  return_pct: float, pnl: float, dry_run: bool = False) -> None:
+    tag   = "  [DRY RUN]" if dry_run else ""
+    arrow = "▲" if return_pct >= 0 else "▼"
+    text  = "\n".join([
+        f"<b>{arrow} EXIT 9:45am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text)
+
+
+def send_exit_945_nodata(broker: str, symbol: str, shares_exited: int,
+                         shares_remaining: int, exit_price: float,
+                         dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#9888; NO-DATA FALLBACK 9:45am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        "09:43 candle unavailable — sold half position as precaution.",
+        f"<b>Shares sold:</b> {shares_exited}  |  <b>Still open:</b> {shares_remaining}",
+        f"<b>Partial fill price:</b> &#8377;{exit_price:,.2f}",
+        "Remaining shares will be force-exited at 12pm.",
+    ])
+    _send(text)
+
+
+def send_force_exit_1200(broker: str, symbol: str, exit_price: float,
+                         return_pct: float, pnl: float,
+                         dry_run: bool = False) -> None:
+    tag   = "  [DRY RUN]" if dry_run else ""
+    arrow = "▲" if return_pct >= 0 else "▼"
+    text  = "\n".join([
+        f"<b>{arrow} FORCE EXIT 12pm — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text)
+
+
+def send_nothing_open_at_1200(broker: str) -> None:
+    _send(
+        f"<b>12pm Exit — {html_lib.escape(broker)}</b>\n"
+        "All positions already exited at 9:45am — nothing to force-close."
+    )
+
+
+def send_daily_summary(broker: str, n_opened: int, n_exited_945: int,
+                       n_partial_nodata: int, n_force_1200: int,
+                       total_pnl: float, dry_run: bool = False) -> None:
+    tag   = "  [DRY RUN]" if dry_run else ""
+    arrow = "▲" if total_pnl >= 0 else "▼"
+    text  = "\n".join([
+        f"<b>{arrow} Daily Summary — {html_lib.escape(broker)}{tag}</b>",
+        f"<b>Positions opened  :</b> {n_opened}",
+        f"<b>Exited at 9:45am  :</b> {n_exited_945}",
+        f"<b>Partial no-data   :</b> {n_partial_nodata}",
+        f"<b>Force-closed 12pm :</b> {n_force_1200}",
+        f"<b>Total P&amp;L     :</b> &#8377;{total_pnl:+,.2f}",
+    ])
+    _send(text)
+
+
 # ── CLI (for manual testing) ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
