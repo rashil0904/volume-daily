@@ -173,6 +173,44 @@ def send_failure(date_str: str, failed_step: str, error_msg: str,
     print("  Telegram failure notification sent")
 
 
+# ── Anytime scanner preview (scan_intraday.py) ────────────────────────────────
+
+def send_scan_preview(date_str: str, as_of_hhmm: int, rows: list) -> None:
+    """
+    Sent by scan_intraday.py. Clearly labeled as a preview so it's never confused
+    with the official 3:01 PM send_success() trade list.
+    """
+    parts = [
+        "<b>NSE Intraday Scanner — PREVIEW</b>",
+        f"<b>Date:</b> {html_lib.escape(date_str)}",
+        f"<b>As of:</b> {as_of_hhmm:04d} IST",
+        f"<b>Signals:</b> {len(rows)}",
+    ]
+
+    if rows:
+        header = f"{'Symbol':<12}  {'Shares':>6}  {'Entry Rs':>9}  {'AsOf':>5}  {'VolR':>5}  {'Ret%':>6}"
+        sep    = "-" * len(header)
+        lines  = [header, sep]
+        for r in rows:
+            lines.append(
+                f"{r['symbol']:<12}  {r['shares']:>6}  {r['ref_price']:>9,.2f}  "
+                f"{r['as_of_hhmm']:>5}  {r['volume_ratio_vs_prorated']:>5.2f}  {r['return_pct']:>6.2f}"
+            )
+        table = "\n".join(lines)
+        parts.append("\n<b>Preview signals (not the official trade list):</b>")
+        parts.append(f"<pre>{html_lib.escape(table)}</pre>")
+    else:
+        parts.append("\nNo signals as of this check.")
+
+    parts.append(
+        "\n<i>Volume threshold is prorated to elapsed time in the 09:15-14:45 window — "
+        "treat as a directional read, not a confirmed signal. Not read by any execution script.</i>"
+    )
+
+    _send("\n".join(parts))
+    print(f"  Telegram sent ({len(rows)} preview signal{'s' if len(rows) != 1 else ''})")
+
+
 # ── Trade execution notifications (Stages 1 / 2 / 3) ─────────────────────────
 
 def send_entry(broker: str, symbol: str, ref_price: float, shares: int,

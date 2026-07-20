@@ -46,6 +46,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 _ROOT          = Path(__file__).resolve().parent.parent
+_PIPELINE_DIR  = Path(__file__).resolve().parent
+sys.path.insert(0, str(_PIPELINE_DIR))
+import notify
+
 MCAP_DAILY_DIR = _ROOT / "data" / "market_cap_daily"
 CANDLES_DIR    = _ROOT / "data" / "candles"
 RESULTS_DIR    = _ROOT / "results"
@@ -194,6 +198,10 @@ def main():
 
     if not raw_signals:
         print(f"\n  No signals as of {as_of_hhmm:04d} IST — preview file not written.")
+        try:
+            notify.send_scan_preview(TODAY.isoformat(), as_of_hhmm, [])
+        except Exception as exc:
+            print(f"  WARNING: Telegram notification failed: {exc}", file=sys.stderr)
         return
 
     n          = len(raw_signals)
@@ -226,6 +234,11 @@ def main():
 
     print(f"\n  Preview scan → {out_path}")
     print(f"  This is NOT the official trade list — not read by execute_trades.py or run_trades.py.")
+
+    try:
+        notify.send_scan_preview(TODAY.isoformat(), as_of_hhmm, rows)
+    except Exception as exc:
+        print(f"  WARNING: Telegram notification failed: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
