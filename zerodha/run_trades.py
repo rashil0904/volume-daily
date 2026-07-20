@@ -1,7 +1,10 @@
 """
 zerodha/run_trades.py — 3-stage live trading via Zerodha Kite
 =============================================================
-Price data  : Upstox intraday V3 candle API  (UPSTOX_ACCESS_TOKEN from pipeline/.env)
+Entry price : Upstox intraday V3 candle API  (UPSTOX_ACCESS_TOKEN from pipeline/.env) —
+              close of 15:14 candle, falls back to 15:13 if 15:14 isn't published yet.
+Exit price  : Zerodha Kite live positions/holdings last_price (Stage 2) — not candle-based,
+              so it isn't affected by whether a specific candle has been published yet.
 Orders      : Zerodha Kite API  (zerodha/trade.py)
 Positions   : results/positions_zerodha.json  (full persistent trade book)
 
@@ -116,28 +119,50 @@ def _close_at(candles: list, hhmm: int) -> float | None:
     return None
 
 
-def get_reference_price(symbol: str) -> float:
-    """Close of 15:13 1-min candle — Stage 1 entry sizing. Raises ValueError if not found."""
+def get_reference_price(symbol: str) -> tuple[float, int]:
+    """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13 if 15:14
+    isn't available yet. Returns (price, hhmm_used). Raises ValueError if neither is found."""
     candles = _fetch_1min(symbol)
-    price   = _close_at(candles, 1513)
-    if price is None:
-        raise ValueError(
-            f"[zerodha] 15:13 candle not found for {symbol} "
-            f"({len(candles)} candles). Run after 15:14 IST."
-        )
-    return price
+    price = _close_at(candles, 1514)
+    if price is not None:
+        return price, 1514
+    price = _close_at(candles, 1513)
+    if price is not None:
+        return price, 1513
+    raise ValueError(
+        f"[zerodha] Neither 15:14 nor 15:13 candle found for {symbol} "
+        f"({len(candles)} candles). Run after 15:15 IST."
+    )
 
 
-def get_exit_check_price(symbol: str) -> float:
-    """Close of 09:43 1-min candle — Stage 2 exit decision. Raises ValueError if not found."""
-    candles = _fetch_1min(symbol)
-    price   = _close_at(candles, 943)
-    if price is None:
-        raise ValueError(
-            f"[zerodha] 09:43 candle not found for {symbol} "
-            f"({len(candles)} candles). Run after 09:44 IST."
-        )
-    return price
+def get_live_pnl(symbol: str) -> float:
+    """Kite's own computed P&L for this symbol from positions (same-day) or holdings
+    (settled) — Stage 2 exit decision. Uses the broker's pnl field directly rather than
+    computing return from a fetched price, and isn't candle-based at all, so it isn't at
+    the mercy of whether a specific candle has been published yet. Raises ValueError if
+    the symbol isn't found in either endpoint (e.g. already exited, or a lookup failure)."""
+    session, _ = _kite_session()
+    try:
+        resp = session.get(f"{_KITE_BASE}/portfolio/positions", timeout=15)
+        if resp.ok:
+            for p in (resp.json().get("data", {}).get("net") or []):
+                if (p.get("tradingsymbol") or "").upper() == symbol.upper():
+                    pnl = p.get("pnl")
+                    if pnl is not None:
+                        return float(pnl)
+    except Exception:
+        pass
+    try:
+        resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
+        if resp.ok:
+            for h in (resp.json().get("data") or []):
+                if (h.get("tradingsymbol") or "").upper() == symbol.upper():
+                    pnl = h.get("pnl")
+                    if pnl is not None:
+                        return float(pnl)
+    except Exception:
+        pass
+    raise ValueError(f"[zerodha] No P&L found for {symbol} in Kite positions or holdings.")
 
 
 # ── Positions JSON ─────────────────────────────────────────────────────────────
@@ -284,8 +309,8 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False) -> None
         print(f"\n[zerodha] {sym}")
 
         try:
-            ref = get_reference_price(sym)
-            print(f"[zerodha]   ref price (15:13 close): ₹{ref:,.2f}")
+            ref, ref_hhmm = get_reference_price(sym)
+            print(f"[zerodha]   ref price ({ref_hhmm//100:02d}:{ref_hhmm%100:02d} close): ₹{ref:,.2f}")
         except Exception as exc:
             print(f"[zerodha]   SKIP — no reference price: {exc}")
             continue
@@ -355,15 +380,13 @@ def check_exit_945(dry_run: bool = False) -> None:
 
         print(f"\n[zerodha] {sym}  fill=₹{fill_price:,.2f}  qty={qty}")
 
-        no_data = False
-        chk = 0.0
-        return_pct = 0.0
+        no_data  = False
+        pnl_live = 0.0
         try:
-            chk        = get_exit_check_price(sym)
-            return_pct = (chk - fill_price) / fill_price * 100 if fill_price else 0
-            print(f"[zerodha]   check price (09:43 close): ₹{chk:,.2f}  return={return_pct:+.2f}%")
+            pnl_live = get_live_pnl(sym)
+            print(f"[zerodha]   live P&L: ₹{pnl_live:+,.2f}")
         except Exception as exc:
-            print(f"[zerodha]   no exit check price: {exc}")
+            print(f"[zerodha]   no live P&L available: {exc}")
             no_data = True
 
         if no_data:
@@ -393,16 +416,16 @@ def check_exit_945(dry_run: bool = False) -> None:
             _save_pos(positions)
             continue
 
-        if return_pct > 0:
-            # Positive return — exit full remaining quantity
-            print(f"[zerodha]   return > 0 — selling {qty}")
+        if pnl_live > 0:
+            # Positive P&L (Kite's own figure) — exit full remaining quantity
+            print(f"[zerodha]   P&L positive — selling {qty}")
             try:
                 oid = sell(sym, "NSE", qty,
                            order_type="MARKET", product="CNC", dry_run=dry_run)
             except Exception as exc:
                 print(f"[zerodha]   sell failed: {exc}")
                 continue
-            ep, eq = (chk, qty) if dry_run else _poll_fill_safe(oid, chk, qty)
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
             _tg("send_exit_945", _BROKER, sym, ep, ret_act, pnl, dry_run=dry_run)
@@ -417,7 +440,7 @@ def check_exit_945(dry_run: bool = False) -> None:
             _save_pos(positions)
             print(f"[zerodha]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         else:
-            print(f"[zerodha]   return ≤ 0 ({return_pct:+.2f}%) — holding for 12pm forced exit.")
+            print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 12pm forced exit.")
 
     print(f"\n[zerodha] Stage 2 complete.")
 

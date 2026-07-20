@@ -89,7 +89,7 @@ Total capital is capped at **₹5,00,000** regardless of how many signals fire.
 | 6 | ₹83,333 | ₹5,00,000 |
 | n ≥ 5 | ₹5,00,000 ÷ n | ₹5,00,000 |
 
-Entry sizing: `shares = floor(allocation / close_of_15:13_candle)`
+Entry sizing: `shares = floor(allocation / close_of_15:14_candle)` (falls back to 15:13 close if 15:14 isn't published yet)
 
 ---
 
@@ -101,10 +101,10 @@ Entry sizing: `shares = floor(allocation / close_of_15:13_candle)`
  9:15 AM  — Market opens
  3:00 PM  — Last auction period begins
  3:01 PM  — [CRON] Pipeline runs: scans volume/return, writes trade list
- 3:15 PM  — Stage 1: fetch 15:13 candle, size positions, place buys (manual — not yet cron-scheduled)
+ 3:15 PM  — Stage 1: fetch 15:14 candle (fallback 15:13), size positions, place buys (manual — not yet cron-scheduled)
  3:45 PM  — [CRON] EOD fill: corrects/backfills 15:00 + 15:15 candles via intraday API
 ─────────── overnight hold ───────────────────────────────────────────────────
- 9:45 AM  — Stage 2: check 09:43 candle; exit if return > 0 (manual — not yet cron-scheduled)
+ 9:45 AM  — Stage 2: check live P&L from Kite positions/holdings; exit if positive (manual — not yet cron-scheduled)
 12:00 PM  — Stage 3: force-exit any positions still open (manual — not yet cron-scheduled)
 ```
 
@@ -181,25 +181,22 @@ Trading execution is fully independent of the signal pipeline and runs entirely 
 
 1. Reads `results/trade_list_<today>.csv` (produced by the 3:01 PM pipeline run)
 2. For each symbol, fetches today's 1-minute intraday candles via Upstox V3 API
-3. Reads the **close of the 15:13 candle** as the reference price for sizing
+3. Reads the **close of the 15:14 candle** as the reference price for sizing — falls back to the **15:13 close** if 15:14 isn't published yet
 4. Calculates `shares = floor(allocation / ref_price)`
 5. Places a MARKET BUY order via Zerodha (Kite Connect), with `market_protection` set so the order isn't rejected by the API
 6. Polls for fill confirmation (up to 36 seconds, 12 retries × 3s)
 7. Writes entry details to `results/positions_zerodha.json`
 8. Sends a Telegram entry notification per position
 
-Why the 15:13 candle? The 15:00–15:14 period is the closing auction. The 15:13 candle close gives a settled reference price before the 15:15 continuous session opens. The buy order is placed into the 15:15 open.
-
 #### Stage 2 — Exit Check at 9:45 AM (Next Day)
 
 **Script**: `python zerodha/run_trades.py --exit-945`
 
 1. Loads all open positions from `results/positions_zerodha.json`
-2. For each position, fetches today's 1-minute candles and reads the **close of the 09:43 candle**
-3. Calculates return: `(09:43_close - entry_fill_price) / entry_fill_price * 100`
-4. **If return > 0**: places MARKET SELL for the full quantity → marks `exited_945`
-5. **If return ≤ 0**: holds the position for Stage 3 forced exit at noon
-6. **If the 09:43 candle is unavailable** (data not yet published): sells half the position as a precaution → marks `partial_exit_945_nodata` → remaining shares flow to Stage 3
+2. For each position, pulls **Kite's own computed P&L** for that symbol from `/portfolio/positions` (same-day) or `/portfolio/holdings` (settled) — not candle-based at all, so it isn't affected by whether a specific candle has been published
+3. **If P&L > 0**: places MARKET SELL for the full quantity → marks `exited_945`
+4. **If P&L ≤ 0**: holds the position for Stage 3 forced exit at noon
+5. **If the symbol isn't found in either endpoint** (lookup failure, or already exited): sells half the position as a precaution → marks `partial_exit_945_nodata` → remaining shares flow to Stage 3
 
 #### Stage 3 — Forced Exit at 12:00 PM
 
@@ -234,7 +231,7 @@ Each entry in `results/positions_zerodha.json`:
 Status progression:
 - `open` — entered, no exit yet
 - `exited_945` — fully exited at 9:45 AM (return was positive)
-- `partial_exit_945_nodata` — half exited at 9:45 AM (candle unavailable), remaining open
+- `partial_exit_945_nodata` — half exited at 9:45 AM (P&L lookup unavailable), remaining open
 - `exited_1200` — force-exited at noon (or completed after partial)
 
 #### Alternative: execute_trades.py (Simpler, No Live Candle)
@@ -517,7 +514,7 @@ Notifications go to the **"NSE Volume Alerts"** group via `@nse_volume_alerts_bo
 |---|---|
 | `ENTRY` | After each Stage 1 buy order is submitted |
 | `EXIT 9:45am` | After a Stage 2 profitable sell fills |
-| `NO-DATA FALLBACK 9:45am` | When 09:43 candle is unavailable; half position sold |
+| `NO-DATA FALLBACK 9:45am` | When live P&L is unavailable from Kite; half position sold |
 | `FORCE EXIT 12pm` | After each Stage 3 sell fills |
 | `12pm Exit — nothing to close` | If all positions already exited at 9:45 AM |
 | `Daily Summary` | After Stage 3 completes; shows P&L for the day |

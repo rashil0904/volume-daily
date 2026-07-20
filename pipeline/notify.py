@@ -219,7 +219,7 @@ def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
     text = "\n".join([
         f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
-        f"<b>Ref price (15:13 close):</b> &#8377;{ref_price:,.2f}",
+        f"<b>Ref price (15:15 close):</b> &#8377;{ref_price:,.2f}",
         f"<b>Shares:</b> {shares}",
         f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
@@ -247,7 +247,7 @@ def send_exit_945_nodata(broker: str, symbol: str, shares_exited: int,
     text = "\n".join([
         f"<b>&#9888; NO-DATA FALLBACK 9:45am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
-        "09:43 candle unavailable — sold half position as precaution.",
+        "Live price unavailable from broker — sold half position as precaution.",
         f"<b>Shares sold:</b> {shares_exited}  |  <b>Still open:</b> {shares_remaining}",
         f"<b>Partial fill price:</b> &#8377;{exit_price:,.2f}",
         "Remaining shares will be force-exited at 12pm.",
