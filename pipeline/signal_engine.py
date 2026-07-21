@@ -18,12 +18,18 @@ Mode differences:
   STRICT   (main.py 3:01pm run):
     - Reference candle fixed at 15:00
     - Volume window: 09:15–14:45 (full session window)
-    - Volume threshold: 6× 36-day avg (no proration)
+    - Volume threshold: 6× 36-day avg
 
   PRORATED (scan_intraday.py anytime preview):
     - Reference candle: latest available candle up to as_of_hhmm
-    - Volume window: 09:15 to min(as_of_hhmm, 14:45)
-    - Volume threshold prorated to elapsed time within 09:15–14:45 window
+    - Volume window: 09:15 to min(as_of_hhmm, 14:45) -- only whatever's
+      accumulated so far, since later candles don't exist yet
+    - Volume threshold: same fixed 6× 36-day avg as strict mode (not scaled
+      down by elapsed time) -- a "pass" here is the same bar as the real
+      signal, not a weaker early-session approximation of it. The only
+      difference from STRICT is the reference candle (latest available vs.
+      fixed 15:00), which is why an early-session check will rarely pass:
+      there just isn't much volume yet.
 
 Public API
 ----------
@@ -44,11 +50,6 @@ MIN_PERIODS       = 36
 RETURN_THRESHOLD  = 5.0     # percent
 WINDOW_START_HHMM = 915
 WINDOW_END_HHMM   = 1445    # last candle of the volume-counting window
-
-
-def _hhmm_to_minutes(hhmm: int) -> int:
-    h, m = divmod(hhmm, 100)
-    return h * 60 + m
 
 
 def _check_symbol(symbol: str, today: date, mode: str,
@@ -127,15 +128,15 @@ def _check_symbol(symbol: str, today: date, mode: str,
             (today_df["hhmm"] >= WINDOW_START_HHMM) &
             (today_df["hhmm"] <= window_end)
         ]["volume"].sum()
-        elapsed_min     = max(
-            _hhmm_to_minutes(window_end) - _hhmm_to_minutes(WINDOW_START_HHMM), 1
-        )
-        full_window_min = (
-            _hhmm_to_minutes(WINDOW_END_HHMM) - _hhmm_to_minutes(WINDOW_START_HHMM)
-        )
-        prorated_threshold = VOLUME_MULT * avg_36 * (elapsed_min / full_window_min)
-        passes_volume      = bool(cum_vol >= prorated_threshold)
-        volume_ratio       = round(cum_vol / prorated_threshold, 2) if prorated_threshold > 0 else 0.0
+
+        # Same fixed threshold as strict mode — full 6x 36-day avg, not scaled down
+        # by elapsed time. A prorated/lowered bar was the original design here, but
+        # that meant an early-session "pass" was a weaker signal than the real one;
+        # this way PRORATED only differs from STRICT in reference candle (latest
+        # available vs. fixed 15:00), not in how hard the volume bar is to clear.
+        threshold     = VOLUME_MULT * avg_36
+        passes_volume = bool(cum_vol >= threshold)
+        volume_ratio  = round(cum_vol / threshold, 2) if threshold > 0 else 0.0
 
     # Return condition (same for both modes)
     return_pct    = (ref_price / prev_vwap - 1) * 100

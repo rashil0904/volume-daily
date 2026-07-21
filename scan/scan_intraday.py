@@ -3,12 +3,15 @@
 scan/scan_intraday.py — anytime intraday preview scanner
 =========================================================
 Run at any time during the trading day to see which symbols are building
-toward a signal. Uses PRORATED volume threshold so readings mid-session
-are meaningful rather than uniformly zero.
+toward a signal, using the same fixed 6x volume bar as the official run —
+not a lowered/prorated one, so a pass here means the real threshold, not
+an early-session approximation of it.
 
 Differences from main.py's official 3:01 PM run (signal_engine STRICT mode):
   - Reference candle : latest available candle (not hardcoded 15:00)
-  - Volume threshold : prorated to elapsed fraction of the 09:15–14:45 window
+  - Volume threshold : same fixed 6x 36-day avg as strict mode (not scaled
+                        down by elapsed time) -- early-session checks will
+                        rarely pass since less volume has accumulated yet
   - Output path      : results/scans/scan_<date>_<HHMM>.csv (not trade_list_)
   - Sends a Telegram message labeled "PREVIEW" — distinct from the official
     send_success() trade-list message, and not read by any execution script
@@ -90,7 +93,7 @@ def main():
     print(f"scan_intraday.py — {TODAY.isoformat()} as of {as_of_hhmm:04d} IST  "
           f"({len(universe):,} symbols in mcap file)")
     print("  Preview only — not the official 3:01 PM trade list.")
-    print("  Volume threshold is prorated to elapsed time in the 09:15–14:45 window.\n")
+    print("  Volume threshold is the same fixed 6x 36-day avg as the official run (not prorated).\n")
 
     # Refresh 15-min candles for today's mcap universe before checking signals
     inst_lookup = _load_instrument_lookup()
