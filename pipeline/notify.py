@@ -130,7 +130,7 @@ def _send(text: str) -> None:
 # ── Public API (called by run_daily.py) ───────────────────────────────────────
 
 def send_success(date_str: str, start_ts, mcap_status: str = "fresh") -> None:
-    trade_list_path = PROJECT_DIR / "results" / f"trade_list_{date_str}.csv"
+    trade_list_path = PROJECT_DIR / "results" / "trades" / f"trade_list_{date_str}.csv"
     n_signals = _count_signals(trade_list_path)
     mcap_st   = _load_mcap_status()
     runtime   = _runtime_str(start_ts)

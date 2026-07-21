@@ -34,7 +34,7 @@ def _load_trades(trade_date: date) -> list[dict]:
       New: symbol, shares, ref_price
       Old: symbol, market_cap_cr, entry_price_315pm, ...  (no shares column)
     """
-    path = _RESULTS_DIR / f"trade_list_{trade_date.isoformat()}.csv"
+    path = _RESULTS_DIR / "trades" / f"trade_list_{trade_date.isoformat()}.csv"
     if not path.exists():
         sys.exit(f"No trade list found for {trade_date}: {path}")
 

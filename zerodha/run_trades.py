@@ -24,10 +24,7 @@ import sys
 import time
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
-
-import requests
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -36,6 +33,7 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
 from zerodha.trade import buy, sell
 from zerodha.trade import order_status as _kite_order_status
+import data_loader as _dl
 
 _notify = None
 try:
@@ -50,7 +48,6 @@ _BROKER       = "zerodha"
 _RESULTS_DIR  = _ROOT / "results"
 _POS_FILE     = _RESULTS_DIR / "positions_zerodha.json"
 _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
-_BASE_V3      = "https://api.upstox.com/v3"
 TOTAL_CAPITAL = 500_000
 
 _env = _ROOT / "pipeline" / ".env"
@@ -60,7 +57,6 @@ if _env.exists():
         if _ln and not _ln.startswith("#") and "=" in _ln:
             _k, _, _v = _ln.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip())
-_DATA_TOKEN = (os.environ.get("UPSTOX_ACCESS_TOKEN") or "").strip()
 
 _sym_cache: dict[str, str] = {}
 
@@ -84,29 +80,7 @@ def _ikey(symbol: str) -> str:
     return key
 
 
-# ── Candle price fetches (Upstox V3 intraday, 1-minute) ───────────────────────
-
-def _fetch_1min(symbol: str) -> list:
-    """Fetch today's 1-min intraday candles via Upstox V3. Returns list of candle arrays."""
-    if not _DATA_TOKEN:
-        raise EnvironmentError("[zerodha] UPSTOX_ACCESS_TOKEN not set in pipeline/.env")
-    encoded = quote(_ikey(symbol), safe="")
-    url     = f"{_BASE_V3}/historical-candle/intraday/{encoded}/minutes/1"
-    headers = {"Authorization": f"Bearer {_DATA_TOKEN}", "Accept": "application/json"}
-    for attempt in range(1, 4):
-        try:
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code == 429:
-                time.sleep(30 * attempt)
-                continue
-            resp.raise_for_status()
-            return resp.json().get("data", {}).get("candles", [])
-        except requests.RequestException as exc:
-            if attempt == 3:
-                raise RuntimeError(f"[zerodha] Candle fetch failed for {symbol}: {exc}") from exc
-            time.sleep(5 * attempt)
-    return []
-
+# ── Candle price fetch (1-minute, via data_loader) ────────────────────────────
 
 def _close_at(candles: list, hhmm: int) -> float | None:
     """Return close of candle whose start time (IST) matches hhmm (e.g. 1513 for 15:13)."""
@@ -123,7 +97,9 @@ def _close_at(candles: list, hhmm: int) -> float | None:
 def get_reference_price(symbol: str) -> tuple[float, int]:
     """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13 if 15:14
     isn't available yet. Returns (price, hhmm_used). Raises ValueError if neither is found."""
-    candles = _fetch_1min(symbol)
+    matched       = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
+    candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
+    candles       = candles_by_sym.get(symbol, [])
     price = _close_at(candles, 1514)
     if price is not None:
         return price, 1514
@@ -257,7 +233,7 @@ def _broker_qty(symbol: str) -> int:
 # ── Trade list ─────────────────────────────────────────────────────────────────
 
 def _load_symbols(trade_date: date) -> list[str]:
-    path = _RESULTS_DIR / f"trade_list_{trade_date.isoformat()}.csv"
+    path = _RESULTS_DIR / "trades" / f"trade_list_{trade_date.isoformat()}.csv"
     if not path.exists():
         sys.exit(f"[zerodha] No trade list: {path}")
     with open(path, newline="") as f:

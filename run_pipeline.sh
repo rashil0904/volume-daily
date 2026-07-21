@@ -15,7 +15,7 @@ cd "$PROJECT_DIR"
 
 # Run pipeline
 echo "$LOG_PREFIX  Running pipeline..."
-$PYTHON pipeline/run_daily.py
+$PYTHON pipeline/main.py
 
 EXIT_CODE=$?
 
