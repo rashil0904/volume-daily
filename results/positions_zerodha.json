@@ -1,0 +1,62 @@
+[
+  {
+    "broker": "zerodha",
+    "symbol": "EPIGRAL",
+    "entry_date": "2026-07-21",
+    "reference_price": 1164.0,
+    "shares_intended": 1,
+    "actual_fill_price": 1162.9,
+    "actual_fill_quantity": 1,
+    "entry_order_id": "260721221498671",
+    "status": "open",
+    "entry_timestamp": "2026-07-21T15:19:05.107223+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "RAJRATAN",
+    "entry_date": "2026-07-21",
+    "reference_price": 513.1,
+    "shares_intended": 2,
+    "actual_fill_price": 512.675,
+    "actual_fill_quantity": 2,
+    "entry_order_id": "260721221499345",
+    "status": "open",
+    "entry_timestamp": "2026-07-21T15:19:15.993742+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "SHK",
+    "entry_date": "2026-07-21",
+    "reference_price": 142.9,
+    "shares_intended": 9,
+    "actual_fill_price": 143.0,
+    "actual_fill_quantity": 9,
+    "entry_order_id": "260721221499641",
+    "status": "open",
+    "entry_timestamp": "2026-07-21T15:19:20.850207+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "STALLION",
+    "entry_date": "2026-07-21",
+    "reference_price": 245.75,
+    "shares_intended": 5,
+    "actual_fill_price": 246.12,
+    "actual_fill_quantity": 5,
+    "entry_order_id": "260721221499929",
+    "status": "open",
+    "entry_timestamp": "2026-07-21T15:19:25.731084+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "VIMTALABS",
+    "entry_date": "2026-07-21",
+    "reference_price": 601.65,
+    "shares_intended": 2,
+    "actual_fill_price": 598.3,
+    "actual_fill_quantity": 2,
+    "entry_order_id": "260721221500216",
+    "status": "open",
+    "entry_timestamp": "2026-07-21T15:19:30.707965+05:30"
+  }
+]

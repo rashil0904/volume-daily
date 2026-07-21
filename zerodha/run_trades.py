@@ -171,6 +171,11 @@ def _ts() -> str:
 
 # ── Order fill polling (Zerodha Kite) ─────────────────────────────────────────
 
+class OrderRejected(RuntimeError):
+    """Order genuinely did not fill (REJECTED/CANCELLED) — distinct from a poll
+    timeout, where the order may well have filled and we just don't know yet."""
+
+
 def _poll_fill(order_id: str, retries: int = 12, delay: float = 3.0) -> tuple[float, int]:
     """Poll until market order fills. Returns (avg_fill_price, filled_qty)."""
     for _ in range(retries):
@@ -181,10 +186,10 @@ def _poll_fill(order_id: str, retries: int = 12, delay: float = 3.0) -> tuple[fl
             if status == "COMPLETE":
                 return float(o.get("average_price") or 0), int(o.get("filled_quantity") or 0)
             if status in ("REJECTED", "CANCELLED"):
-                raise RuntimeError(
+                raise OrderRejected(
                     f"Order {order_id} {status}: {o.get('status_message', '')}"
                 )
-        except RuntimeError:
+        except OrderRejected:
             raise
         except Exception:
             pass
@@ -193,8 +198,15 @@ def _poll_fill(order_id: str, retries: int = 12, delay: float = 3.0) -> tuple[fl
 
 def _poll_fill_safe(order_id: str,
                     fallback_price: float, fallback_qty: int) -> tuple[float, int]:
+    """Returns (price, filled_qty). filled_qty is 0 if the order was genuinely
+    rejected/cancelled -- callers MUST check for that and not record it as a
+    real fill. For a poll timeout (status still unknown), falls back to the
+    intended price/qty as a best-effort guess, same as before."""
     try:
         return _poll_fill(order_id)
+    except OrderRejected as exc:
+        print(f"[zerodha]   ORDER REJECTED — {exc}")
+        return 0.0, 0
     except Exception as exc:
         print(f"[zerodha]   fill poll failed: {exc} — using fallback values")
         return fallback_price, fallback_qty
@@ -318,6 +330,9 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
             print(f"[zerodha]   DRY RUN — simulated fill ₹{fill_price:,.2f} × {fill_qty}")
         else:
             fill_price, fill_qty = _poll_fill_safe(order_id, ref, shares)
+            if fill_qty == 0:
+                print(f"[zerodha]   NOT FILLED — order rejected, no position recorded.")
+                continue
             print(f"[zerodha]   filled ₹{fill_price:,.2f} × {fill_qty}")
 
         _tg("send_entry", _BROKER, sym, ref, shares, order_id, dry_run=dry_run)
@@ -388,7 +403,10 @@ def check_exit_945(dry_run: bool = False) -> None:
             except Exception as exc:
                 print(f"[zerodha]   fallback sell failed: {exc}")
                 continue
-            ep, _ = (fill_price, half) if dry_run else _poll_fill_safe(oid, fill_price, half)
+            ep, eq = (fill_price, half) if dry_run else _poll_fill_safe(oid, fill_price, half)
+            if eq == 0:
+                print(f"[zerodha]   NOT FILLED — fallback sell rejected, position left open.")
+                continue
             _tg("send_exit_945_nodata", _BROKER, sym, half, remain, ep, dry_run=dry_run)
             pos.update({
                 "status":             "partial_exit_945_nodata",
@@ -411,6 +429,9 @@ def check_exit_945(dry_run: bool = False) -> None:
                 print(f"[zerodha]   sell failed: {exc}")
                 continue
             ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            if eq == 0:
+                print(f"[zerodha]   NOT FILLED — sell rejected, position left open.")
+                continue
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
             _tg("send_exit_945", _BROKER, sym, ep, ret_act, pnl, dry_run=dry_run)
@@ -476,6 +497,10 @@ def force_exit_1200(dry_run: bool = False) -> None:
             continue
 
         ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+        if eq == 0:
+            print(f"[zerodha]   !! NOT FILLED — force-exit sell rejected for {sym}. "
+                  f"Position left as-is — manual review required.")
+            continue
 
         # Blended P&L: partial 9:45am exit + this 12pm remainder
         if is_partial:
