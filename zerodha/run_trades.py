@@ -95,19 +95,18 @@ def _close_at(candles: list, hhmm: int) -> float | None:
 
 
 def get_reference_price(symbol: str) -> tuple[float, int]:
-    """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13 if 15:14
-    isn't available yet. Returns (price, hhmm_used). Raises ValueError if neither is found."""
+    """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13, then to
+    14:45, if the closer candles aren't available yet. Returns (price, hhmm_used).
+    Raises ValueError only if none of the three are found."""
     matched       = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
     candles       = candles_by_sym.get(symbol, [])
-    price = _close_at(candles, 1514)
-    if price is not None:
-        return price, 1514
-    price = _close_at(candles, 1513)
-    if price is not None:
-        return price, 1513
+    for hhmm in (1514, 1513, 1445):
+        price = _close_at(candles, hhmm)
+        if price is not None:
+            return price, hhmm
     raise ValueError(
-        f"[zerodha] Neither 15:14 nor 15:13 candle found for {symbol} "
+        f"[zerodha] No 15:14, 15:13, or 14:45 candle found for {symbol} "
         f"({len(candles)} candles). Run after 15:15 IST."
     )
 
