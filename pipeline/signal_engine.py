@@ -105,10 +105,21 @@ def _check_symbol(symbol: str, today: date, mode: str,
 
     if mode == "strict":
         c300 = today_df[today_df["hhmm"] == 1500]
-        if c300.empty:
-            return None
-        ref_price = float(c300["open"].iloc[0])
-        ref_hhmm  = 1500
+        if not c300.empty:
+            ref_price = float(c300["open"].iloc[0])
+            ref_hhmm  = 1500
+        else:
+            # 15:00 candle sometimes isn't posted yet at the exact moment the
+            # 3:01pm run queries the API (e.g. no trades registered in that
+            # instrument in the first ~60s of the period). Fall back to the
+            # 14:45 candle's close as a proxy for the 15:00 open -- one 15-min
+            # bar apart, and close-of-one-candle/open-of-next are typically
+            # near-identical anyway.
+            c245 = today_df[today_df["hhmm"] == 1445]
+            if c245.empty:
+                return None
+            ref_price = float(c245["close"].iloc[0])
+            ref_hhmm  = 1445
         cum_vol   = today_df[
             (today_df["hhmm"] >= WINDOW_START_HHMM) &
             (today_df["hhmm"] <= WINDOW_END_HHMM)
