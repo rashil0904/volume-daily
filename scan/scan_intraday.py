@@ -10,7 +10,8 @@ Differences from main.py's official 3:01 PM run (signal_engine STRICT mode):
   - Reference candle : latest available candle (not hardcoded 15:00)
   - Volume threshold : prorated to elapsed fraction of the 09:15–14:45 window
   - Output path      : results/scans/scan_<date>_<HHMM>.csv (not trade_list_)
-  - No Telegram notification is sent — this is a read-only preview
+  - Sends a Telegram message labeled "PREVIEW" — distinct from the official
+    send_success() trade-list message, and not read by any execution script
 
 Usage:
     python scan/scan_intraday.py
@@ -39,6 +40,7 @@ if _env_file.exists():
 
 import data_loader
 import signal_engine
+import notify
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 MCAP_DAILY_DIR = _ROOT / "data" / "market_cap_daily"
@@ -102,6 +104,10 @@ def main():
 
     if not raw_signals:
         print(f"\n  No signals as of {as_of_hhmm:04d} IST — preview file not written.")
+        try:
+            notify.send_scan_preview(TODAY.isoformat(), as_of_hhmm, [])
+        except Exception as exc:
+            print(f"  WARNING: Telegram notification failed: {exc}", file=sys.stderr)
         return
 
     n          = len(raw_signals)
@@ -136,6 +142,11 @@ def main():
 
     print(f"\n  Preview scan → {out_path}")
     print(f"  This is NOT the official trade list — not read by run_trades.py.")
+
+    try:
+        notify.send_scan_preview(TODAY.isoformat(), as_of_hhmm, rows)
+    except Exception as exc:
+        print(f"  WARNING: Telegram notification failed: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":

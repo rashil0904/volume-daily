@@ -541,3 +541,39 @@ def load_market_cap() -> tuple:
             universe[sym] = float(mcap_str) if mcap_str else 0.0
 
     return universe, status
+
+
+# ── CLI ────────────────────────────────────────────────────────────────────────
+# load_candles(mode="eod-fill") is a library function with no standalone entry
+# point elsewhere in this codebase, but the 3:45 PM cron job needs one directly
+# invokable command. This restores that: refetches today's 15-min intraday
+# candles for the whole known universe via the intraday endpoint (the historical
+# endpoint has no same-day data — confirmed empirically), correcting whatever
+# candle was mid-formation at the 3:01 PM run and adding the final 15:15 candle.
+# Safe to re-run — load_candles's own merge logic overwrites stale rows and
+# leaves everything else untouched.
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Candle data fetch CLI")
+    parser.add_argument("--eod-fill", action="store_true",
+                        help="Refresh today's 15-min intraday candles for the full known "
+                             "universe (data/instruments/upstox_instruments.csv).")
+    args = parser.parse_args()
+
+    if args.eod_fill:
+        inst_file = INSTRUMENTS_DIR / "upstox_instruments.csv"
+        if not inst_file.exists():
+            sys.exit(f"ERROR: {inst_file} not found — run the full pipeline at least once first.")
+        with open(inst_file, newline="") as f:
+            matched = list(csv.DictReader(f))
+        print("=" * 60)
+        print(f"EOD Fill — {date.today().isoformat()}")
+        print(f"  Instruments : {len(matched):,}  ({inst_file.name})")
+        print(f"  Endpoint    : intraday (historical endpoint has no same-day data)")
+        print("=" * 60)
+        load_candles(matched, interval="15minute", mode="eod-fill")
+        print("\nEOD Fill complete.")
+    else:
+        parser.print_help()
