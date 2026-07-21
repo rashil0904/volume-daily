@@ -39,7 +39,9 @@ def place_order(
     trigger_price: float = 0,       # required for SL and SL-M
     product: str     = "CNC",       # CNC (delivery) | MIS (intraday) | NRML
     variety: str     = "regular",   # regular | amo
-    market_protection: float = 0,   # required by Kite for MARKET/SL-M; 0 = no extra protection band
+    market_protection: float = -1,  # required by Kite for MARKET/SL-M; 0 is REJECTED (treated as no
+                                     # value at all -- confirmed live 2026-07-21) -- -1 = system default,
+                                     # the only value proven to work (5 real fills same day)
     tag: str         = "",          # optional identifier (max 20 chars)
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
