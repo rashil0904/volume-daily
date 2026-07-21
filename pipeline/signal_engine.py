@@ -124,7 +124,9 @@ def _check_symbol(symbol: str, today: date, mode: str,
             (today_df["hhmm"] >= WINDOW_START_HHMM) &
             (today_df["hhmm"] <= WINDOW_END_HHMM)
         ]["volume"].sum()
-        passes_volume = bool(cum_vol >= VOLUME_MULT * avg_36)
+        threshold     = VOLUME_MULT * avg_36
+        passes_volume = bool(cum_vol >= threshold)
+        volume_ratio  = round(cum_vol / threshold, 2) if threshold > 0 else 0.0
 
     else:  # prorated
         today_df = today_df[today_df["hhmm"] <= as_of_hhmm]
