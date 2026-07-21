@@ -126,7 +126,7 @@ def _check_symbol(symbol: str, today: date, mode: str,
         ]["volume"].sum()
         threshold     = VOLUME_MULT * avg_36
         passes_volume = bool(cum_vol >= threshold)
-        volume_ratio  = round(cum_vol / threshold, 2) if threshold > 0 else 0.0
+        volume_ratio  = round(cum_vol / avg_36, 2) if avg_36 > 0 else 0.0
 
     else:  # prorated
         today_df = today_df[today_df["hhmm"] <= as_of_hhmm]
@@ -149,7 +149,7 @@ def _check_symbol(symbol: str, today: date, mode: str,
         # available vs. fixed 15:00), not in how hard the volume bar is to clear.
         threshold     = VOLUME_MULT * avg_36
         passes_volume = bool(cum_vol >= threshold)
-        volume_ratio  = round(cum_vol / threshold, 2) if threshold > 0 else 0.0
+        volume_ratio  = round(cum_vol / avg_36, 2) if avg_36 > 0 else 0.0
 
     # Return condition (same for both modes)
     return_pct    = (ref_price / prev_vwap - 1) * 100
