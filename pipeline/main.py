@@ -171,6 +171,9 @@ def main():
         else:
             print("  No new symbols — skipping instrument match and historical backfill.")
 
+        print("\n  Re-validating instrument keys before candle fetch …")
+        data_loader.revalidate_instruments()
+
         inst_lookup = _load_instrument_lookup()
         candle_instruments = [
             inst_lookup[p.stem]

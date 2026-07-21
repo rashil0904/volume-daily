@@ -136,6 +136,70 @@ def match_instruments(universe_syms: list, instruments: list) -> tuple:
     return matched, unmatched
 
 
+def revalidate_instruments() -> None:
+    """
+    Re-check every already-tracked symbol's instrument_key against Upstox's current
+    live instrument master, and correct any that have drifted.
+
+    Confirmed to actually happen: POCL's cached key silently went stale after an
+    ISIN change (corporate action) and started failing every candle fetch with
+    "Invalid Instrument key" -- no error ever surfaced beyond a per-symbol log line.
+    This closes that gap by re-validating the whole file daily, before the candle
+    fetch step, instead of only matching a symbol once when it's first onboarded.
+
+    Symbols no longer found at all in the current master (e.g. delisted/suspended --
+    RELINFRA is a confirmed case) are flagged but left as-is; there's no valid key
+    to replace them with, so they'll keep failing candle fetch until removed by hand.
+
+    Rewrites data/instruments/upstox_instruments.csv in place only if something
+    actually changed. Safe to re-run daily -- a no-op day just re-confirms.
+    """
+    inst_file = INSTRUMENTS_DIR / "upstox_instruments.csv"
+    if not inst_file.exists():
+        return
+
+    with open(inst_file, newline="") as f:
+        existing = list(csv.DictReader(f))
+    if not existing:
+        return
+
+    print(f"Re-validating {len(existing):,} instrument keys against the live Upstox master …")
+    tracked_symbols   = [r["symbol"].strip().upper() for r in existing]
+    fresh_instruments = download_nse_instruments()
+    matched, _unmatched = match_instruments(tracked_symbols, fresh_instruments)
+    fresh_by_symbol = {m["symbol"]: m for m in matched}
+
+    changed, missing, updated_rows = 0, [], []
+    for row in existing:
+        sym   = row["symbol"].strip().upper()
+        fresh = fresh_by_symbol.get(sym)
+        if fresh is None:
+            missing.append(sym)
+            updated_rows.append(row)  # nothing valid to replace it with -- leave as-is
+        elif fresh["instrument_key"] != row["instrument_key"]:
+            print(f"  {sym}: instrument_key changed {row['instrument_key']} -> {fresh['instrument_key']}")
+            changed += 1
+            updated_rows.append(fresh)
+        else:
+            updated_rows.append(row)
+
+    if changed:
+        with open(inst_file, "w", newline="") as f:
+            w = csv.DictWriter(
+                f, fieldnames=["symbol", "instrument_key", "trading_symbol", "series", "exchange"]
+            )
+            w.writeheader()
+            w.writerows(updated_rows)
+        print(f"  Updated {changed} instrument key(s).")
+    else:
+        print("  No instrument key changes.")
+
+    if missing:
+        print(f"  WARNING: {len(missing)} symbol(s) not found in the current Upstox master "
+              f"(possibly delisted/suspended) -- left unchanged, will keep failing candle "
+              f"fetch until removed by hand: {', '.join(missing)}")
+
+
 # ── Historical (multi-month) candle fetch ─────────────────────────────────────
 
 def _fetch_chunk(session, instrument_key: str, from_d: date, to_d: date,
