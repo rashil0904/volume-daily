@@ -398,6 +398,12 @@ def check_exit_945(dry_run: bool = False) -> None:
             if half == 0:
                 print(f"[zerodha]   qty too small to halve — holding until 12pm.")
                 continue
+            if not dry_run:
+                bqty = _broker_qty(sym)
+                if bqty != qty:
+                    print(f"[zerodha]   !! MISMATCH — local={qty} broker={bqty}. "
+                          f"Skipping {sym} — manual review required.")
+                    continue
             print(f"[zerodha]   NO-DATA FALLBACK — selling {half} of {qty}")
             try:
                 oid = sell(sym, "NSE", half,
@@ -423,6 +429,12 @@ def check_exit_945(dry_run: bool = False) -> None:
 
         if pnl_live > 0:
             # Positive P&L (Kite's own figure) — exit full remaining quantity
+            if not dry_run:
+                bqty = _broker_qty(sym)
+                if bqty != qty:
+                    print(f"[zerodha]   !! MISMATCH — local={qty} broker={bqty}. "
+                          f"Skipping {sym} — manual review required.")
+                    continue
             print(f"[zerodha]   P&L positive — selling {qty}")
             try:
                 oid = sell(sym, "NSE", qty,
