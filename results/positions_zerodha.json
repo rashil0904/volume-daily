@@ -58,5 +58,29 @@
     "entry_order_id": "260721221500216",
     "status": "open",
     "entry_timestamp": "2026-07-21T15:19:30.707965+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "HUHTAMAKI",
+    "entry_date": "2026-07-22",
+    "reference_price": 293.01,
+    "shares_intended": 8,
+    "actual_fill_price": 293.57,
+    "actual_fill_quantity": 8,
+    "entry_order_id": "260722221221771",
+    "status": "open",
+    "entry_timestamp": "2026-07-22T15:15:07.207436+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "UFLEX",
+    "entry_date": "2026-07-22",
+    "reference_price": 494.65,
+    "shares_intended": 5,
+    "actual_fill_price": 496.0,
+    "actual_fill_quantity": 5,
+    "entry_order_id": "260722221222278",
+    "status": "open",
+    "entry_timestamp": "2026-07-22T15:15:13.134666+05:30"
   }
 ]
