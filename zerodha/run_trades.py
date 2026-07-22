@@ -227,13 +227,16 @@ def _broker_qty(symbol: str) -> int:
                         return qty
     except Exception:
         pass
-    # Overnight holdings
+    # Overnight holdings — "quantity" is fully-settled shares only; shares bought
+    # the previous trading day still sit in "t1_quantity" until Kite completes
+    # T+1 settlement (confirmed live 2026-07-22: quantity=0, t1_quantity=N the day
+    # after a same-week buy). Both are sellable, so they must be summed.
     try:
         resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
         if resp.ok:
             for h in (resp.json().get("data") or []):
                 if (h.get("tradingsymbol") or "").upper() == symbol.upper():
-                    qty = int(h.get("quantity") or 0)
+                    qty = int(h.get("quantity") or 0) + int(h.get("t1_quantity") or 0)
                     if qty > 0:
                         return qty
     except Exception:
