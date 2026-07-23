@@ -20,8 +20,13 @@
     "actual_fill_price": 512.675,
     "actual_fill_quantity": 2,
     "entry_order_id": "260721221499345",
-    "status": "open",
-    "entry_timestamp": "2026-07-21T15:19:15.993742+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-21T15:19:15.993742+05:30",
+    "exit_price_945": 512.45,
+    "exit_order_id_945": "260723220291075",
+    "exit_timestamp_945": "2026-07-23T09:45:06.112160+05:30",
+    "realized_return_pct": -0.0439,
+    "realized_pnl": -0.45
   },
   {
     "broker": "zerodha",
@@ -44,8 +49,13 @@
     "actual_fill_price": 246.12,
     "actual_fill_quantity": 5,
     "entry_order_id": "260721221499929",
-    "status": "open",
-    "entry_timestamp": "2026-07-21T15:19:25.731084+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-21T15:19:25.731084+05:30",
+    "exit_price_945": 255.55,
+    "exit_order_id_945": "260723220291398",
+    "exit_timestamp_945": "2026-07-23T09:45:10.454297+05:30",
+    "realized_return_pct": 3.8315,
+    "realized_pnl": 47.15
   },
   {
     "broker": "zerodha",
@@ -68,8 +78,13 @@
     "actual_fill_price": 293.57,
     "actual_fill_quantity": 8,
     "entry_order_id": "260722221221771",
-    "status": "open",
-    "entry_timestamp": "2026-07-22T15:15:07.207436+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-22T15:15:07.207436+05:30",
+    "exit_price_945": 310.33,
+    "exit_order_id_945": "260723220291770",
+    "exit_timestamp_945": "2026-07-23T09:45:14.823393+05:30",
+    "realized_return_pct": 5.709,
+    "realized_pnl": 134.08
   },
   {
     "broker": "zerodha",
@@ -80,7 +95,12 @@
     "actual_fill_price": 496.0,
     "actual_fill_quantity": 5,
     "entry_order_id": "260722221222278",
-    "status": "open",
-    "entry_timestamp": "2026-07-22T15:15:13.134666+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-22T15:15:13.134666+05:30",
+    "exit_price_945": 501.0,
+    "exit_order_id_945": "260723220292134",
+    "exit_timestamp_945": "2026-07-23T09:45:19.033467+05:30",
+    "realized_return_pct": 1.0081,
+    "realized_pnl": 25.0
   }
 ]
