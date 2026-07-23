@@ -8,8 +8,13 @@
     "actual_fill_price": 1162.9,
     "actual_fill_quantity": 1,
     "entry_order_id": "260721221498671",
-    "status": "open",
-    "entry_timestamp": "2026-07-21T15:19:05.107223+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-21T15:19:05.107223+05:30",
+    "exit_price_1200": 1157.5,
+    "exit_order_id_1200": "260723220754672",
+    "exit_timestamp_1200": "2026-07-23T12:00:05.615288+05:30",
+    "realized_return_pct": -0.4644,
+    "realized_pnl": -5.4
   },
   {
     "broker": "zerodha",
@@ -37,8 +42,13 @@
     "actual_fill_price": 143.0,
     "actual_fill_quantity": 9,
     "entry_order_id": "260721221499641",
-    "status": "open",
-    "entry_timestamp": "2026-07-21T15:19:20.850207+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-21T15:19:20.850207+05:30",
+    "exit_price_1200": 142.06,
+    "exit_order_id_1200": "260723220755018",
+    "exit_timestamp_1200": "2026-07-23T12:00:09.030576+05:30",
+    "realized_return_pct": -0.6573,
+    "realized_pnl": -8.46
   },
   {
     "broker": "zerodha",
@@ -66,8 +76,13 @@
     "actual_fill_price": 598.3,
     "actual_fill_quantity": 2,
     "entry_order_id": "260721221500216",
-    "status": "open",
-    "entry_timestamp": "2026-07-21T15:19:30.707965+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-21T15:19:30.707965+05:30",
+    "exit_price_1200": 576.85,
+    "exit_order_id_1200": "260723220755324",
+    "exit_timestamp_1200": "2026-07-23T12:00:12.564740+05:30",
+    "realized_return_pct": -3.5852,
+    "realized_pnl": -42.9
   },
   {
     "broker": "zerodha",
@@ -102,5 +117,41 @@
     "exit_timestamp_945": "2026-07-23T09:45:19.033467+05:30",
     "realized_return_pct": 1.0081,
     "realized_pnl": 25.0
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "CHEMPLASTS",
+    "entry_date": "2026-07-23",
+    "reference_price": 210.0,
+    "shares_intended": 7,
+    "actual_fill_price": 210.0,
+    "actual_fill_quantity": 7,
+    "entry_order_id": "260723221483301",
+    "status": "open",
+    "entry_timestamp": "2026-07-23T15:15:10.249131+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ROUTE",
+    "entry_date": "2026-07-23",
+    "reference_price": 600.5,
+    "shares_intended": 2,
+    "actual_fill_price": 600.95,
+    "actual_fill_quantity": 2,
+    "entry_order_id": "260723221483904",
+    "status": "open",
+    "entry_timestamp": "2026-07-23T15:15:18.683243+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "SOTL",
+    "entry_date": "2026-07-23",
+    "reference_price": 646.4,
+    "shares_intended": 2,
+    "actual_fill_price": 649.775,
+    "actual_fill_quantity": 2,
+    "entry_order_id": "260723221484207",
+    "status": "open",
+    "entry_timestamp": "2026-07-23T15:15:22.936485+05:30"
   }
 ]
