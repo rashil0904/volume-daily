@@ -35,12 +35,6 @@ from zerodha.trade import buy, sell
 from zerodha.trade import order_status as _kite_order_status
 import data_loader as _dl
 
-_notify = None
-try:
-    import notify as _notify
-except Exception as _ne:
-    print(f"[zerodha] WARNING: Telegram unavailable: {_ne}", file=sys.stderr)
-
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 _IST          = ZoneInfo("Asia/Kolkata")
@@ -254,17 +248,6 @@ def _load_symbols(trade_date: date) -> list[str]:
         return [r["symbol"].strip().upper() for r in csv.DictReader(f)]
 
 
-# ── Telegram helper ────────────────────────────────────────────────────────────
-
-def _tg(fn: str, *args, **kwargs) -> None:
-    if _notify is None:
-        return
-    try:
-        getattr(_notify, fn)(*args, **kwargs)
-    except Exception as exc:
-        print(f"[zerodha] Telegram ({fn}) failed: {exc}", file=sys.stderr)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # STAGE 1 — Entry at 3:15pm
 # ══════════════════════════════════════════════════════════════════════════════
@@ -337,8 +320,6 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
                 continue
             print(f"[zerodha]   filled ₹{fill_price:,.2f} × {fill_qty}")
 
-        _tg("send_entry", _BROKER, sym, ref, shares, order_id, dry_run=dry_run)
-
         positions.append({
             "broker":               _BROKER,
             "symbol":               sym,
@@ -351,7 +332,8 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
             "status":               "open",
             "entry_timestamp":      _ts(),
         })
-        _save_pos(positions)
+        if not dry_run:
+            _save_pos(positions)
 
     print(f"\n[zerodha] Stage 1 complete.")
 
@@ -415,7 +397,6 @@ def check_exit_945(dry_run: bool = False) -> None:
             if eq == 0:
                 print(f"[zerodha]   NOT FILLED — fallback sell rejected, position left open.")
                 continue
-            _tg("send_exit_945_nodata", _BROKER, sym, half, remain, ep, dry_run=dry_run)
             pos.update({
                 "status":             "partial_exit_945_nodata",
                 "shares_exited_945":  half,
@@ -424,7 +405,8 @@ def check_exit_945(dry_run: bool = False) -> None:
                 "exit_order_id_945":  oid,
                 "exit_timestamp_945": _ts(),
             })
-            _save_pos(positions)
+            if not dry_run:
+                _save_pos(positions)
             continue
 
         if pnl_live > 0:
@@ -448,7 +430,6 @@ def check_exit_945(dry_run: bool = False) -> None:
                 continue
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
-            _tg("send_exit_945", _BROKER, sym, ep, ret_act, pnl, dry_run=dry_run)
             pos.update({
                 "status":              "exited_945",
                 "exit_price_945":      round(ep, 4),
@@ -457,7 +438,8 @@ def check_exit_945(dry_run: bool = False) -> None:
                 "realized_return_pct": round(ret_act, 4),
                 "realized_pnl":        round(pnl, 2),
             })
-            _save_pos(positions)
+            if not dry_run:
+                _save_pos(positions)
             print(f"[zerodha]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         else:
             print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 12pm forced exit.")
@@ -480,7 +462,6 @@ def force_exit_1200(dry_run: bool = False) -> None:
 
     if not open_ps:
         print("[zerodha] All positions already exited — nothing to force-close.")
-        _tg("send_nothing_open_at_1200", _BROKER)
         _daily_summary(positions, 0, dry_run)
         return
 
@@ -527,7 +508,6 @@ def force_exit_1200(dry_run: bool = False) -> None:
             pnl = (ep - fill_price) * eq
             ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
 
-        _tg("send_force_exit_1200", _BROKER, sym, ep, ret, pnl, dry_run=dry_run)
         pos.update({
             "status":               "exited_1200",
             "exit_price_1200":      round(ep, 4),
@@ -536,7 +516,8 @@ def force_exit_1200(dry_run: bool = False) -> None:
             "realized_return_pct":  round(ret, 4),
             "realized_pnl":         round(pnl, 2),
         })
-        _save_pos(positions)
+        if not dry_run:
+            _save_pos(positions)
         print(f"[zerodha]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         n_force += 1
 
@@ -554,8 +535,6 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
                     if p.get("status") == "exited_1200" and "exit_order_id_945" in p)
     total_pnl = sum(p.get("realized_pnl") or 0 for p in today_ps
                     if p.get("status") in ("exited_945", "exited_1200"))
-    _tg("send_daily_summary", _BROKER,
-        n_opened, n_945, n_partial, n_force, total_pnl, dry_run=dry_run)
     print(f"\n[zerodha] Summary — opened={n_opened}  exited@945={n_945}  "
           f"partial_nodata={n_partial}  force@1200={n_force}  P&L=₹{total_pnl:+,.2f}")
 
