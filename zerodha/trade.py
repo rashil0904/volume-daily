@@ -39,9 +39,17 @@ def place_order(
     trigger_price: float = 0,       # required for SL and SL-M
     product: str     = "CNC",       # CNC (delivery) | MIS (intraday) | NRML
     variety: str     = "regular",   # regular | amo
-    market_protection: float = -1,  # required by Kite for MARKET/SL-M; 0 is REJECTED (treated as no
-                                     # value at all -- confirmed live 2026-07-21) -- -1 = system default,
-                                     # the only value proven to work (5 real fills same day)
+    market_protection: float = 0.75,  # required by Kite for MARKET/SL-M; 0 is REJECTED (treated as no
+                                     # value at all -- confirmed live 2026-07-21). -1 (system default)
+                                     # is NOT a fixed rate -- confirmed live 2026-07-23 via the order's
+                                     # "mktp:X.XX" tag: 2.00% for one order, 1.00% for another, 0.50% for
+                                     # a third, same day. That variability is what caused two same-day
+                                     # entries (ASIANTILES, GANDHAR) to be falsely rejected as "outside
+                                     # circuit limits" despite their reference price sitting ~1.3-1.4%
+                                     # inside the real exchange band -- the dynamic default happened to
+                                     # pick 1-2%, wide enough to push the protected ceiling past the band.
+                                     # Fixed at 0.75% instead so the collar stays predictable and tighter
+                                     # than what just failed.
     tag: str         = "",          # optional identifier (max 20 chars)
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
