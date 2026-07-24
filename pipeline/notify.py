@@ -64,7 +64,7 @@ def _runtime_str(start_ts) -> str:
 
 
 def _count_signals(trade_list_path: Path) -> int:
-    if not trade_list_path.exists() or trade_list_path.stat().st_size < 50:
+    if not trade_list_path.exists():
         return 0
     with open(trade_list_path, newline="") as f:
         return sum(1 for _ in csv.DictReader(f))
