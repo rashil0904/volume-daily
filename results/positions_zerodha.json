@@ -127,8 +127,13 @@
     "actual_fill_price": 210.0,
     "actual_fill_quantity": 7,
     "entry_order_id": "260723221483301",
-    "status": "open",
-    "entry_timestamp": "2026-07-23T15:15:10.249131+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-23T15:15:10.249131+05:30",
+    "exit_price_1200": 203.3157,
+    "exit_order_id_1200": "260724220720647",
+    "exit_timestamp_1200": "2026-07-24T12:00:05.490713+05:30",
+    "realized_return_pct": -3.183,
+    "realized_pnl": -46.79
   },
   {
     "broker": "zerodha",
@@ -139,8 +144,13 @@
     "actual_fill_price": 600.95,
     "actual_fill_quantity": 2,
     "entry_order_id": "260723221483904",
-    "status": "open",
-    "entry_timestamp": "2026-07-23T15:15:18.683243+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-23T15:15:18.683243+05:30",
+    "exit_price_1200": 574.45,
+    "exit_order_id_1200": "260724220720955",
+    "exit_timestamp_1200": "2026-07-24T12:00:08.886479+05:30",
+    "realized_return_pct": -4.4097,
+    "realized_pnl": -53.0
   },
   {
     "broker": "zerodha",
@@ -151,7 +161,24 @@
     "actual_fill_price": 649.775,
     "actual_fill_quantity": 2,
     "entry_order_id": "260723221484207",
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-23T15:15:22.936485+05:30",
+    "exit_price_1200": 630.75,
+    "exit_order_id_1200": "260724220721157",
+    "exit_timestamp_1200": "2026-07-24T12:00:12.289780+05:30",
+    "realized_return_pct": -2.9279,
+    "realized_pnl": -38.05
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "TECHNVISN",
+    "entry_date": "2026-07-24",
+    "reference_price": 4870.0,
+    "shares_intended": 3,
+    "actual_fill_price": 4884.9,
+    "actual_fill_quantity": 3,
+    "entry_order_id": "260724221221467",
     "status": "open",
-    "entry_timestamp": "2026-07-23T15:15:22.936485+05:30"
+    "entry_timestamp": "2026-07-24T15:15:05.978301+05:30"
   }
 ]
