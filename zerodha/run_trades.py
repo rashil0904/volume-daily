@@ -263,14 +263,10 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
         return
 
     n = len(symbols)
-    if capital is not None:
-        # Testing mode — simple equal split across every signal, regardless of n.
-        # (The >=5-signal-only split rule below is a ₹5L-specific design; doesn't
-        # apply when running against an arbitrary reduced capital pool.)
-        allocation = capital / n
-    else:
-        capital    = TOTAL_CAPITAL
-        allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
+    capital    = capital if capital is not None else TOTAL_CAPITAL
+    # Max ₹ per position is capital/4 (idle capital allowed when n<=4); once
+    # signals hit 5+, split the full capital equally instead of over-allocating.
+    allocation = capital / 4 if n <= 4 else capital / n
 
     print(f"\n{'='*60}")
     print(f"[zerodha] Stage 1 — Entry {trade_date}{'  DRY RUN' if dry_run else ''}")
