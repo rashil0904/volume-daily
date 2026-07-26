@@ -1,6 +1,6 @@
 # NSE Volume Pipeline
 
-Automated NSE mid-cap momentum scanner running daily at **3:01 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans ~499 symbols in the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes 3-stage live trades via Zerodha. Upstox is used for market data only — no trading happens through Upstox.
+Automated NSE mid-cap momentum scanner running daily at **3:01 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-day exit check, and forced noon exit. A separate, standalone script supports MTF (leveraged) entries. Upstox is used for market data only — no trading happens through Upstox.
 
 ---
 
@@ -12,7 +12,10 @@ Automated NSE mid-cap momentum scanner running daily at **3:01 PM IST** (Mon–F
 - [Complete Daily Flow](#complete-daily-flow)
   - [Part 1 — Signal Pipeline (3:01 PM)](#part-1--signal-pipeline-301-pm)
   - [Part 2 — EOD Candle Fill (3:45 PM)](#part-2--eod-candle-fill-345-pm)
-  - [Part 3 — Live Trading (3-Stage, Zerodha)](#part-3--live-trading-3-stage-zerodha)
+  - [Part 3 — Live Trading (3-Stage, Zerodha CNC)](#part-3--live-trading-3-stage-zerodha-cnc)
+  - [Part 4 — Trade Book (4:00 PM)](#part-4--trade-book-400-pm)
+  - [Part 5 — Auto-Push Data & Results (4:30 PM)](#part-5--auto-push-data--results-430-pm)
+- [MTF (Leveraged) Entries — Standalone Script](#mtf-leveraged-entries--standalone-script)
 - [Repository Structure](#repository-structure)
 - [First-Time VM Setup](#first-time-vm-setup)
 - [Configuration](#configuration)
@@ -30,19 +33,19 @@ The pipeline targets **NSE equities with market cap ₹1,500–5,000 Cr**. It sc
 | Parameter | Value |
 |---|---|
 | Universe | NSE EQ/BE segment, ₹1,500–5,000 Cr |
-| Candle interval | 15-minute OHLCV (pipeline), 1-minute (live trading) |
+| Candle interval | 15-minute OHLCV (pipeline), 1-minute (live trading reference price) |
 | Data source | Upstox V3 API (data/analytics only — no Upstox trading) |
 | Market cap source | Screener.in Premium (live daily export) |
-| Entry | Market buy at 3:15 PM IST (open of the 15:00 candle) |
-| Broker / product type | Zerodha, Delivery (CNC) |
-| Capital | ₹5,00,000 total |
-| Pipeline schedule | Mon–Fri at 3:01 PM IST via cron |
+| Entry reference price | Close of the 15:14 candle (falls back to 15:13, then 14:45) |
+| Broker / product type | Zerodha, Delivery (CNC) — MTF available via a separate standalone script |
+| Live trading capital | ₹1,50,000 total (set via `--capital` in the entry cron) |
+| Pipeline schedule | Mon–Fri, fully automated end-to-end via cron |
 
 ---
 
 ## Signal Logic
 
-**All three conditions must pass** for a symbol to appear in the trade list.
+**All three conditions must pass** for a symbol to appear in the trade list. Implemented in `pipeline/signal_engine.py`.
 
 ### 1. Market Cap Filter
 
@@ -57,13 +60,15 @@ Cumulative volume (09:15–14:45) ≥ 6 × 36-day rolling average full-day volum
 - Rolling window: 36 prior trading days, non-zero volume days only
 - Symbols with fewer than 36 days of history are skipped
 - Cumulative volume is measured up to and including the 14:45 candle
-- The 15:00 candle is intentionally excluded from volume (only available after 3:15 PM)
 
 ### 3. Return Condition
 
 ```
-Open of 15:00 candle ≥ 5% above previous trading day's VWAP
+Reference candle open ≥ 5% above previous trading day's VWAP
 ```
+
+- **STRICT mode** (the real 3:01 PM run): reference candle is fixed at 15:00 (falls back to the 14:45 close if 15:00 hasn't posted yet)
+- **PRORATED mode** (`scan/scan_intraday.py`, anytime preview): reference candle is whatever's latest as of the check time — this is a directional preview only, never read by any execution script
 
 Previous day VWAP is calculated from the 15:00 and 15:15 candles of the prior trading day:
 
@@ -71,25 +76,32 @@ Previous day VWAP is calculated from the 15:00 and 15:15 candles of the prior tr
 VWAP = Σ((H + L + C) / 3 × Volume) / Σ(Volume)
 ```
 
-The 15:00 and 15:15 candles represent the closing auction of each trading day. The pipeline writes these two candles via the 3:45 PM EOD fill cron (see below), since they are not available at 3:01 PM when the main scan runs.
-
 ---
 
 ## Capital Allocation
 
-Total capital is capped at **₹5,00,000** regardless of how many signals fire.
+**Two separate, independent allocations exist** — don't confuse them:
+
+1. **`pipeline/main.py`'s own trade list** uses a hardcoded ₹5,00,000 reference to compute the `shares`/`ref_price` columns written to `results/trades/trade_list_<date>.csv` — this is display/notification sizing only, shown in the Telegram signal message.
+2. **The actual live execution** (`zerodha/run_trades.py --entry --capital 150000`) ignores those CSV columns entirely — it only reads the `symbol` column, then recomputes quantity itself from the **real** capital passed via `--capital` and its own freshly-fetched 15:14 reference price.
+
+Both use the same tiered rule — max ₹ per position is `capital/4` (idle capital allowed when signals ≤ 4); once signals hit 5+, the full capital splits equally instead of over-allocating:
+
+```python
+allocation = capital / 4 if n <= 4 else capital / n
+shares     = floor(allocation / ref_price)
+```
+
+At the live ₹1,50,000 capital currently configured:
 
 | Signals | Allocation per stock | Total deployed |
 |---|---|---|
-| 1 | ₹1,25,000 | ₹1,25,000 |
-| 2 | ₹1,25,000 | ₹2,50,000 |
-| 3 | ₹1,25,000 | ₹3,75,000 |
-| 4 | ₹1,25,000 | ₹5,00,000 |
-| 5 | ₹1,00,000 | ₹5,00,000 |
-| 6 | ₹83,333 | ₹5,00,000 |
-| n ≥ 5 | ₹5,00,000 ÷ n | ₹5,00,000 |
+| 1–4 | ₹37,500 | up to ₹1,50,000 |
+| 5 | ₹30,000 | ₹1,50,000 |
+| 6 | ₹25,000 | ₹1,50,000 |
+| n ≥ 5 | ₹1,50,000 ÷ n | ₹1,50,000 |
 
-Entry sizing: `shares = floor(allocation / close_of_15:14_candle)` (falls back to 15:13 close if 15:14 isn't published yet)
+To change the live capital, edit the `--capital` value in the entry cron line (see [Cron Schedule Summary](#cron-schedule-summary)) — the `capital/4`-or-`n` cap is derived automatically, nothing else needs to change.
 
 ---
 
@@ -99,150 +111,169 @@ Entry sizing: `shares = floor(allocation / close_of_15:14_candle)` (falls back t
 
 ```
  9:15 AM  — Market opens
+ 9:45 AM  — [CRON] Stage 2: exit check — sell if live P&L > 0, else hold for noon
+12:00 PM  — [CRON] Stage 3: forced exit — sell whatever's still open
  3:00 PM  — Last auction period begins
- 3:01 PM  — [CRON] Pipeline runs: scans volume/return, writes trade list
- 3:15 PM  — Stage 1: fetch 15:14 candle (fallback 15:13), size positions, place buys (manual — not yet cron-scheduled)
+ 3:01 PM  — [CRON] Signal pipeline: scans volume/return, writes trade list, notifies Telegram
+ 3:15 PM  — [CRON] Stage 1: fetch 15:14 reference candle, size positions, place buys
  3:45 PM  — [CRON] EOD fill: corrects/backfills 15:00 + 15:15 candles via intraday API
-─────────── overnight hold ───────────────────────────────────────────────────
- 9:45 AM  — Stage 2: check live P&L from Kite positions/holdings; exit if positive (manual — not yet cron-scheduled)
-12:00 PM  — Stage 3: force-exit any positions still open (manual — not yet cron-scheduled)
+ 4:00 PM  — [CRON] Regenerate results/trade_book.csv
+ 4:30 PM  — [CRON] Auto-commit + push data/results changes to GitHub
+─────────── overnight hold, cycle repeats ─────────────────────────────────────
 ```
 
-> Only the 3:01 PM signal pipeline and the 3:45 PM EOD fill are currently wired into cron. `run_trades.py`'s three trading stages exist and work, but must be run manually (or scheduled separately if you want full automation — see [Add Live Trading Crons](#add-live-trading-crons-optional)).
+> All of the above are live cron jobs, Mon–Fri only (`1-5`) — see [Cron Schedule Summary](#cron-schedule-summary) for exact times and commands. The **Zerodha access token still requires a manual daily login before 9:45 AM** — see [Daily Operations](#daily-operations); nothing in this pipeline can automate that step (Kite Connect's OAuth login is a regulatory requirement, not a limitation of this code).
 
 ---
 
 ### Part 1 — Signal Pipeline (3:01 PM)
 
-`run_pipeline.sh` is called by cron at 3:01 PM IST. It calls `pipeline/run_daily.py`, which runs four steps in sequence:
+`run_pipeline.sh` is called by cron at 3:01 PM IST. It calls `pipeline/main.py`, which runs the following steps in sequence:
 
-#### Step 1 — Fetch Market Cap
-
-`fetch_market_cap.py` logs into Screener.in (Premium), runs the query `Market Capitalization > 1500 AND Market Capitalization < 5000`, and exports the result to `data/market_cap_daily/market_cap_<date>.csv`.
-
-Exit codes:
-- `0` — fresh data saved
-- `2` — Screener.in unavailable; using previous export as stale fallback (pipeline continues with warning)
-- `1` — no data at all (pipeline fails)
-
-#### Step 2 — Update Universe
-
-Compares today's market-cap symbols against `data/universe_combined.csv`. New symbols not previously seen are appended automatically. This keeps the tracked universe expanding as stocks enter the cap band.
-
-#### Step 3 — Candle Data Update
-
-Two sub-operations run:
-
-1. **New symbols** — downloads the Upstox NSE instrument master, matches new symbols to their `instrument_key`, then backfills 1 year of 15-min candles into `data/candles/<SYMBOL>.csv`
-2. **All symbols** — fetches today's intraday 15-min candles and merges new/updated rows into every existing candle file (file is kept fully sorted; a fresh fetch overwrites any existing row for the same timestamp — see Part 2 for why that matters)
-
-At this point (3:01 PM), the candle files will have data through approximately 14:45–15:00. The candle "in progress" at fetch time is necessarily incomplete (collapsed OHLC, minimal volume) until the 3:45 PM EOD fill corrects it, and the final 15:15 candle of the session doesn't exist yet at all.
-
-Rate limiting: Upstox allows ~66 req/min. The fetcher uses 5 parallel workers with a 0.8s per-call delay.
-
-#### Step 4 — Generate Trade List
-
-`prepare_data.py` applies all three signal conditions to every symbol that has both a candle file and a current market-cap record.
-
-**Important**: The return condition checks whether the open of the **15:00 candle** is ≥ 5% above prior day's VWAP. Prior day's VWAP is derived from the prior day's 15:00 and 15:15 candles, which are correct and settled in the candle files because they were fixed by the *previous afternoon's* EOD fill cron.
-
-Passing symbols are written to `results/trade_list_<date>.csv` (columns: `symbol`, `shares`, `ref_price`). If no signals fire, no file is written and the pipeline exits cleanly.
-
-#### Notification
-
-`pipeline/notify.py` sends a message to the **"NSE Volume Alerts"** Telegram group. A success message includes the full trade table; a failure message includes the failed step and error detail. Notification failures are logged as warnings and do not crash the pipeline.
+1. **Fetch market cap** — `data_loader.load_market_cap()` logs into Screener.in (Premium), runs the query `Market Capitalization > 1500 AND Market Capitalization < 5000`, and exports to `data/market_cap_daily/market_cap_<date>.csv`. Falls back to the most recent prior export (with a warning) if the live fetch fails, or fails the whole run if there's no fallback at all.
+2. **Update universe** — compares today's market-cap symbols against `data/universe_combined.csv`; new symbols not previously seen are appended automatically.
+3. **Candle data update** — for brand-new symbols: matches Upstox `instrument_key` and backfills 1 year of 15-min candles. For every symbol with a candle file: fetches today's intraday 15-min candles (in-progress candle at fetch time is necessarily incomplete until the 3:45 PM EOD fill corrects it).
+4. **Signal check (STRICT mode)** — `signal_engine.get_signals()` applies all three conditions above.
+5. **Write trade list** — `results/trades/trade_list_<date>.csv` (columns: `symbol`, `shares`, `ref_price` — see the capital-allocation caveat above; these sizing columns are for the notification only, not what actually gets bought).
+6. **Notify** — `pipeline/notify.py` sends the signal count + trade table to Telegram (or a failure message with the failed step + error, if any step raised).
 
 ---
 
 ### Part 2 — EOD Candle Fill (3:45 PM)
 
-Runs via cron at 3:45 PM IST, 15 minutes after NSE closes (3:30 PM). This step exists to fix a real, verified data-completeness problem:
+Runs via cron at 3:45 PM IST, 15 minutes after NSE closes (3:30 PM). Fixes two real data-completeness gaps:
 
-1. **The candle "in progress" when the 3:01 PM run fetches intraday data is incomplete.** Whatever 15-minute period is currently forming at fetch time gets written with collapsed OHLC (open = high = low = close, near-zero volume) — a single-tick snapshot, not the settled candle.
-2. **The very last candle of the session (15:15) doesn't exist yet at 3:01 PM at all** — it hasn't happened yet.
-
-`run_eod_fill()` inside `fetch_candles.py` calls `fetch_all_intraday()` — the **intraday** endpoint (`/v3/historical-candle/intraday/`), not the historical one. This was empirically verified: the historical endpoint (`/v3/historical-candle/`) returns **zero rows for same-day dates**, so an earlier version of this job that used it silently did nothing every single day. The intraday endpoint does return the full, settled session once the market has closed.
-
-The merge logic in `fetch_intraday_symbol()` lets freshly fetched data **overwrite** any existing row with the same timestamp (not just append missing ones), so this run both adds the missing 15:15 candle and corrects the stale in-progress candle from the 3:01 PM run. The file is re-sorted on every write.
+1. **The candle "in progress" when the 3:01 PM run fetches intraday data is incomplete** — collapsed OHLC, near-zero volume, a single-tick snapshot, not the settled candle.
+2. **The final candle of the session (15:15) doesn't exist yet at 3:01 PM at all.**
 
 ```bash
-python pipeline/fetch_candles.py --eod-fill
+python3.11 pipeline/data_loader.py --eod-fill
 ```
+
+This uses the **intraday** endpoint (not the historical one — the historical endpoint returns zero rows for same-day dates), and lets freshly fetched data **overwrite** any existing row for the same timestamp, correcting the in-progress candle and adding the missing 15:15 bar. The file is re-sorted on every write.
 
 ---
 
-### Part 3 — Live Trading (3-Stage, Zerodha)
+### Part 3 — Live Trading (3-Stage, Zerodha CNC)
 
-Trading execution is fully independent of the signal pipeline and runs entirely through **Zerodha** (`zerodha/run_trades.py`). Upstox is not used for order placement — only for the 1-minute reference-price candles Zerodha's own price data doesn't provide as conveniently.
+Trading execution is fully independent of the signal pipeline, runs entirely through **Zerodha** (`zerodha/run_trades.py`), and — as of the current cron config — runs **fully automatically every weekday**. Upstox is used only for the 1-minute reference-price candles.
 
 #### Stage 1 — Entry at 3:15 PM
 
-**Script**: `python zerodha/run_trades.py --entry`
+```bash
+python zerodha/run_trades.py --entry --capital 150000
+```
 
-1. Reads `results/trade_list_<today>.csv` (produced by the 3:01 PM pipeline run)
-2. For each symbol, fetches today's 1-minute intraday candles via Upstox V3 API
-3. Reads the **close of the 15:14 candle** as the reference price for sizing — falls back to the **15:13 close** if 15:14 isn't published yet
-4. Calculates `shares = floor(allocation / ref_price)`
-5. Places a MARKET BUY order via Zerodha (Kite Connect), with `market_protection` set so the order isn't rejected by the API
-6. Polls for fill confirmation (up to 36 seconds, 12 retries × 3s)
-7. Writes entry details to `results/positions_zerodha.json`
-8. Sends a Telegram entry notification per position
+1. Reads `results/trades/trade_list_<today>.csv` (symbol column only — see [Capital Allocation](#capital-allocation))
+2. Fetches today's 1-minute intraday candles via Upstox V3 for each symbol; reference price is the close of the **15:14 candle** (falls back to 15:13, then 14:45)
+3. `shares = floor(allocation / ref_price)`, where `allocation` follows the `capital/4`-or-`n` rule
+4. Places a MARKET BUY via Zerodha (`zerodha/trade.py`), with `market_protection` fixed at **0.75%** (see note below)
+5. Polls for fill confirmation (up to 36 seconds, 12 retries × 3s); a genuinely rejected order (e.g. outside circuit limits) is logged and skipped, not recorded as a position
+6. Writes entry details to `results/positions_zerodha.json`
+
+> **`market_protection` note**: Kite's MARKET-order protection collar defaults to a *dynamic*, per-order percentage (observed live: 0.50%–2.00% on different orders the same day) — not a fixed rate. When that default happens to land at 1–2% on a stock already close to its circuit band, the protected price can exceed the exchange's real circuit limit and the order gets rejected outright, even though a real fill would have landed comfortably inside the band. Fixing it at **0.75%** (explicit, in `zerodha/trade.py`) keeps the collar predictable and tighter than what previously caused false "outside circuit limits" rejections.
 
 #### Stage 2 — Exit Check at 9:45 AM (Next Day)
 
-**Script**: `python zerodha/run_trades.py --exit-945`
+```bash
+python zerodha/run_trades.py --exit-945
+```
 
 1. Loads all open positions from `results/positions_zerodha.json`
-2. For each position, pulls **Kite's own computed P&L** for that symbol from `/portfolio/positions` (same-day) or `/portfolio/holdings` (settled) — not candle-based at all, so it isn't affected by whether a specific candle has been published
-3. **If P&L > 0**: places MARKET SELL for the full quantity → marks `exited_945`
-4. **If P&L ≤ 0**: holds the position for Stage 3 forced exit at noon
-5. **If the symbol isn't found in either endpoint** (lookup failure, or already exited): sells half the position as a precaution → marks `partial_exit_945_nodata` → remaining shares flow to Stage 3
+2. Pulls **Kite's own computed P&L** for each symbol from `/portfolio/positions` (same-day) or `/portfolio/holdings` (settled)
+3. **If P&L > 0**: confirms broker-held quantity first (see broker-qty note below), then places a MARKET SELL for the full quantity → marks `exited_945`
+4. **If P&L ≤ 0**: holds the position for the Stage 3 forced exit at noon
+5. **If the symbol isn't found in either endpoint**: sells half the position as a precaution → marks `partial_exit_945_nodata` → remaining shares flow to Stage 3
 
 #### Stage 3 — Forced Exit at 12:00 PM
 
-**Script**: `python zerodha/run_trades.py --exit-1200`
+```bash
+python zerodha/run_trades.py --exit-1200
+```
 
 1. Loads all positions with status `open` or `partial_exit_945_nodata`
-2. If nothing is open, sends a Telegram confirmation and exits
-3. For each remaining position, cross-checks Zerodha-held quantity via the portfolio positions/holdings API before selling (catches manual interventions or prior partial fills) — mismatches are skipped for manual review, not force-sold
-4. Places MARKET SELL for the confirmed quantity
-5. Calculates blended P&L across any partial 9:45 AM exit and the 12 PM remainder
-6. Marks positions `exited_1200`, sends Telegram notifications, and prints a daily summary
+2. For each, cross-checks Zerodha-held quantity via `/portfolio/positions` and `/portfolio/holdings` before selling — mismatches are skipped for manual review, not force-sold
+3. Places a MARKET SELL for the confirmed quantity
+4. Calculates blended P&L across any partial 9:45 AM exit and the 12 PM remainder
+5. Marks positions `exited_1200` and prints a daily summary
+
+> **Broker-qty / T1 settlement note**: Kite splits holding quantity into `quantity` (fully settled) and `t1_quantity` (bought the previous trading day, pending T+1 settlement) — both are sellable. The broker-qty check in Stages 2 and 3 sums `quantity + t1_quantity`; earlier it only read `quantity`, which saw `0` for every position bought the day before and falsely skipped real exits as "mismatches."
+
+> **`--dry-run` note**: all three stages accept `--dry-run` (simulates without placing real orders) — and `_save_pos()` is correctly gated behind `if not dry_run`, so a dry run never overwrites `results/positions_zerodha.json` with fabricated data.
 
 #### Positions JSON Schema
-
-Each entry in `results/positions_zerodha.json`:
 
 ```json
 {
   "broker": "zerodha",
-  "symbol": "CYIENTDLM",
-  "entry_date": "2026-07-20",
-  "reference_price": 580.5,
-  "shares_intended": 215,
-  "actual_fill_price": 581.2,
-  "actual_fill_quantity": 215,
-  "entry_order_id": "...",
-  "status": "open",
-  "entry_timestamp": "2026-07-20T15:15:42+05:30"
+  "symbol": "HUHTAMAKI",
+  "entry_date": "2026-07-22",
+  "reference_price": 293.01,
+  "shares_intended": 8,
+  "actual_fill_price": 293.57,
+  "actual_fill_quantity": 8,
+  "entry_order_id": "260722221221771",
+  "status": "exited_945",
+  "entry_timestamp": "2026-07-22T15:15:07+05:30",
+  "exit_price_945": 310.33,
+  "exit_order_id_945": "260723220291770",
+  "exit_timestamp_945": "2026-07-23T09:45:14+05:30",
+  "realized_return_pct": 5.709,
+  "realized_pnl": 134.08
 }
 ```
 
-Status progression:
-- `open` — entered, no exit yet
-- `exited_945` — fully exited at 9:45 AM (return was positive)
-- `partial_exit_945_nodata` — half exited at 9:45 AM (P&L lookup unavailable), remaining open
-- `exited_1200` — force-exited at noon (or completed after partial)
+Status progression: `open` → `exited_945` **or** `partial_exit_945_nodata` → `exited_1200`.
 
 #### Alternative: execute_trades.py (Simpler, No Live Candle)
-
-If you want to execute from the pre-calculated CSV without any live candle API or the 3-stage lifecycle:
 
 ```bash
 python zerodha/execute_trades.py
 ```
 
-This reads `results/trade_list_<date>.csv` directly (which has pre-calculated `shares` and `ref_price` from the 3 PM open). No positions JSON, no fill polling, no stages, no automatic exit — just a batch buy you manage yourself.
+Reads `results/trades/trade_list_<date>.csv` directly (pre-calculated `shares`/`ref_price` from the ₹5L reference sizing). No positions JSON, no fill polling, no stages, no automatic exit — a batch buy you manage yourself.
+
+---
+
+### Part 4 — Trade Book (4:00 PM)
+
+```bash
+python3.11 zerodha/build_trade_book.py
+```
+
+Flattens `results/positions_zerodha.json` into `results/trade_book.csv` — one row per position with: **Stock Name, Position entry date, Position Exit date, No of shares, Entry Price, Exit Price, Realised PnL, Realised PnL Pct**. Open positions show entry-side fields only; exit fields stay blank until they close. Runs daily right after the 3:45 PM EOD fill, so it always reflects that day's Stage 2/3 exits.
+
+> **Charges caveat**: figures in this file are **gross** P&L — brokerage (₹0 for Zerodha equity delivery), STT, exchange/SEBI charges, and GST can be estimated live via `POST /margins/orders`, but that endpoint is a *pre-trade margin estimator*, not a settled contract note, and consistently undershoots the real number (confirmed against Console: it omitted stamp duty entirely in every response tested). **DP (depository participant) charges — ₹13 + 18% GST = ₹15.34 per scrip per sell, confirmed exact against Console — are not available via any Kite Connect API at all** and are not included in this file. On small position sizes, DP charges alone can turn a "profitable" gross trade net-negative.
+
+---
+
+### Part 5 — Auto-Push Data & Results (4:30 PM)
+
+```bash
+./push_data_updates.sh
+```
+
+Stages **only** `data/` and `results/` (candles, market cap, instruments, positions, trade book, trade lists) — never code (`zerodha/`, `pipeline/`, `scan/`), so an in-progress code edit can never get swept into an unattended commit. Commits as `Data update — <date> candle + results refresh` and pushes to `main`. If nothing changed that day, it exits cleanly with no empty commit.
+
+---
+
+## MTF (Leveraged) Entries — Standalone Script
+
+```bash
+python zerodha/run_trades_mtf.py --entry --capital 150000 [--dry-run]
+python zerodha/run_trades_mtf.py --entry --symbol CHEMPLASTS --shares 3 [--dry-run]
+python zerodha/run_trades_mtf.py --entry --symbol "NSE_EQ|INE002A01018" --shares 5   # for symbols outside the tracked universe
+```
+
+**Completely separate from the CNC flow** — `run_trades.py` and `trade.py` are untouched by this script; `trade.py`'s `buy()` already accepted `product` as a parameter, so no new order-placement code was needed there. Key differences from CNC entry:
+
+- Same trade list, same reference-price logic, same `capital/4`-or-`n` allocation rule — but places orders with `product="MTF"` instead of `"CNC"`.
+- **Before every order**: checks live per-symbol `leverage` and required margin via `POST /margins/orders` (product=MTF) — leverage is per-stock and time-varying, never assumed fixed — then confirms `GET /user/margins` covers it. Insufficient margin or a failed lookup **skips that symbol** (logged) without halting the rest of the run.
+- Logs to `results/trades/mtf_entries_<date>.csv` (symbol, quantity, ref/fill price, leverage, margin required, order ID, status) — kept separate from `positions_zerodha.json` so it can never be picked up by the CNC Stage 2/3 exit logic, which has no MTF-exit awareness at all.
+- `--symbol`/`--shares`: buy one specific stock manually instead of reading the day's trade list — `--capital` in this mode is the amount for *that one stock* (not divided by 4, since the /4 rule is about proportioning a multi-signal batch, not a deliberate single pick).
+- Prints a reminder at the end of every run: **MTF buys trigger a same-day email pledge approval (by ~7 PM) that this script cannot complete** — check email/Kite manually.
+
+**Not wired into any cron job** — run manually until tested live in real market hours.
 
 ---
 
@@ -251,37 +282,45 @@ This reads `results/trade_list_<date>.csv` directly (which has pre-calculated `s
 ```
 volume-daily/
 ├── pipeline/
-│   ├── run_daily.py          # Daily orchestrator — called by cron at 3:01 PM
-│   ├── fetch_market_cap.py   # Logs into Screener.in, exports market cap CSV
-│   ├── fetch_candles.py      # Upstox V3 — historical + intraday + EOD fill mode
-│   ├── prepare_data.py       # Signal scanner — produces trade_list_<date>.csv (anchored to 15:00 candle)
-│   ├── scan_intraday.py      # Anytime preview scanner — same logic, usable mid-day (not the official run)
-│   ├── notify.py             # Telegram notifications (pipeline + trade alerts)
-│   ├── requirements.txt      # pandas, requests, python-dotenv
-│   └── .env                  # ← NOT in git — credentials live here
+│   ├── main.py                # Daily orchestrator — called by cron at 3:01 PM
+│   ├── fetch_market_cap.py    # Logs into Screener.in, exports market cap CSV
+│   ├── data_loader.py         # Upstox V3 — historical + intraday + EOD fill + market cap loader
+│   ├── signal_engine.py       # Signal conditions (market cap / volume / return) — STRICT + PRORATED modes
+│   ├── notify.py              # Telegram notifications (pipeline success/failure, scan preview)
+│   ├── requirements.txt       # pandas, requests, python-dotenv
+│   └── .env                   # ← NOT in git — credentials live here
+│
+├── scan/
+│   └── scan_intraday.py       # Anytime preview scanner (PRORATED mode) — not read by any execution script
 │
 ├── zerodha/
-│   ├── auth.py               # Kite session management (daily login, expires 6 AM IST)
-│   ├── trade.py               # buy(), sell(), order_status() via Kite — CLI too
-│   ├── execute_trades.py     # Batch buyer from trade list CSV via Kite
-│   └── run_trades.py         # 3-stage live trading via Kite (Stage 1/2/3 with positions JSON)
+│   ├── auth.py                 # Kite session management (daily login, expires 6 AM IST)
+│   ├── trade.py                 # buy(), sell(), order_status() via Kite — CLI too; market_protection fixed at 0.75%
+│   ├── execute_trades.py       # Batch buyer from trade list CSV via Kite
+│   ├── run_trades.py           # 3-stage live trading (CNC) via Kite — Stage 1/2/3 with positions JSON
+│   ├── run_trades_mtf.py       # Standalone MTF entry script — separate from the CNC flow entirely
+│   └── build_trade_book.py     # Flattens positions_zerodha.json → results/trade_book.csv
 │
 ├── data/
-│   ├── candles/               # ~485 per-symbol 15-min OHLCV CSV files (data only — no Upstox trading)
+│   ├── candles/                 # Per-symbol 15-min OHLCV CSV files (data only — no Upstox trading)
 │   ├── instruments/
 │   │   ├── upstox_instruments.csv   # symbol → instrument_key mapping
 │   │   └── upstox_unmatched.csv     # symbols with no Upstox match
-│   ├── market_cap_daily/      # Daily Screener.in exports + mcap_status.json
-│   └── universe_combined.csv  # All symbols ever seen in the 1,500–5,000 Cr band
+│   ├── market_cap_daily/        # Daily Screener.in exports + mcap_status.json
+│   └── universe_combined.csv    # All symbols ever seen in the 1,500–5,000 Cr band
 │
 ├── results/
-│   ├── trade_list_YYYY-MM-DD.csv     # Official signal output (one per trading day)
-│   ├── scan_YYYY-MM-DD_HHMM.csv      # scan_intraday.py preview output (not read by any execution script)
-│   └── positions_zerodha.json        # Zerodha trade book (all-time, all statuses)
+│   ├── trades/
+│   │   ├── trade_list_YYYY-MM-DD.csv     # Official signal output (one per trading day)
+│   │   └── mtf_entries_YYYY-MM-DD.csv    # MTF script's own log (see above)
+│   ├── scans/                            # scan_intraday.py preview output (not read by any execution script)
+│   ├── positions_zerodha.json            # Zerodha CNC trade book (all-time, all statuses)
+│   └── trade_book.csv                    # Flattened per-position P&L view (regenerated daily at 4 PM)
 │
-├── run_pipeline.sh           # Cron entry point — calls pipeline/run_daily.py
-├── setup_vm.sh               # One-time VM provisioning script
-└── .env.example               # Credential template — copy to pipeline/.env and fill in
+├── run_pipeline.sh            # Cron entry point — calls pipeline/main.py
+├── push_data_updates.sh       # Auto-commit + push data/results — cron'd 4:30 PM
+├── setup_vm.sh                # One-time VM provisioning script
+└── .env.example                # Credential template — copy to pipeline/.env and fill in
 ```
 
 ---
@@ -312,46 +351,14 @@ nano pipeline/.env
 - Installs Python dependencies from `pipeline/requirements.txt`
 - Creates required data directories (`data/candles`, `data/instruments`, `data/market_cap_daily`, `results`)
 - Writes a blank `pipeline/.env` (if not already present)
-- Registers the main pipeline cron: `1 15 * * 1-5 /bin/bash ~/volume-daily/run_pipeline.sh >> ~/pipeline.log 2>&1`
 
 After filling in `.env`, run a manual test:
 
 ```bash
-python3.11 pipeline/run_daily.py
+python3.11 pipeline/main.py
 ```
 
-### Add the EOD Fill Cron (Manual Step)
-
-The setup script does not add the EOD fill cron. Add it manually:
-
-```bash
-crontab -e
-```
-
-Add this line:
-
-```
-45 15 * * 1-5 python3.11 /root/volume-daily/pipeline/fetch_candles.py --eod-fill >> /root/pipeline.log 2>&1
-```
-
-This runs at 3:45 PM IST Mon–Fri, 15 minutes after market close, using the **intraday** endpoint to backfill the 15:15 candle and correct the in-progress 15:00 candle from the 3:01 PM run.
-
-### Add Live Trading Crons (Optional)
-
-`run_trades.py`'s three stages are not currently scheduled — they must be run manually unless you add crons for them:
-
-```
-# Stage 1 — entry at 3:15 PM
-15 15 * * 1-5 cd /root/volume-daily && /usr/bin/python3.11 zerodha/run_trades.py --entry >> /root/trades.log 2>&1
-
-# Stage 2 — exit check at 9:45 AM next morning
-45 9 * * 2-6 cd /root/volume-daily && /usr/bin/python3.11 zerodha/run_trades.py --exit-945 >> /root/trades.log 2>&1
-
-# Stage 3 — forced exit at noon
-0 12 * * 2-6 cd /root/volume-daily && /usr/bin/python3.11 zerodha/run_trades.py --exit-1200 >> /root/trades.log 2>&1
-```
-
-Stage 2 and 3 run Tuesday–Saturday (the morning after Monday–Friday entries). Also remember: `python -m zerodha.auth` must be re-run every day before 3 PM — the Kite Connect access token expires at 6:00 AM IST daily, and none of these crons refresh it for you.
+Then register all 7 cron jobs listed in [Cron Schedule Summary](#cron-schedule-summary) via `crontab -e`.
 
 ---
 
@@ -365,7 +372,7 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 | `SCREENER_PASSWORD` | Screener.in password |
 | `UPSTOX_ACCESS_TOKEN` | Upstox data token for candle fetches (from developer portal). Analytics only — no Upstox trading. |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `TELEGRAM_CHAT_ID` | Group chat ID (negative integer for supergroups, e.g. `-1004409929427`) |
+| `TELEGRAM_CHAT_ID` | Group chat ID (negative integer for supergroups) |
 | `ZERODHA_API_KEY` | Zerodha Kite API key — used for order execution |
 | `ZERODHA_API_SECRET` | Zerodha Kite API secret |
 | `ZERODHA_REDIRECT_URI` | `https://kite.trade/` |
@@ -376,18 +383,18 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 
 ## Daily Operations
 
-### Morning Token Refresh (Required for Live Trading)
+### Morning Token Refresh (Required — Cannot Be Automated)
 
-The **Zerodha (Kite Connect) trading token** expires at 6:00 AM IST every day. Refresh it each morning before trading:
+The **Zerodha (Kite Connect) trading token** expires at 6:00 AM IST every day — a regulatory requirement, not something this codebase can work around. Refresh it each morning **before the 9:45 AM exit-check cron fires**:
 
 ```bash
 python -m zerodha.auth
 # Opens browser → log in → copy the redirect URL → paste it back
 ```
 
-The token is saved to `zerodha/.token.json` and reused automatically until the next 6 AM IST expiry.
+If the token is missing/expired, `zerodha.auth._login()` falls through to an interactive prompt that blocks waiting for stdin — in a non-interactive/cron context this just hangs/times out, so **the exit-945 and exit-1200 jobs will silently fail to close positions if you forget this step.** The token is saved to `zerodha/.token.json` and reused automatically until the next 6 AM IST expiry.
 
-The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in `.env` only when it eventually expires. `run_trades.py` uses this token for price data, not for trading.
+The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in `.env` only when it eventually expires.
 
 ### Monitoring
 
@@ -395,11 +402,12 @@ The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in
 # Live pipeline log stream
 tail -f ~/pipeline.log
 
-# Live trades log (if you added the trading crons)
-tail -f ~/trades.log
+# Live trades log
+tail -f ~/trades_test.log
 
-# Last run summary
-grep -E "(Starting|completed|FAILED|Stage)" ~/pipeline.log | tail -20
+# Trade book / auto-push logs
+tail -f ~/trade_book.log
+tail -f ~/push_data_updates.log
 
 # Verify all crons are registered
 crontab -l
@@ -408,7 +416,10 @@ crontab -l
 date
 
 # Check today's open positions
-cat results/positions_zerodha.json | python3 -m json.tool
+python3 -m json.tool results/positions_zerodha.json
+
+# Check the flattened P&L view
+column -s, -t results/trade_book.csv
 ```
 
 ### Pulling Updates
@@ -418,7 +429,7 @@ cd ~/volume-daily
 git pull
 ```
 
-Note: `run_pipeline.sh` does not `git pull` automatically — code updates pushed to GitHub do not reach the VM until you pull manually.
+Note: `run_pipeline.sh` does not `git pull` automatically — code updates pushed to GitHub do not reach the VM until you pull manually. (Data/results changes, in the other direction, *do* push automatically at 4:30 PM via `push_data_updates.sh`.)
 
 ---
 
@@ -428,30 +439,23 @@ Note: `run_pipeline.sh` does not `git pull` automatically — code updates pushe
 
 ```bash
 # Run the full pipeline manually
-python3.11 pipeline/run_daily.py
+python3.11 pipeline/main.py
 
 # Run only the EOD candle fill
-python3.11 pipeline/fetch_candles.py --eod-fill
+python3.11 pipeline/data_loader.py --eod-fill
 
-# Preview signals at any time of day (not the official 3:01 PM run — see scan_intraday.py)
-python3.11 pipeline/scan_intraday.py
-
-# Test Telegram — success notification
-python pipeline/notify.py --date 2026-07-20 --status success
-
-# Test Telegram — failure notification
-python pipeline/notify.py --date 2026-07-20 --status failed \
-  --failed-step "Step 3" --error-msg "API timeout"
+# Preview signals at any time of day (PRORATED mode — not the official 3:01 PM run)
+python3.11 scan/scan_intraday.py
 ```
 
-### 3-Stage Trading (Zerodha)
+### 3-Stage Trading (Zerodha CNC)
 
 ```bash
 # Stage 1 — entry dry run (preview without orders)
-python zerodha/run_trades.py --entry --dry-run
+python zerodha/run_trades.py --entry --capital 150000 --dry-run
 
 # Stage 1 — live entry
-python zerodha/run_trades.py --entry
+python zerodha/run_trades.py --entry --capital 150000
 
 # Stage 2 — exit check at 9:45 AM
 python zerodha/run_trades.py --exit-945
@@ -460,22 +464,31 @@ python zerodha/run_trades.py --exit-945
 python zerodha/run_trades.py --exit-1200
 ```
 
+### MTF (Leveraged) Entries
+
+```bash
+# Full daily trade list, MTF instead of CNC
+python zerodha/run_trades_mtf.py --entry --capital 150000 --dry-run
+
+# One specific stock, exact share count
+python zerodha/run_trades_mtf.py --entry --symbol CHEMPLASTS --shares 3 --dry-run
+```
+
+### Trade Book
+
+```bash
+python3.11 zerodha/build_trade_book.py
+```
+
 ### Batch Execution from CSV
 
 ```bash
-# Preview today's trades without placing orders
 python zerodha/execute_trades.py --dry-run
-
-# Execute today's trades (live)
 python zerodha/execute_trades.py
-
-# Execute trades for a specific date
 python zerodha/execute_trades.py --date 2026-07-17
 ```
 
 ### Single-Stock Manual Orders
-
-Use these to test connectivity, verify tokens, or place/exit positions manually without any pipeline dependency:
 
 ```bash
 python -m zerodha.trade buy RELIANCE NSE 1 MARKET
@@ -488,7 +501,7 @@ python -m zerodha.trade cancel <order_id>    # cancel an order
 ### Auth
 
 ```bash
-# Refresh Zerodha trading token (daily, before market open)
+# Refresh Zerodha trading token (daily, before 9:45 AM)
 python -m zerodha.auth
 ```
 
@@ -496,28 +509,13 @@ python -m zerodha.auth
 
 ## Telegram Notifications
 
-Notifications go to the **"NSE Volume Alerts"** group via `@nse_volume_alerts_bot` (chat ID `-1004409929427`).
+Only two notification types are currently active — all per-trade notifications (entry/exit/summary) were **removed** to reduce noise; the functions still exist in `pipeline/notify.py` but `zerodha/run_trades.py` no longer calls them.
 
-### Pipeline Notifications
-
-**Success** — sent after `run_daily.py` completes:
-- Date, number of signals, pipeline runtime
-- Trade table: symbol | shares | entry price (3 PM open)
-- Warning banner if market cap data was stale
-
-**Failure** — sent if any step crashes:
-- Date, failed step name, runtime, full error message
-
-### Trade Notifications
-
-| Event | When sent |
-|---|---|
-| `ENTRY` | After each Stage 1 buy order is submitted |
-| `EXIT 9:45am` | After a Stage 2 profitable sell fills |
-| `NO-DATA FALLBACK 9:45am` | When live P&L is unavailable from Kite; half position sold |
-| `FORCE EXIT 12pm` | After each Stage 3 sell fills |
-| `12pm Exit — nothing to close` | If all positions already exited at 9:45 AM |
-| `Daily Summary` | After Stage 3 completes; shows P&L for the day |
+| Event | Sent by | When |
+|---|---|---|
+| Pipeline **success** | `pipeline/main.py` | After the 3:01 PM run completes — date, signal count, runtime, full trade table |
+| Pipeline **failure** | `pipeline/main.py` | If any step crashes — date, failed step, runtime, error detail |
+| Scan **preview** | `scan/scan_intraday.py` | Whenever run manually — clearly labeled as a preview, not the official signal |
 
 ### Setting Up on a New Bot or Group
 
@@ -533,18 +531,20 @@ Notifications go to the **"NSE Volume Alerts"** group via `@nse_volume_alerts_bo
 
 ## Cron Schedule Summary
 
-All times IST (UTC+5:30). Cron expressions below are in **server local time (IST)**, since the VM's timezone is set to `Asia/Kolkata` — not UTC.
+All times IST (UTC+5:30), server timezone set to `Asia/Kolkata`. All 7 jobs are Mon–Fri only (`1-5`).
 
-| Time (IST) | Cron (IST) | Command | Status |
-|---|---|---|---|
-| 3:01 PM Mon–Fri | `1 15 * * 1-5` | `run_pipeline.sh` | ✅ Scheduled |
-| 3:45 PM Mon–Fri | `45 15 * * 1-5` | `fetch_candles.py --eod-fill` | ✅ Scheduled |
-| 3:15 PM Mon–Fri | `15 15 * * 1-5` | `zerodha/run_trades.py --entry` | ⚠️ Not scheduled — manual only, unless added |
-| 9:45 AM Tue–Sat | `45 9 * * 2-6` | `zerodha/run_trades.py --exit-945` | ⚠️ Not scheduled — manual only, unless added |
-| 12:00 PM Tue–Sat | `0 12 * * 2-6` | `zerodha/run_trades.py --exit-1200` | ⚠️ Not scheduled — manual only, unless added |
+| Time (IST) | Cron | Command |
+|---|---|---|
+| 9:45 AM | `45 9 * * 1-5` | `zerodha/run_trades.py --exit-945` |
+| 12:00 PM | `0 12 * * 1-5` | `zerodha/run_trades.py --exit-1200` |
+| 3:01 PM | `1 15 * * 1-5` | `run_pipeline.sh` |
+| 3:15 PM | `15 15 * * 1-5` | `zerodha/run_trades.py --entry --capital 150000` |
+| 3:45 PM | `45 15 * * 1-5` | `pipeline/data_loader.py --eod-fill` |
+| 4:00 PM | `0 16 * * 1-5` | `zerodha/build_trade_book.py` |
+| 4:30 PM | `30 16 * * 1-5` | `push_data_updates.sh` |
 
-> The 44-minute gap between the pipeline (3:01 PM) and EOD fill (3:45 PM) leaves plenty of margin — the pipeline typically finishes in under 3 minutes, and the EOD fill deliberately waits until 15 minutes after market close (3:30 PM) so the final candle has settled.
+`zerodha/run_trades_mtf.py` is **not** in this list — it's a standalone script, run manually.
 
 ---
 
-*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution)*
+*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution, CNC + standalone MTF)*
