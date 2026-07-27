@@ -178,7 +178,72 @@
     "actual_fill_price": 4884.9,
     "actual_fill_quantity": 3,
     "entry_order_id": "260724221221467",
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-24T15:15:05.978301+05:30",
+    "exit_price_945": 5164.3333,
+    "exit_order_id_945": "260727220262900",
+    "exit_timestamp_945": "2026-07-27T09:45:05.752550+05:30",
+    "realized_return_pct": 5.7203,
+    "realized_pnl": 838.3
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "CAPILLARY",
+    "entry_date": "2026-07-27",
+    "reference_price": 534.7,
+    "shares_intended": 56,
+    "actual_fill_price": 535.4,
+    "actual_fill_quantity": 56,
+    "entry_order_id": "260727221142196",
     "status": "open",
-    "entry_timestamp": "2026-07-24T15:15:05.978301+05:30"
+    "entry_timestamp": "2026-07-27T15:15:05.888576+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "DEEPINDS",
+    "entry_date": "2026-07-27",
+    "reference_price": 517.35,
+    "shares_intended": 57,
+    "actual_fill_price": 517.9,
+    "actual_fill_quantity": 57,
+    "entry_order_id": "260727221142441",
+    "status": "open",
+    "entry_timestamp": "2026-07-27T15:15:10.008680+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "MONARCH",
+    "entry_date": "2026-07-27",
+    "reference_price": 391.75,
+    "shares_intended": 76,
+    "actual_fill_price": 391.9,
+    "actual_fill_quantity": 76,
+    "entry_order_id": "260727221142670",
+    "status": "open",
+    "entry_timestamp": "2026-07-27T15:15:14.115646+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "SESHAPAPER",
+    "entry_date": "2026-07-27",
+    "reference_price": 239.0,
+    "shares_intended": 125,
+    "actual_fill_price": 238.777,
+    "actual_fill_quantity": 125,
+    "entry_order_id": "260727221142894",
+    "status": "open",
+    "entry_timestamp": "2026-07-27T15:15:18.235459+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "VRLLOG",
+    "entry_date": "2026-07-27",
+    "reference_price": 262.5,
+    "shares_intended": 114,
+    "actual_fill_price": 262.6553,
+    "actual_fill_quantity": 114,
+    "entry_order_id": "260727221143140",
+    "status": "open",
+    "entry_timestamp": "2026-07-27T15:15:22.348088+05:30"
   }
 ]
