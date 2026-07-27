@@ -86,18 +86,38 @@ def _close_at(candles: list, hhmm: int) -> float | None:
     return None
 
 
+def _latest_close_before(candles: list, max_hhmm: int) -> tuple[float, int] | None:
+    """Close of the latest candle at or before max_hhmm, by start time (IST).
+    None if no candle qualifies. We already have the full day's 1-min data loaded,
+    so on a gap there's no reason to skip past fresher data for an older fixed point."""
+    best = None
+    for c in candles:
+        try:
+            dt   = datetime.fromisoformat(str(c[0]))
+            hhmm = dt.hour * 100 + dt.minute
+            if hhmm <= max_hhmm and (best is None or hhmm > best[1]):
+                best = (float(c[4]), hhmm)
+        except (IndexError, ValueError, TypeError):
+            continue
+    return best
+
+
 def get_reference_price(symbol: str) -> tuple[float, int]:
-    """Same reference candle logic as run_trades.py's get_reference_price:
-    close of 15:14 1-min candle, falling back to 15:13, then 14:45."""
+    """Same reference candle logic as run_trades.py's get_reference_price: close of
+    15:14 1-min candle, falling back to 15:13, then whichever candle at/before 15:14
+    is actually the most recent available (not a fixed older point)."""
     matched        = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
     candles        = candles_by_sym.get(symbol, [])
-    for hhmm in (1514, 1513, 1445):
+    for hhmm in (1514, 1513):
         price = _close_at(candles, hhmm)
         if price is not None:
             return price, hhmm
+    latest = _latest_close_before(candles, 1514)
+    if latest is not None:
+        return latest
     raise ValueError(
-        f"[mtf] No 15:14, 15:13, or 14:45 candle found for {symbol} "
+        f"[mtf] No candle data at all for {symbol} up to 15:14 "
         f"({len(candles)} candles). Run after 15:15 IST."
     )
 
