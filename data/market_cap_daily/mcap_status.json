@@ -1,8 +1,8 @@
 {
-  "date": "2026-07-27",
+  "date": "2026-07-28",
   "status": "fresh",
-  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-07-27.csv",
-  "rows": 495,
+  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-07-28.csv",
+  "rows": 492,
   "fallback_date": null,
-  "message": "Fetched 495 stocks from Screener.in in 0.8s"
+  "message": "Fetched 492 stocks from Screener.in in 0.8s"
 }

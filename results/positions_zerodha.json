@@ -195,8 +195,13 @@
     "actual_fill_price": 535.4,
     "actual_fill_quantity": 56,
     "entry_order_id": "260727221142196",
-    "status": "open",
-    "entry_timestamp": "2026-07-27T15:15:05.888576+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-27T15:15:05.888576+05:30",
+    "exit_price_1200": 515.7,
+    "exit_order_id_1200": "260728220836729",
+    "exit_timestamp_1200": "2026-07-28T12:00:05.516518+05:30",
+    "realized_return_pct": -3.6795,
+    "realized_pnl": -1103.2
   },
   {
     "broker": "zerodha",
@@ -207,8 +212,13 @@
     "actual_fill_price": 517.9,
     "actual_fill_quantity": 57,
     "entry_order_id": "260727221142441",
-    "status": "open",
-    "entry_timestamp": "2026-07-27T15:15:10.008680+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-27T15:15:10.008680+05:30",
+    "exit_price_945": 535.2746,
+    "exit_order_id_945": "260728220307479",
+    "exit_timestamp_945": "2026-07-28T09:45:05.808143+05:30",
+    "realized_return_pct": 3.3548,
+    "realized_pnl": 990.35
   },
   {
     "broker": "zerodha",
@@ -219,8 +229,13 @@
     "actual_fill_price": 391.9,
     "actual_fill_quantity": 76,
     "entry_order_id": "260727221142670",
-    "status": "open",
-    "entry_timestamp": "2026-07-27T15:15:14.115646+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-27T15:15:14.115646+05:30",
+    "exit_price_945": 395.5,
+    "exit_order_id_945": "260728220307853",
+    "exit_timestamp_945": "2026-07-28T09:45:09.276868+05:30",
+    "realized_return_pct": 0.9186,
+    "realized_pnl": 273.6
   },
   {
     "broker": "zerodha",
@@ -231,8 +246,13 @@
     "actual_fill_price": 238.777,
     "actual_fill_quantity": 125,
     "entry_order_id": "260727221142894",
-    "status": "open",
-    "entry_timestamp": "2026-07-27T15:15:18.235459+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-27T15:15:18.235459+05:30",
+    "exit_price_1200": 235.1329,
+    "exit_order_id_1200": "260728220837117",
+    "exit_timestamp_1200": "2026-07-28T12:00:08.858116+05:30",
+    "realized_return_pct": -1.5262,
+    "realized_pnl": -455.51
   },
   {
     "broker": "zerodha",
@@ -243,7 +263,48 @@
     "actual_fill_price": 262.6553,
     "actual_fill_quantity": 114,
     "entry_order_id": "260727221143140",
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-27T15:15:22.348088+05:30",
+    "exit_price_1200": 261.8239,
+    "exit_order_id_1200": "260728220837269",
+    "exit_timestamp_1200": "2026-07-28T12:00:12.188222+05:30",
+    "realized_return_pct": -0.3165,
+    "realized_pnl": -94.77
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ASHIKAG",
+    "entry_date": "2026-07-28",
+    "reference_price": 487.25,
+    "shares_intended": 76,
+    "actual_fill_price": 488.1,
+    "actual_fill_quantity": 76,
+    "entry_order_id": "260728221524140",
     "status": "open",
-    "entry_timestamp": "2026-07-27T15:15:22.348088+05:30"
+    "entry_timestamp": "2026-07-28T15:15:05.838131+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ASIANTILES",
+    "entry_date": "2026-07-28",
+    "reference_price": 57.04,
+    "shares_intended": 657,
+    "actual_fill_price": 57.3382,
+    "actual_fill_quantity": 657,
+    "entry_order_id": "260728221524474",
+    "status": "open",
+    "entry_timestamp": "2026-07-28T15:15:10.030261+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "INFOBEAN",
+    "entry_date": "2026-07-28",
+    "reference_price": 167.99,
+    "shares_intended": 223,
+    "actual_fill_price": 168.4769,
+    "actual_fill_quantity": 223,
+    "entry_order_id": "260728221524783",
+    "status": "open",
+    "entry_timestamp": "2026-07-28T15:15:14.227845+05:30"
   }
 ]
