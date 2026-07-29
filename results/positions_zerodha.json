@@ -280,8 +280,13 @@
     "actual_fill_price": 488.1,
     "actual_fill_quantity": 76,
     "entry_order_id": "260728221524140",
-    "status": "open",
-    "entry_timestamp": "2026-07-28T15:15:05.838131+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-28T15:15:05.838131+05:30",
+    "exit_price_1200": 492.5289,
+    "exit_order_id_1200": "260729220645958",
+    "exit_timestamp_1200": "2026-07-29T12:00:04.966329+05:30",
+    "realized_return_pct": 0.9074,
+    "realized_pnl": 336.6
   },
   {
     "broker": "zerodha",
@@ -292,8 +297,13 @@
     "actual_fill_price": 57.3382,
     "actual_fill_quantity": 657,
     "entry_order_id": "260728221524474",
-    "status": "open",
-    "entry_timestamp": "2026-07-28T15:15:10.030261+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-28T15:15:10.030261+05:30",
+    "exit_price_945": 60.62,
+    "exit_order_id_945": "260729220265839",
+    "exit_timestamp_945": "2026-07-29T09:45:05.567861+05:30",
+    "realized_return_pct": 5.7236,
+    "realized_pnl": 2156.14
   },
   {
     "broker": "zerodha",
@@ -304,7 +314,96 @@
     "actual_fill_price": 168.4769,
     "actual_fill_quantity": 223,
     "entry_order_id": "260728221524783",
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-28T15:15:14.227845+05:30",
+    "exit_price_945": 169.1462,
+    "exit_order_id_945": "260729220266120",
+    "exit_timestamp_945": "2026-07-29T09:45:09.018669+05:30",
+    "realized_return_pct": 0.3973,
+    "realized_pnl": 149.26
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "APCOTEXIND",
+    "entry_date": "2026-07-29",
+    "reference_price": 684.0,
+    "shares_intended": 31,
+    "actual_fill_price": 683.65,
+    "actual_fill_quantity": 31,
+    "entry_order_id": "260729221088157",
     "status": "open",
-    "entry_timestamp": "2026-07-28T15:15:14.227845+05:30"
+    "entry_timestamp": "2026-07-29T15:15:05.657685+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ARTEMISMED",
+    "entry_date": "2026-07-29",
+    "reference_price": 296.9,
+    "shares_intended": 72,
+    "actual_fill_price": 296.9,
+    "actual_fill_quantity": 72,
+    "entry_order_id": "260729221088473",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:09.760041+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ASIANTILES",
+    "entry_date": "2026-07-29",
+    "reference_price": 61.59,
+    "shares_intended": 347,
+    "actual_fill_price": 61.59,
+    "actual_fill_quantity": 347,
+    "entry_order_id": "260729221088771",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:13.850493+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "DEEPINDS",
+    "entry_date": "2026-07-29",
+    "reference_price": 543.6,
+    "shares_intended": 39,
+    "actual_fill_price": 543.6769,
+    "actual_fill_quantity": 39,
+    "entry_order_id": "260729221089044",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:17.941055+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ORISSAMINE",
+    "entry_date": "2026-07-29",
+    "reference_price": 4035.1,
+    "shares_intended": 5,
+    "actual_fill_price": 4045.4,
+    "actual_fill_quantity": 5,
+    "entry_order_id": "260729221089285",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:21.996099+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "SHK",
+    "entry_date": "2026-07-29",
+    "reference_price": 162.73,
+    "shares_intended": 131,
+    "actual_fill_price": 162.6454,
+    "actual_fill_quantity": 131,
+    "entry_order_id": "260729221089549",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:26.087470+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "TIL",
+    "entry_date": "2026-07-29",
+    "reference_price": 257.38,
+    "shares_intended": 83,
+    "actual_fill_price": 259.0,
+    "actual_fill_quantity": 83,
+    "entry_order_id": "260729221089790",
+    "status": "open",
+    "entry_timestamp": "2026-07-29T15:15:30.183793+05:30"
   }
 ]
