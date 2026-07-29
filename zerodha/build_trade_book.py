@@ -6,7 +6,7 @@ Writes  : results/trade_book.csv          (one row per position)
 
 Columns: Stock Name, Position entry date, Position Exit date, No of shares,
          Entry Price, Exit Price, Realised PnL, Realised PnL Pct,
-         Total Charges, Net PnL
+         Total Charges, Net PnL, Net PnL Pct
 
 Open positions (not yet exited, at any stage -- 945, 1200, or a 945-nodata partial)
 get entry-side fields only; exit date/price/P&L/charges stay blank until they close.
@@ -36,7 +36,7 @@ _OUT_FILE = _ROOT / "results" / "trade_book.csv"
 _FIELDNAMES = [
     "Stock Name", "Position entry date", "Position Exit date", "No of shares",
     "Entry Price", "Exit Price", "Realised PnL", "Realised PnL Pct",
-    "Total Charges", "Net PnL",
+    "Total Charges", "Net PnL", "Net PnL Pct",
 ]
 
 _EXIT_STAGE_KEYS = {
@@ -110,11 +110,13 @@ def _build_rows(positions: list) -> list:
         realized   = p.get("realized_pnl")
         return_pct = p.get("realized_return_pct")
 
-        total_charges = net_pnl = None
+        total_charges = net_pnl = net_pnl_pct = None
         leg_totals = charges.get(i, {})
         if exit_date and leg_totals.get("entry") is not None and leg_totals.get("exit") is not None:
             total_charges = round(leg_totals["entry"] + leg_totals["exit"] + DP_CHARGE, 2)
             net_pnl       = round(realized - total_charges, 2)
+            invested      = entry_price * qty
+            net_pnl_pct   = round(net_pnl / invested * 100, 4) if invested else 0
 
         rows.append({
             "Stock Name":           p.get("symbol"),
@@ -127,6 +129,7 @@ def _build_rows(positions: list) -> list:
             "Realised PnL Pct":     return_pct,
             "Total Charges":        total_charges,
             "Net PnL":              net_pnl,
+            "Net PnL Pct":          net_pnl_pct,
         })
     return rows
 
