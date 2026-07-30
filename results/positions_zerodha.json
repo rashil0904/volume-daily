@@ -331,8 +331,13 @@
     "actual_fill_price": 683.65,
     "actual_fill_quantity": 31,
     "entry_order_id": "260729221088157",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:05.657685+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-29T15:15:05.657685+05:30",
+    "exit_price_1200": 668.25,
+    "exit_order_id_1200": "260730220793822",
+    "exit_timestamp_1200": "2026-07-30T12:00:05.102671+05:30",
+    "realized_return_pct": -2.2526,
+    "realized_pnl": -477.4
   },
   {
     "broker": "zerodha",
@@ -343,8 +348,13 @@
     "actual_fill_price": 296.9,
     "actual_fill_quantity": 72,
     "entry_order_id": "260729221088473",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:09.760041+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-29T15:15:09.760041+05:30",
+    "exit_price_945": 301.1042,
+    "exit_order_id_945": "260730220303753",
+    "exit_timestamp_945": "2026-07-30T09:45:05.510344+05:30",
+    "realized_return_pct": 1.416,
+    "realized_pnl": 302.7
   },
   {
     "broker": "zerodha",
@@ -355,8 +365,13 @@
     "actual_fill_price": 61.59,
     "actual_fill_quantity": 347,
     "entry_order_id": "260729221088771",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:13.850493+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-29T15:15:13.850493+05:30",
+    "exit_price_945": 61.0,
+    "exit_order_id_945": "260730220304063",
+    "exit_timestamp_945": "2026-07-30T09:45:08.979643+05:30",
+    "realized_return_pct": -0.9579,
+    "realized_pnl": -204.73
   },
   {
     "broker": "zerodha",
@@ -367,8 +382,13 @@
     "actual_fill_price": 543.6769,
     "actual_fill_quantity": 39,
     "entry_order_id": "260729221089044",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:17.941055+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-29T15:15:17.941055+05:30",
+    "exit_price_945": 571.4,
+    "exit_order_id_945": "260730220304402",
+    "exit_timestamp_945": "2026-07-30T09:45:12.443231+05:30",
+    "realized_return_pct": 5.0992,
+    "realized_pnl": 1081.2
   },
   {
     "broker": "zerodha",
@@ -379,8 +399,13 @@
     "actual_fill_price": 4045.4,
     "actual_fill_quantity": 5,
     "entry_order_id": "260729221089285",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:21.996099+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-29T15:15:21.996099+05:30",
+    "exit_price_945": 4050.12,
+    "exit_order_id_945": "260730220304673",
+    "exit_timestamp_945": "2026-07-30T09:45:15.918860+05:30",
+    "realized_return_pct": 0.1167,
+    "realized_pnl": 23.6
   },
   {
     "broker": "zerodha",
@@ -391,8 +416,13 @@
     "actual_fill_price": 162.6454,
     "actual_fill_quantity": 131,
     "entry_order_id": "260729221089549",
-    "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:26.087470+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-29T15:15:26.087470+05:30",
+    "exit_price_1200": 168.1477,
+    "exit_order_id_1200": "260730220794141",
+    "exit_timestamp_1200": "2026-07-30T12:00:08.526768+05:30",
+    "realized_return_pct": 3.383,
+    "realized_pnl": 720.8
   },
   {
     "broker": "zerodha",
@@ -403,7 +433,24 @@
     "actual_fill_price": 259.0,
     "actual_fill_quantity": 83,
     "entry_order_id": "260729221089790",
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-29T15:15:30.183793+05:30",
+    "exit_price_1200": 254.21,
+    "exit_order_id_1200": "260730220794277",
+    "exit_timestamp_1200": "2026-07-30T12:00:11.868279+05:30",
+    "realized_return_pct": -1.8494,
+    "realized_pnl": -397.57
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "63MOONS",
+    "entry_date": "2026-07-30",
+    "reference_price": 844.95,
+    "shares_intended": 44,
+    "actual_fill_price": 845.4318,
+    "actual_fill_quantity": 44,
+    "entry_order_id": "260730221467645",
     "status": "open",
-    "entry_timestamp": "2026-07-29T15:15:30.183793+05:30"
+    "entry_timestamp": "2026-07-30T15:15:05.490168+05:30"
   }
 ]
