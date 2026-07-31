@@ -3,9 +3,9 @@ zerodha/run_trades.py — 3-stage live trading via Zerodha Kite
 =============================================================
 Entry price : Upstox intraday V3 candle API  (UPSTOX_ACCESS_TOKEN from pipeline/.env) —
               close of 15:14 candle, falls back to 15:13 if 15:14 isn't published yet.
-Exit check  : Zerodha Kite's own computed pnl from /portfolio/positions or /portfolio/holdings
-              (Stage 2) — not candle-based, so it isn't affected by whether a specific
-              candle has been published yet.
+Exit check  : Our own recorded entry fill price vs. current LTP from Kite's /quote/ltp
+              (Stage 2) — pnl = (ltp - fill_price) * qty, computed directly rather than
+              trusting Kite's positions/holdings pnl field, which can go stale same-day.
 Orders      : Zerodha Kite API  (zerodha/trade.py)
 Positions   : results/positions_zerodha.json  (full persistent trade book)
 
@@ -126,34 +126,20 @@ def get_reference_price(symbol: str) -> tuple[float, int]:
     )
 
 
-def get_live_pnl(symbol: str) -> float:
-    """Kite's own computed P&L for this symbol from positions (same-day) or holdings
-    (settled) — Stage 2 exit decision. Uses the broker's pnl field directly rather than
-    computing return from a fetched price, and isn't candle-based at all, so it isn't at
-    the mercy of whether a specific candle has been published yet. Raises ValueError if
-    the symbol isn't found in either endpoint (e.g. already exited, or a lookup failure)."""
+def get_ltp(symbol: str) -> float:
+    """Current last-traded price via Kite's lightweight /quote/ltp endpoint — Stage 2
+    exit decision computes P&L as (ltp - our recorded fill_price) * qty directly, rather
+    than trusting Kite's own positions/holdings pnl field. That field can go stale: e.g.
+    holdings' average_price doesn't always refresh same-day when a symbol is sold and
+    then re-bought before settlement (seen live on ASIANTILES, 2026-07-30), which would
+    silently corrupt the exit decision. Raises ValueError if no LTP is returned."""
     session, _ = _kite_session()
-    try:
-        resp = session.get(f"{_KITE_BASE}/portfolio/positions", timeout=15)
-        if resp.ok:
-            for p in (resp.json().get("data", {}).get("net") or []):
-                if (p.get("tradingsymbol") or "").upper() == symbol.upper():
-                    pnl = p.get("pnl")
-                    if pnl is not None:
-                        return float(pnl)
-    except Exception:
-        pass
-    try:
-        resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
-        if resp.ok:
-            for h in (resp.json().get("data") or []):
-                if (h.get("tradingsymbol") or "").upper() == symbol.upper():
-                    pnl = h.get("pnl")
-                    if pnl is not None:
-                        return float(pnl)
-    except Exception:
-        pass
-    raise ValueError(f"[zerodha] No P&L found for {symbol} in Kite positions or holdings.")
+    resp = session.get(f"{_KITE_BASE}/quote/ltp", params={"i": f"NSE:{symbol}"}, timeout=15)
+    resp.raise_for_status()
+    entry = resp.json().get("data", {}).get(f"NSE:{symbol}")
+    if not entry or entry.get("last_price") is None:
+        raise ValueError(f"[zerodha] No LTP found for {symbol}.")
+    return float(entry["last_price"])
 
 
 # ── Positions JSON ─────────────────────────────────────────────────────────────
@@ -384,10 +370,11 @@ def check_exit_945(dry_run: bool = False) -> None:
         no_data  = False
         pnl_live = 0.0
         try:
-            pnl_live = get_live_pnl(sym)
-            print(f"[zerodha]   live P&L: ₹{pnl_live:+,.2f}")
+            ltp      = get_ltp(sym)
+            pnl_live = (ltp - fill_price) * qty
+            print(f"[zerodha]   LTP: ₹{ltp:,.2f}  live P&L: ₹{pnl_live:+,.2f}")
         except Exception as exc:
-            print(f"[zerodha]   no live P&L available: {exc}")
+            print(f"[zerodha]   no LTP available: {exc}")
             no_data = True
 
         if no_data:
