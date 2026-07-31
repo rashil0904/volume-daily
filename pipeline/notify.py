@@ -293,6 +293,63 @@ def send_daily_summary(broker: str, n_opened: int, n_exited_945: int,
     _send(text)
 
 
+# ── Live monitor notifications ────────────────────────────────────────────────
+
+def send_monitor_qualified(symbol: str, ts_str: str, cum_vol: int, threshold: int,
+                           vol_ratio: float, ltp: float, prev_vwap: float,
+                           vwap_target: float) -> None:
+    text = "\n".join([
+        f"<b>&#9989; QUALIFIED — {html_lib.escape(symbol)}</b>",
+        f"<b>Time:</b> {html_lib.escape(ts_str)} IST",
+        f"<b>Volume:</b> {cum_vol:,} / {threshold:,} ({vol_ratio:.2f}&times; avg)",
+        f"<b>LTP:</b> &#8377;{ltp:,.2f}",
+        f"<b>VWAP target (prev+5%):</b> &#8377;{vwap_target:,.2f}",
+        f"<b>Prev-day VWAP:</b> &#8377;{prev_vwap:,.2f}",
+    ])
+    _send(text)
+
+
+def send_monitor_near_circuit(symbol: str, ts_str: str, ltp: float,
+                               pct_to_upper: float, upper_circuit: float) -> None:
+    text = "\n".join([
+        f"<b>&#9888; NEAR UPPER CIRCUIT — {html_lib.escape(symbol)}</b>",
+        f"<b>Time:</b> {html_lib.escape(ts_str)} IST",
+        f"<b>LTP:</b> &#8377;{ltp:,.2f}",
+        f"<b>Upper circuit:</b> &#8377;{upper_circuit:,.2f}",
+        f"<b>Gap to circuit:</b> {pct_to_upper:.2f}%",
+    ])
+    _send(text)
+
+
+def send_monitor_heartbeat(ts_str: str, tracking: int, qualified: int,
+                           near_circuit: int) -> None:
+    text = "\n".join([
+        "<b>&#128994; Monitor Heartbeat</b>",
+        f"<b>Time:</b> {html_lib.escape(ts_str)} IST",
+        f"<b>Tracking:</b> {tracking} symbols",
+        f"<b>Qualified today:</b> {qualified}",
+        f"<b>Near circuit today:</b> {near_circuit}",
+    ])
+    _send(text)
+
+
+def send_monitor_disconnect(code, reason: str) -> None:
+    text = "\n".join([
+        "<b>&#128308; Monitor WebSocket DISCONNECTED</b>",
+        f"<b>Code:</b> {code}",
+        f"<b>Reason:</b> {html_lib.escape(str(reason) or 'unknown')}",
+        "Attempting to reconnect automatically…",
+    ])
+    _send(text)
+
+
+def send_monitor_reconnect(attempt: int) -> None:
+    _send(
+        f"<b>&#128260; Monitor WebSocket RECONNECTING</b>\n"
+        f"<b>Attempt:</b> {attempt}"
+    )
+
+
 # ── CLI (for manual testing) ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
