@@ -450,7 +450,60 @@
     "actual_fill_price": 845.4318,
     "actual_fill_quantity": 44,
     "entry_order_id": "260730221467645",
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-30T15:15:05.490168+05:30",
+    "exit_price_945": 909.3,
+    "exit_order_id_945": "260731220275590",
+    "exit_timestamp_945": "2026-07-31T09:45:05.618726+05:30",
+    "realized_return_pct": 7.5545,
+    "realized_pnl": 2810.2
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "63MOONS",
+    "entry_date": "2026-07-31",
+    "reference_price": 920.85,
+    "shares_intended": 27,
+    "actual_fill_price": 920.9981,
+    "actual_fill_quantity": 27,
+    "entry_order_id": "260731221121660",
     "status": "open",
-    "entry_timestamp": "2026-07-30T15:15:05.490168+05:30"
+    "entry_timestamp": "2026-07-31T15:15:05.897012+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ESAFSFB",
+    "entry_date": "2026-07-31",
+    "reference_price": 42.06,
+    "shares_intended": 594,
+    "actual_fill_price": 41.95,
+    "actual_fill_quantity": 594,
+    "entry_order_id": "260731221121927",
+    "status": "open",
+    "entry_timestamp": "2026-07-31T15:15:10.007621+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "THEJO",
+    "entry_date": "2026-07-31",
+    "reference_price": 2100.0,
+    "shares_intended": 11,
+    "actual_fill_price": 2100.0,
+    "actual_fill_quantity": 11,
+    "entry_order_id": "260731221122116",
+    "status": "open",
+    "entry_timestamp": "2026-07-31T15:15:14.099589+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "VERANDA",
+    "entry_date": "2026-07-31",
+    "reference_price": 259.3,
+    "shares_intended": 96,
+    "actual_fill_price": 259.22,
+    "actual_fill_quantity": 96,
+    "entry_order_id": "260731221122552",
+    "status": "open",
+    "entry_timestamp": "2026-07-31T15:15:22.320951+05:30"
   }
 ]
