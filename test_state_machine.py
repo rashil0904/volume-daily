@@ -38,7 +38,10 @@ for _m in ("data_loader", "notify"):
 
 # Now import the exact objects under test
 sys.path.insert(0, str(Path(__file__).parent))
-from live_monitor import _SymState, evaluate_tick, _RETURN_MULT, _CIRCUIT_WARN_PCT
+from unittest.mock import patch
+from datetime import datetime
+import live_monitor
+from live_monitor import _SymState, evaluate_tick, _RETURN_MULT, _CIRCUIT_WARN_PCT, _IST
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -67,9 +70,17 @@ def make_state(vol_threshold=1_000_000, prev_vwap=100.0,
     )
 
 
-def tick(state, ltp, cum_vol):
-    """Feed one tick; return the set of events that fired."""
-    return evaluate_tick(state, ltp, cum_vol)
+def fake_now(hhmm: int):
+    """Return a datetime that reports the given HHMM in IST."""
+    h, m = divmod(hhmm, 100)
+    return datetime(2026, 8, 1, h, m, 0, tzinfo=_IST)
+
+
+def tick(state, ltp, cum_vol, hhmm: int = 1000):
+    """Feed one tick at the given HHMM (default 10:00, well before cutoff)."""
+    with patch.object(live_monitor, "datetime", wraps=live_monitor.datetime) as mock_dt:
+        mock_dt.now.return_value = fake_now(hhmm)
+        return evaluate_tick(state, ltp, cum_vol)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +190,31 @@ check("Tick D2 — vol+price OK, qualified fires", "qualified" in e, f"got {e}")
 # upper_circuit=0 → pct_to_upper check skipped → near_circuit should NOT fire
 check("Tick D2 — upper_circuit=0 → near_circuit does NOT fire", "near_circuit" not in e,
       f"got {e}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scenario E — 15:00 cutoff: no new events after cutoff, ltp/cum_vol still updated
+# ─────────────────────────────────────────────────────────────────────────────
+
+print("\nScenario E — 15:00 cutoff: evaluation suppressed at/after 15:00 IST\n")
+
+s5 = make_state(vol_threshold=1_000_000, prev_vwap=100.0, upper_circuit=130.0)
+
+# Tick at 14:59 — both conditions met, should qualify
+e = tick(s5, ltp=106.0, cum_vol=1_500_000, hhmm=1459)
+check("Tick E1 — 14:59, conditions met → qualified fires", "qualified" in e, f"got {e}")
+
+# Tick at exactly 15:00 — cutoff is inclusive (>=), should produce no events
+e = tick(s5, ltp=129.5, cum_vol=2_000_000, hhmm=1500)
+check("Tick E2 — 15:00 exactly → no events (cutoff is >=)", e == set(), f"got {e}")
+check("Tick E2 — near_circuit NOT set despite being in circuit zone", not s5.near_circuit)
+
+# Tick at 15:30 — well past cutoff, still no events
+e = tick(s5, ltp=129.9, cum_vol=3_000_000, hhmm=1530)
+check("Tick E3 — 15:30 → no events", e == set(), f"got {e}")
+
+# But ltp and cum_vol must still be updated (heartbeat reads them)
+check("Tick E3 — state.ltp updated to 129.9 despite cutoff", s5.ltp == 129.9)
+check("Tick E3 — state.cum_vol updated to 3,000,000 despite cutoff", s5.cum_vol == 3_000_000)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Final tally

@@ -233,21 +233,34 @@ class _SymState:
     near_circuit: bool  = False
 
 
+_EVAL_CUTOFF_HHMM = 1500   # signal_engine takes over from 3:01 PM onwards
+
+
 def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
     """
     Pure state-machine evaluation for one tick on one symbol.
 
-    Updates state.ltp and state.cum_vol, then checks the 3 signal conditions
-    and the circuit-proximity condition. Fires each condition at most once
-    (one-time flag transition). Returns a set of event strings that newly
-    fired this tick: any subset of {"qualified", "near_circuit"}.
+    Updates state.ltp and state.cum_vol unconditionally (so heartbeat can
+    report live price/volume at any time), then checks the qualified and
+    near_circuit conditions only before 15:00 IST — after that, signal_engine
+    runs the authoritative 3:01 PM batch check, so duplicate live alerts
+    would be noise. The WebSocket connection and heartbeat keep running past
+    15:00; only new event transitions are suppressed.
+
+    Fires each condition at most once (one-time flag transition). Returns a
+    set of event strings that newly fired this tick: subset of
+    {"qualified", "near_circuit"}.
 
     Must be called under the caller's lock when used from concurrent code.
-    Does NOT call Telegram, does NOT log — side-effect-free except for
-    mutating state.ltp, state.cum_vol, state.qualified, state.near_circuit.
+    Does NOT call Telegram, does NOT log.
     """
     state.ltp     = ltp
     state.cum_vol = cum_vol
+
+    now  = datetime.now(_IST)
+    hhmm = now.hour * 100 + now.minute
+    if hhmm >= _EVAL_CUTOFF_HHMM:
+        return set()
 
     fired: set[str] = set()
 
