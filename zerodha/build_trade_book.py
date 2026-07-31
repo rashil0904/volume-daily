@@ -298,7 +298,6 @@ def _build_trade_sheet(wb, rows):
     widths = [10, 13, 15, 15, 10, 11, 11, 12, 13, 12, 11, 11]
     for c, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(c)].width = w
-    ws.freeze_panes = "A4"
 
 
 def _write_xlsx(rows: list) -> None:
