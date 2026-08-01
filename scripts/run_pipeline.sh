@@ -2,7 +2,7 @@
 # Daily pipeline runner — called by cron at 3:01 PM IST Mon–Fri (VM timezone: Asia/Kolkata).
 # Logs go to ~/pipeline.log
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="python3.11"
 LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S')"
 

@@ -32,7 +32,7 @@ sys.modules["kiteconnect"] = _kc_stub
 
 # Stub pipeline modules (loaded at import time by live_monitor)
 import os
-sys.path.insert(0, str(Path(__file__).parent / "pipeline"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "pipeline"))
 for _m in ("data_loader", "notify"):
     sys.modules.setdefault(_m, types.ModuleType(_m))
 

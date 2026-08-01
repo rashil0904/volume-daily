@@ -5,7 +5,7 @@
 # in-progress code edit can never get swept into an unattended commit.
 # Logs go to ~/push_data_updates.log
 
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_PREFIX="$(date '+%Y-%m-%d %H:%M:%S')"
 
 cd "$PROJECT_DIR" || exit 1

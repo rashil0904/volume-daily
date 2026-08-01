@@ -34,17 +34,17 @@ import pandas as pd
 from kiteconnect import KiteConnect, KiteTicker
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_ROOT         = Path(__file__).resolve().parent
+_ROOT         = Path(__file__).resolve().parent.parent   # project root (one above live/)
 _PIPELINE_DIR = _ROOT / "pipeline"
 _CANDLES_DIR  = _ROOT / "data" / "candles"
 _LOGS_DIR     = _ROOT / "logs"
 _TOKEN_FILE   = _ROOT / "zerodha" / ".token.json"
 _IST          = ZoneInfo("Asia/Kolkata")
 
-# Add pipeline/ to path so `import notify`, `import data_loader` work
-# (pipeline/ has no __init__.py — not a package, modules imported directly)
+# Add pipeline/ and live/ to path so pipeline modules and imbalance_tracker resolve
 sys.path.insert(0, str(_PIPELINE_DIR))
 sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # live/ for imbalance_tracker
 
 # Load .env before importing pipeline modules that consume it at module level
 _env_file = _PIPELINE_DIR / ".env"
@@ -57,6 +57,7 @@ if _env_file.exists():
 
 import data_loader
 import notify
+from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance
 
 # ── Strategy constants (mirror signal_engine.py) ──────────────────────────────
 _MIN_PERIODS       = 36
@@ -333,10 +334,12 @@ class LiveMonitor:
     def __init__(self, api_key: str, access_token: str):
         self._api_key      = api_key
         self._access_token = access_token
-        self._states: dict[int, _SymState] = {}  # instrument_token -> state
-        self._all_tokens: list[int]          = []
-        self._log  = _CsvLog()
-        self._lock = threading.Lock()
+        self._states: dict[int, _SymState] = {}       # instrument_token -> state
+        self._imb_states: dict[int, ImbalanceState] = {}  # instrument_token -> imbalance state
+        self._all_tokens: list[int] = []
+        self._log     = _CsvLog()
+        self._imb_log = ImbalanceLogger(_LOGS_DIR)
+        self._lock    = threading.Lock()
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -373,6 +376,7 @@ class LiveMonitor:
                 upper_circuit = upper,
                 lower_circuit = lower,
             )
+            self._imb_states[token] = ImbalanceState(symbol=sym)
 
         self._all_tokens = list(self._states)
         print(f"\nReady — monitoring {len(self._all_tokens)} symbols via KiteTicker MODE_QUOTE.")
@@ -390,9 +394,11 @@ class LiveMonitor:
             cum_vol = float(tick.get("volume_traded") or 0.0)
 
             with self._lock:
-                fired = evaluate_tick(state, ltp, cum_vol)
-                if "qualified"    in fired: self._fire_qualified(state)
-                if "near_circuit" in fired: self._fire_near_circuit(state)
+                fired      = evaluate_tick(state, ltp, cum_vol)
+                imb_state  = self._imb_states.get(token)
+                imb_result = update_imbalance(imb_state, ltp, cum_vol) if imb_state else (None, None, "no_data")
+                if "qualified"    in fired: self._fire_qualified(state, imb_state, imb_result)
+                if "near_circuit" in fired: self._fire_near_circuit(state, imb_state, imb_result)
 
     def _on_connect(self, ws, response) -> None:
         n = len(self._all_tokens)
@@ -429,7 +435,9 @@ class LiveMonitor:
 
     # ── Signal events (called under self._lock) ───────────────────────────────
 
-    def _fire_qualified(self, state: _SymState) -> None:
+    def _fire_qualified(self, state: _SymState,
+                        imb_state: ImbalanceState | None,
+                        imb_result: tuple) -> None:
         ts          = datetime.now(_IST).strftime("%H:%M:%S")
         vol_ratio   = state.cum_vol / state.vol_threshold if state.vol_threshold else 0.0
         vwap_target = state.prev_vwap * _RETURN_MULT
@@ -439,6 +447,9 @@ class LiveMonitor:
             f"ltp=₹{state.ltp:>9,.2f}  vwap_target=₹{vwap_target:,.2f}"
         )
         self._log.write("qualified", state)
+        if imb_state is not None:
+            c, r, lbl = imb_result
+            self._imb_log.log_event("qualified", imb_state, c, r, lbl)
         try:
             notify.send_monitor_qualified(
                 symbol      = state.symbol,
@@ -453,7 +464,9 @@ class LiveMonitor:
         except Exception as exc:
             print(f"  [notify] qualified failed: {exc}", file=sys.stderr)
 
-    def _fire_near_circuit(self, state: _SymState) -> None:
+    def _fire_near_circuit(self, state: _SymState,
+                           imb_state: ImbalanceState | None,
+                           imb_result: tuple) -> None:
         ts           = datetime.now(_IST).strftime("%H:%M:%S")
         pct_to_upper = (state.upper_circuit - state.ltp) / state.ltp * 100
         print(
@@ -462,6 +475,9 @@ class LiveMonitor:
             f"gap={pct_to_upper:.2f}%"
         )
         self._log.write("near_circuit", state)
+        if imb_state is not None:
+            c, r, lbl = imb_result
+            self._imb_log.log_event("near_circuit", imb_state, c, r, lbl)
         try:
             notify.send_monitor_near_circuit(
                 symbol        = state.symbol,

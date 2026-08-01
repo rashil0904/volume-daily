@@ -60,7 +60,7 @@ EOF
 fi
 
 echo "=== Step 6: Cron job ==="
-CRON_SCRIPT="$PROJECT_DIR/run_pipeline.sh"
+CRON_SCRIPT="$PROJECT_DIR/scripts/run_pipeline.sh"
 CRON_LINE="1 15 * * 1-5 /bin/bash $CRON_SCRIPT >> $HOME/pipeline.log 2>&1"
 
 # Check if cron already set
