@@ -40,6 +40,17 @@ if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
     raise EnvironmentError(
         "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in pipeline/.env before sending notifications."
     )
+
+# Forum-topic routing -- message_thread_id per topic, read from pipeline/.env
+# (same gitignored file as the token/chat_id above). A missing/unset topic
+# falls back to no thread id (posts to General) rather than failing.
+TOPIC_IDS = {
+    "signals":       os.environ.get("TELEGRAM_TOPIC_SIGNALS"),
+    "entries_exits": os.environ.get("TELEGRAM_TOPIC_ENTRIES_EXITS"),
+    "live_tracking": os.environ.get("TELEGRAM_TOPIC_LIVE_TRACKING"),
+    "errors":        os.environ.get("TELEGRAM_TOPIC_ERRORS"),
+    "pnl":           os.environ.get("TELEGRAM_TOPIC_PNL"),
+}
 # ──────────────────────────────────────────────────────────────────────────────
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -114,14 +125,19 @@ def _mcap_warning(mcap_status: str, mcap_st: dict) -> str:
 
 # ── Telegram sender ───────────────────────────────────────────────────────────
 
-def _send(text: str) -> None:
+def _send(text: str, topic: str | None = None) -> None:
+    """topic: optional key into TOPIC_IDS. Omitted (or unset in .env) posts to
+    General exactly as before -- adding topic routing never changes behavior
+    for a caller that doesn't ask for it."""
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"}
+    if topic:
+        thread_id = TOPIC_IDS.get(topic)
+        if thread_id:
+            payload["message_thread_id"] = int(thread_id)
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
-        resp = requests.post(
-            url,
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML"},
-            timeout=12,
-        )
+        resp = requests.post(url, json=payload, timeout=12)
         resp.raise_for_status()
     except Exception as exc:
         print(f"  WARNING: Telegram notification failed: {exc}", file=sys.stderr)
@@ -148,7 +164,7 @@ def send_success(date_str: str, start_ts, mcap_status: str = "fresh") -> None:
     parts.append("\n<b>Trade signals:</b>")
     parts.append(f"<pre>{html_lib.escape(table)}</pre>")
 
-    _send("\n".join(parts))
+    _send("\n".join(parts), topic="signals")
     print(f"  Telegram sent ({n_signals} signal{'s' if n_signals != 1 else ''})")
 
 
@@ -169,7 +185,7 @@ def send_failure(date_str: str, failed_step: str, error_msg: str,
     parts.append("\n<b>Error:</b>")
     parts.append(f"<pre>{html_lib.escape(error_msg or '(no detail)')}</pre>")
 
-    _send("\n".join(parts))
+    _send("\n".join(parts), topic="errors")
     print("  Telegram failure notification sent")
 
 
@@ -207,7 +223,7 @@ def send_scan_preview(date_str: str, as_of_hhmm: int, rows: list) -> None:
         "treat as a directional read, not a confirmed signal. Not read by any execution script.</i>"
     )
 
-    _send("\n".join(parts))
+    _send("\n".join(parts), topic="live_tracking")
     print(f"  Telegram sent ({len(rows)} preview signal{'s' if len(rows) != 1 else ''})")
 
 
@@ -223,7 +239,7 @@ def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
         f"<b>Shares:</b> {shares}",
         f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
-    _send(text)
+    _send(text, topic="entries_exits")
 
 
 def send_exit_945(broker: str, symbol: str, exit_price: float,
@@ -237,7 +253,7 @@ def send_exit_945(broker: str, symbol: str, exit_price: float,
         f"<b>Return:</b> {return_pct:+.2f}%",
         f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
     ])
-    _send(text)
+    _send(text, topic="entries_exits")
 
 
 def send_exit_945_nodata(broker: str, symbol: str, shares_exited: int,
@@ -252,7 +268,7 @@ def send_exit_945_nodata(broker: str, symbol: str, shares_exited: int,
         f"<b>Partial fill price:</b> &#8377;{exit_price:,.2f}",
         "Remaining shares will be force-exited at 12pm.",
     ])
-    _send(text)
+    _send(text, topic="entries_exits")
 
 
 def send_force_exit_1200(broker: str, symbol: str, exit_price: float,
@@ -267,13 +283,14 @@ def send_force_exit_1200(broker: str, symbol: str, exit_price: float,
         f"<b>Return:</b> {return_pct:+.2f}%",
         f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
     ])
-    _send(text)
+    _send(text, topic="entries_exits")
 
 
 def send_nothing_open_at_1200(broker: str) -> None:
     _send(
         f"<b>12pm Exit — {html_lib.escape(broker)}</b>\n"
-        "All positions already exited at 9:45am — nothing to force-close."
+        "All positions already exited at 9:45am — nothing to force-close.",
+        topic="entries_exits",
     )
 
 
@@ -290,7 +307,7 @@ def send_daily_summary(broker: str, n_opened: int, n_exited_945: int,
         f"<b>Force-closed 12pm :</b> {n_force_1200}",
         f"<b>Total P&amp;L     :</b> &#8377;{total_pnl:+,.2f}",
     ])
-    _send(text)
+    _send(text, topic="pnl")
 
 
 # ── Live monitor notifications ────────────────────────────────────────────────
@@ -306,7 +323,7 @@ def send_monitor_qualified(symbol: str, ts_str: str, cum_vol: int, threshold: in
         f"<b>VWAP target (prev+5%):</b> &#8377;{vwap_target:,.2f}",
         f"<b>Prev-day VWAP:</b> &#8377;{prev_vwap:,.2f}",
     ])
-    _send(text)
+    _send(text, topic="live_tracking")
 
 
 def send_monitor_near_circuit(symbol: str, ts_str: str, ltp: float,
@@ -318,7 +335,7 @@ def send_monitor_near_circuit(symbol: str, ts_str: str, ltp: float,
         f"<b>Upper circuit:</b> &#8377;{upper_circuit:,.2f}",
         f"<b>Gap to circuit:</b> {pct_to_upper:.2f}%",
     ])
-    _send(text)
+    _send(text, topic="live_tracking")
 
 
 def send_monitor_heartbeat(ts_str: str, tracking: int, qualified: int,
@@ -330,7 +347,7 @@ def send_monitor_heartbeat(ts_str: str, tracking: int, qualified: int,
         f"<b>Qualified today:</b> {qualified}",
         f"<b>Near circuit today:</b> {near_circuit}",
     ])
-    _send(text)
+    _send(text, topic="errors")
 
 
 def send_monitor_disconnect(code, reason: str) -> None:
@@ -340,13 +357,14 @@ def send_monitor_disconnect(code, reason: str) -> None:
         f"<b>Reason:</b> {html_lib.escape(str(reason) or 'unknown')}",
         "Attempting to reconnect automatically…",
     ])
-    _send(text)
+    _send(text, topic="errors")
 
 
 def send_monitor_reconnect(attempt: int) -> None:
     _send(
         f"<b>&#128260; Monitor WebSocket RECONNECTING</b>\n"
-        f"<b>Attempt:</b> {attempt}"
+        f"<b>Attempt:</b> {attempt}",
+        topic="errors",
     )
 
 
