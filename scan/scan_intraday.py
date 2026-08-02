@@ -21,7 +21,6 @@ Usage:
 """
 
 import csv
-import math
 import os
 import sys
 from datetime import date, datetime
@@ -31,6 +30,7 @@ from zoneinfo import ZoneInfo
 _ROOT        = Path(__file__).resolve().parent.parent
 _PIPELINE_DIR = _ROOT / "pipeline"
 sys.path.insert(0, str(_PIPELINE_DIR))
+sys.path.insert(0, str(_ROOT))
 
 # Load .env before importing data_loader (which also loads it, but be explicit)
 _env_file = _PIPELINE_DIR / ".env"
@@ -44,6 +44,7 @@ if _env_file.exists():
 import data_loader
 import signal_engine
 import notify
+from common.calc_utils import compute_allocation, compute_shares
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 MCAP_DAILY_DIR = _ROOT / "data" / "market_cap_daily"
@@ -114,12 +115,12 @@ def main():
         return
 
     n          = len(raw_signals)
-    allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
+    allocation = compute_allocation(TOTAL_CAPITAL, n)
     print(f"\n  Capital: ₹{TOTAL_CAPITAL:,.0f}  |  {n} signal(s)  →  ₹{allocation:,.0f}/stock (preview sizing)")
 
     rows = []
     for s in raw_signals:
-        shares = math.floor(allocation / s["ref_price"]) if s["ref_price"] > 0 else 0
+        shares = compute_shares(allocation, s["ref_price"])
         rows.append({
             "symbol":                   s["symbol"],
             "shares":                   shares,

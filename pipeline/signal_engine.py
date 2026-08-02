@@ -37,6 +37,7 @@ Public API
 """
 
 import csv
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -44,6 +45,9 @@ import pandas as pd
 
 _ROOT       = Path(__file__).resolve().parent.parent
 CANDLES_DIR = _ROOT / "data" / "candles"
+
+sys.path.insert(0, str(_ROOT))
+from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 
 VOLUME_MULT       = 6
 MIN_PERIODS       = 36
@@ -63,42 +67,23 @@ def _check_symbol(symbol: str, today: date, mode: str,
     if not csv_path.exists():
         return None
 
-    df = pd.read_csv(csv_path)
-    for col in ("open", "high", "low", "close", "volume"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
+    df = load_clean_candles(csv_path)
     if df.empty:
         return None
-
-    df["ts"] = pd.to_datetime(df["timestamp"])
-    if df["ts"].dt.tz is not None:
-        df["ts"] = df["ts"].dt.tz_convert("Asia/Kolkata")
-    df["date"] = df["ts"].dt.date
-    df["hhmm"] = df["ts"].dt.hour * 100 + df["ts"].dt.minute
 
     today_df = df[df["date"] == today]
     if today_df.empty:
         return None
 
     # 36-day rolling avg of prior full-day volume (non-zero prior days only)
-    full_day_vol  = df.groupby("date")["volume"].sum()
-    dates         = sorted(full_day_vol.index.tolist())
-    prior_nonzero = [full_day_vol[d] for d in dates if d < today and full_day_vol[d] > 0]
-    if len(prior_nonzero) < MIN_PERIODS:
+    avg_36 = compute_36day_avg_volume(df, today, MIN_PERIODS)
+    if avg_36 is None:
         return None
-    avg_36 = sum(prior_nonzero[-MIN_PERIODS:]) / MIN_PERIODS
 
     # Previous trading day's VWAP close from its 15:00 + 15:15 candles
-    prev_dates = [d for d in dates if d < today]
-    if not prev_dates:
+    prev_vwap = compute_prev_day_vwap(df, today)
+    if prev_vwap is None:
         return None
-    prev_d    = prev_dates[-1]
-    prev_df   = df[df["date"] == prev_d]
-    vwap_rows = prev_df[prev_df["hhmm"].isin([1500, 1515])]
-    if vwap_rows.empty or vwap_rows["volume"].sum() == 0:
-        return None
-    tp        = (vwap_rows["high"] + vwap_rows["low"] + vwap_rows["close"]) / 3
-    prev_vwap = float((tp * vwap_rows["volume"]).sum() / vwap_rows["volume"].sum())
 
     # ── Mode-specific reference candle and volume threshold ───────────────────
     volume_ratio: float | None = None

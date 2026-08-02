@@ -25,7 +25,6 @@ def _ipv4_only_getaddrinfo(*args, **kwargs):
 socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 import csv
-import math
 import os
 import sys
 import time
@@ -35,6 +34,7 @@ from pathlib import Path
 _PIPELINE_DIR = Path(__file__).resolve().parent
 _ROOT         = _PIPELINE_DIR.parent
 sys.path.insert(0, str(_PIPELINE_DIR))
+sys.path.insert(0, str(_ROOT))
 
 # ── Load .env (data_loader also does this, but load early so notify has creds) ─
 _env_file = _PIPELINE_DIR / ".env"
@@ -51,6 +51,7 @@ if not os.environ.get("UPSTOX_ACCESS_TOKEN"):
 import data_loader
 import signal_engine
 import notify
+from common.calc_utils import compute_allocation, compute_shares
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 UNIVERSE_FILE   = _ROOT / "data" / "universe_combined.csv"
@@ -196,12 +197,12 @@ def main():
             print(f"\n  No signals for {TODAY.isoformat()} — trade list not written.")
         else:
             n          = len(raw_signals)
-            allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
+            allocation = compute_allocation(TOTAL_CAPITAL, n)
             print(f"\n  Capital: ₹{TOTAL_CAPITAL:,.0f}  |  {n} signal(s)  →  ₹{allocation:,.0f}/stock")
 
             signals = []
             for s in raw_signals:
-                shares = math.floor(allocation / s["ref_price"]) if s["ref_price"] > 0 else 0
+                shares = compute_shares(allocation, s["ref_price"])
                 signals.append({
                     "symbol":    s["symbol"],
                     "shares":    shares,

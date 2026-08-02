@@ -33,6 +33,7 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
 from zerodha.trade import buy, sell
 from zerodha.trade import order_status as _kite_order_status
+from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -76,54 +77,22 @@ def _ikey(symbol: str) -> str:
 
 # ── Candle price fetch (1-minute, via data_loader) ────────────────────────────
 
-def _close_at(candles: list, hhmm: int) -> float | None:
-    """Return close of candle whose start time (IST) matches hhmm (e.g. 1513 for 15:13)."""
-    for c in candles:
-        try:
-            dt = datetime.fromisoformat(str(c[0]))
-            if dt.hour * 100 + dt.minute == hhmm:
-                return float(c[4])
-        except (IndexError, ValueError, TypeError):
-            continue
-    return None
-
-
-def _latest_close_before(candles: list, max_hhmm: int) -> tuple[float, int] | None:
-    """Close of the latest candle at or before max_hhmm, by start time (IST).
-    None if no candle qualifies. We already have the full day's 1-min data loaded,
-    so on a gap there's no reason to skip past fresher data for an older fixed point."""
-    best = None
-    for c in candles:
-        try:
-            dt   = datetime.fromisoformat(str(c[0]))
-            hhmm = dt.hour * 100 + dt.minute
-            if hhmm <= max_hhmm and (best is None or hhmm > best[1]):
-                best = (float(c[4]), hhmm)
-        except (IndexError, ValueError, TypeError):
-            continue
-    return best
-
-
 def get_reference_price(symbol: str) -> tuple[float, int]:
     """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13, then to
     whichever candle at/before 15:14 is actually the most recent available (not a fixed
     older point) if neither of those posted -- e.g. an illiquid stock with no trades in
     that exact minute. Returns (price, hhmm_used). Raises ValueError only if there's no
     candle data at all up to 15:14."""
-    matched       = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
+    matched        = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
-    candles       = candles_by_sym.get(symbol, [])
-    for hhmm in (1514, 1513):
-        price = _close_at(candles, hhmm)
-        if price is not None:
-            return price, hhmm
-    latest = _latest_close_before(candles, 1514)
-    if latest is not None:
-        return latest
-    raise ValueError(
-        f"[zerodha] No candle data at all for {symbol} up to 15:14 "
-        f"({len(candles)} candles). Run after 15:15 IST."
-    )
+    candles        = candles_by_sym.get(symbol, [])
+    try:
+        return pick_reference_price(candles, 1514, 1513)
+    except ValueError:
+        raise ValueError(
+            f"[zerodha] No candle data at all for {symbol} up to 15:14 "
+            f"({len(candles)} candles). Run after 15:15 IST."
+        )
 
 
 def get_ltp(symbol: str) -> float:
@@ -273,7 +242,7 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
     capital    = capital if capital is not None else TOTAL_CAPITAL
     # Max ₹ per position is capital/4 (idle capital allowed when n<=4); once
     # signals hit 5+, split the full capital equally instead of over-allocating.
-    allocation = capital / 4 if n <= 4 else capital / n
+    allocation = compute_allocation(capital, n)
 
     print(f"\n{'='*60}")
     print(f"[zerodha] Stage 1 — Entry {trade_date}{'  DRY RUN' if dry_run else ''}")
@@ -300,7 +269,7 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
             print(f"[zerodha]   SKIP — no reference price: {exc}")
             continue
 
-        shares = math.floor(allocation / ref) if ref > 0 else 0
+        shares = compute_shares(allocation, ref)
         if shares == 0:
             print(f"[zerodha]   SKIP — 0 shares at ₹{ref:,.2f} (allocation ₹{allocation:,.0f})")
             continue

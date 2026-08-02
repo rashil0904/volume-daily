@@ -12,7 +12,6 @@ Usage:
 """
 
 import csv
-import math
 import sys
 from datetime import date
 from pathlib import Path
@@ -20,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from zerodha.trade import buy
+from common.calc_utils import compute_allocation, compute_shares
 
 _ROOT        = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _ROOT / "results"
@@ -57,10 +57,10 @@ def _load_trades(trade_date: date) -> list[dict]:
             ref_price = float(row["ref_price"])
         else:
             # Old format — recalculate shares from capital allocation
-            price     = float(row.get("entry_price_315pm") or row.get("ref_price") or 0)
-            allocation = 125_000 if n <= 4 else TOTAL_CAPITAL // n
-            shares    = math.floor(allocation / price) if price > 0 else 0
-            ref_price = price
+            price      = float(row.get("entry_price_315pm") or row.get("ref_price") or 0)
+            allocation = compute_allocation(TOTAL_CAPITAL, n)
+            shares     = compute_shares(allocation, price)
+            ref_price  = price
 
         if shares <= 0:
             print(f"  SKIP {symbol} — shares={shares} (price too high or zero)")

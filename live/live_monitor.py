@@ -58,6 +58,7 @@ if _env_file.exists():
 import data_loader
 import notify
 from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance
+from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 
 # ── Strategy constants (mirror signal_engine.py) ──────────────────────────────
 _MIN_PERIODS       = 36
@@ -114,39 +115,20 @@ def _compute_baselines(universe: dict) -> dict[str, _Baseline]:
         if not csv_path.exists():
             continue
         try:
-            df = pd.read_csv(csv_path)
-            for col in ("open", "high", "low", "close", "volume"):
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            df.dropna(subset=["open", "high", "low", "close", "volume"], inplace=True)
+            df = load_clean_candles(csv_path)
             if df.empty:
                 continue
 
-            df["ts"] = pd.to_datetime(df["timestamp"])
-            if df["ts"].dt.tz is not None:
-                df["ts"] = df["ts"].dt.tz_convert("Asia/Kolkata")
-            df["date"] = df["ts"].dt.date
-            df["hhmm"] = df["ts"].dt.hour * 100 + df["ts"].dt.minute
-
             # 36-day rolling avg of prior full-day volume (non-zero days only)
-            full_day_vol  = df.groupby("date")["volume"].sum()
-            dates         = sorted(full_day_vol.index.tolist())
-            prior_nonzero = [full_day_vol[d] for d in dates if d < today and full_day_vol[d] > 0]
-            if len(prior_nonzero) < _MIN_PERIODS:
+            avg_36 = compute_36day_avg_volume(df, today, _MIN_PERIODS)
+            if avg_36 is None:
                 continue
-            avg_36    = sum(prior_nonzero[-_MIN_PERIODS:]) / _MIN_PERIODS
             threshold = _VOLUME_MULT * avg_36
 
             # Previous trading day's VWAP from 15:00 + 15:15 candles
-            prev_dates = [d for d in dates if d < today]
-            if not prev_dates:
+            prev_vwap = compute_prev_day_vwap(df, today)
+            if prev_vwap is None:
                 continue
-            prev_d    = prev_dates[-1]
-            prev_df   = df[df["date"] == prev_d]
-            vwap_rows = prev_df[prev_df["hhmm"].isin([1500, 1515])]
-            if vwap_rows.empty or vwap_rows["volume"].sum() == 0:
-                continue
-            tp        = (vwap_rows["high"] + vwap_rows["low"] + vwap_rows["close"]) / 3
-            prev_vwap = float((tp * vwap_rows["volume"]).sum() / vwap_rows["volume"].sum())
 
             baselines[sym] = _Baseline(sym, threshold, prev_vwap)
 
