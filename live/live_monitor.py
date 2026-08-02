@@ -361,7 +361,7 @@ class LiveMonitor:
             self._imb_states[token] = ImbalanceState(symbol=sym)
 
         self._all_tokens = list(self._states)
-        print(f"\nReady — monitoring {len(self._all_tokens)} symbols via KiteTicker MODE_QUOTE.")
+        print(f"\nReady — monitoring {len(self._all_tokens)} symbols via KiteTicker MODE_FULL.")
 
     # ── WebSocket callbacks ───────────────────────────────────────────────────
 
@@ -375,18 +375,26 @@ class LiveMonitor:
             ltp     = float(tick.get("last_price")   or 0.0)
             cum_vol = float(tick.get("volume_traded") or 0.0)
 
+            # MODE_FULL-only field: 5-level bid/ask depth. Summed across all
+            # levels on each side (not just best bid/ask) to smooth out a
+            # single large resting order at one level.
+            depth       = tick.get("depth") or {}
+            bid_qty_tot = sum(int(lvl.get("quantity") or 0) for lvl in (depth.get("buy")  or []))
+            ask_qty_tot = sum(int(lvl.get("quantity") or 0) for lvl in (depth.get("sell") or []))
+
             with self._lock:
                 fired      = evaluate_tick(state, ltp, cum_vol)
                 imb_state  = self._imb_states.get(token)
-                imb_result = update_imbalance(imb_state, ltp, cum_vol) if imb_state else (None, None, "no_data")
+                imb_result = (update_imbalance(imb_state, bid_qty_tot, ask_qty_tot)
+                             if imb_state else (None, None, "no_data"))
                 if "qualified"    in fired: self._fire_qualified(state, imb_state, imb_result)
                 if "near_circuit" in fired: self._fire_near_circuit(state, imb_state, imb_result)
 
     def _on_connect(self, ws, response) -> None:
         n = len(self._all_tokens)
-        print(f"[WebSocket] Connected — subscribing {n} tokens in MODE_QUOTE…")
+        print(f"[WebSocket] Connected — subscribing {n} tokens in MODE_FULL…")
         ws.subscribe(self._all_tokens)
-        ws.set_mode(ws.MODE_QUOTE, self._all_tokens)
+        ws.set_mode(ws.MODE_FULL, self._all_tokens)
 
     def _on_close(self, ws, code, reason) -> None:
         print(f"[WebSocket] Closed — code={code}  reason={reason}")
@@ -405,7 +413,7 @@ class LiveMonitor:
         if self._all_tokens:
             try:
                 ws.subscribe(self._all_tokens)
-                ws.set_mode(ws.MODE_QUOTE, self._all_tokens)
+                ws.set_mode(ws.MODE_FULL, self._all_tokens)
             except Exception:
                 pass
 
@@ -430,8 +438,8 @@ class LiveMonitor:
         )
         self._log.write("qualified", state)
         if imb_state is not None:
-            c, r, lbl = imb_result
-            self._imb_log.log_event("qualified", imb_state, c, r, lbl)
+            instant, rolling, lbl = imb_result
+            self._imb_log.log_event("qualified", imb_state, instant, rolling, lbl)
         try:
             notify.send_monitor_qualified(
                 symbol      = state.symbol,
@@ -458,8 +466,8 @@ class LiveMonitor:
         )
         self._log.write("near_circuit", state)
         if imb_state is not None:
-            c, r, lbl = imb_result
-            self._imb_log.log_event("near_circuit", imb_state, c, r, lbl)
+            instant, rolling, lbl = imb_result
+            self._imb_log.log_event("near_circuit", imb_state, instant, rolling, lbl)
         try:
             notify.send_monitor_near_circuit(
                 symbol        = state.symbol,
