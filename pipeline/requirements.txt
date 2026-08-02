@@ -1,3 +1,5 @@
-pandas>=2.0
-requests>=2.31
-python-dotenv>=1.0
+pandas==3.0.3
+requests==2.31.0
+python-dotenv==1.2.2
+openpyxl==3.1.5
+kiteconnect  # not installed in this dev environment -- version unverified, confirm/pin after testing against live_monitor.py
