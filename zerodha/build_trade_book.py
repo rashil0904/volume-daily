@@ -62,10 +62,10 @@ DP_CHARGE = 15.34  # flat, per scrip, sell-side only — not available via any K
 
 # ── Charges (Kite API) ───────────────────────────────────────────────────
 
-def _charge_leg(order_id, symbol, transaction_type, qty, price):
+def _charge_leg(order_id, symbol, transaction_type, qty, price, product="CNC"):
     return {
         "order_id": order_id, "exchange": "NSE", "tradingsymbol": symbol,
-        "transaction_type": transaction_type, "variety": "regular", "product": "CNC",
+        "transaction_type": transaction_type, "variety": "regular", "product": product,
         "order_type": "MARKET", "quantity": qty, "average_price": price,
     }
 
@@ -88,8 +88,9 @@ def _fetch_charge(leg: dict) -> float:
 def _build_rows(positions: list) -> list:
     charges = {}  # position_index -> {"entry": total, "exit": total}
     for i, p in enumerate(positions):
+        product   = p.get("product", "CNC")
         entry_leg = _charge_leg(p["entry_order_id"], p["symbol"], "BUY",
-                                 p["actual_fill_quantity"], p["actual_fill_price"])
+                                 p["actual_fill_quantity"], p["actual_fill_price"], product)
         try:
             charges.setdefault(i, {})["entry"] = _fetch_charge(entry_leg)
         except Exception as exc:
@@ -100,7 +101,7 @@ def _build_rows(positions: list) -> list:
         if stage_info:
             price_key, _, order_id_key = stage_info
             exit_leg = _charge_leg(p[order_id_key], p["symbol"], "SELL",
-                                    p["actual_fill_quantity"], p[price_key])
+                                    p["actual_fill_quantity"], p[price_key], product)
             try:
                 charges.setdefault(i, {})["exit"] = _fetch_charge(exit_leg)
             except Exception as exc:

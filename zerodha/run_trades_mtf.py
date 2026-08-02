@@ -1,35 +1,46 @@
 """
-zerodha/run_trades_mtf.py — Standalone MTF entry script (Zerodha Kite)
-=======================================================================
+zerodha/run_trades_mtf.py — Standalone MTF entry+exit flow (Zerodha Kite)
+==========================================================================
 Separate from the existing CNC flow in run_trades.py -- reads the same
 day's trade list and computes quantity the same way (capital/4-or-n
 allocation -> floor(allocation/ref_price), same Upstox 15:14/15:13/14:45
-reference candle), but places orders with product="MTF" instead of "CNC".
+reference candle). Places orders with product="MTF" when live leverage is
+actually available; falls back to a resized product="CNC" buy (half the
+capital base) when it isn't.
 
-trade.py's buy() already accepts `product` as a parameter, so this reuses
-it directly -- no new function was needed there, and nothing in
+trade.py's buy()/sell() already accept `product` as a parameter, so this
+reuses them directly -- no new function was needed there, and nothing in
 run_trades.py or trade.py has been touched.
 
-Before each order this checks live per-symbol leverage and required
+Before each entry this checks live per-symbol leverage and required
 margin via POST /margins/orders (product=MTF), and confirms available
 account margin covers it (GET /user/margins) -- skipping (not halting)
 any symbol that doesn't fit. Per-symbol leverage/margin used is logged to
-results/trades/mtf_entries_YYYY-MM-DD.csv, separate from positions_zerodha.json
-so it can never collide with or be picked up by the CNC exit stages.
+results/trades/mtf_entries_YYYY-MM-DD.csv for audit purposes.
 
-This script only places entry orders -- there is no MTF exit stage here.
+Live (non-dry-run) fills are ALSO written into results/positions_zerodha.json
+-- the same file run_trades.py uses -- tagged with a "product" field
+(MTF or CNC) that run_trades.py never writes. This script's own exit
+stages (--exit-945/--exit-1200, mirroring run_trades.py's Stage 2/3) use
+that field's presence to scope themselves to ONLY the positions this
+script entered; run_trades.py's own exit stages and its untagged legacy
+positions are left alone.
+
 MTF buys also require an email pledge approval (same day, by ~7pm) before
 the position is actually established; this script cannot complete that
-step, and prints a reminder at the end of every run.
+step, and prints a reminder at the end of every entry run.
 
 Usage:
-    python zerodha/run_trades_mtf.py --entry [--capital AMOUNT] [--dry-run] [--date YYYY-MM-DD]
+    python zerodha/run_trades_mtf.py --entry      [--capital AMOUNT] [--dry-run] [--date YYYY-MM-DD]
+    python zerodha/run_trades_mtf.py --exit-945    [--dry-run]
+    python zerodha/run_trades_mtf.py --exit-1200   [--dry-run]
 
 Not wired into any cron job -- run manually until tested.
 """
 
 import argparse
 import csv
+import json
 import math
 import sys
 import time
@@ -42,13 +53,16 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
 from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
-from zerodha.trade import buy, order_status as _kite_order_status
+from zerodha.trade import buy, sell, order_status as _kite_order_status
+from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 _IST          = ZoneInfo("Asia/Kolkata")
+_BROKER       = "zerodha"
 _RESULTS_DIR  = _ROOT / "results"
+_POS_FILE     = _RESULTS_DIR / "positions_zerodha.json"
 _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 _MTF_LOG_DIR  = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 500_000
@@ -75,33 +89,6 @@ def _ikey(symbol: str) -> str:
     return key
 
 
-def _close_at(candles: list, hhmm: int) -> float | None:
-    for c in candles:
-        try:
-            dt = datetime.fromisoformat(str(c[0]))
-            if dt.hour * 100 + dt.minute == hhmm:
-                return float(c[4])
-        except (IndexError, ValueError, TypeError):
-            continue
-    return None
-
-
-def _latest_close_before(candles: list, max_hhmm: int) -> tuple[float, int] | None:
-    """Close of the latest candle at or before max_hhmm, by start time (IST).
-    None if no candle qualifies. We already have the full day's 1-min data loaded,
-    so on a gap there's no reason to skip past fresher data for an older fixed point."""
-    best = None
-    for c in candles:
-        try:
-            dt   = datetime.fromisoformat(str(c[0]))
-            hhmm = dt.hour * 100 + dt.minute
-            if hhmm <= max_hhmm and (best is None or hhmm > best[1]):
-                best = (float(c[4]), hhmm)
-        except (IndexError, ValueError, TypeError):
-            continue
-    return best
-
-
 def get_reference_price(symbol: str) -> tuple[float, int]:
     """Same reference candle logic as run_trades.py's get_reference_price: close of
     15:14 1-min candle, falling back to 15:13, then whichever candle at/before 15:14
@@ -109,17 +96,13 @@ def get_reference_price(symbol: str) -> tuple[float, int]:
     matched        = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
     candles        = candles_by_sym.get(symbol, [])
-    for hhmm in (1514, 1513):
-        price = _close_at(candles, hhmm)
-        if price is not None:
-            return price, hhmm
-    latest = _latest_close_before(candles, 1514)
-    if latest is not None:
-        return latest
-    raise ValueError(
-        f"[mtf] No candle data at all for {symbol} up to 15:14 "
-        f"({len(candles)} candles). Run after 15:15 IST."
-    )
+    try:
+        return pick_reference_price(candles, 1514, 1513)
+    except ValueError:
+        raise ValueError(
+            f"[mtf] No candle data at all for {symbol} up to 15:14 "
+            f"({len(candles)} candles). Run after 15:15 IST."
+        )
 
 
 # ── Trade list (same file, same parsing as run_trades.py) ────────────────────
@@ -216,6 +199,81 @@ def _available_margin() -> float | None:
         return None
 
 
+def get_ltp(symbol: str) -> float:
+    """Same as run_trades.py's get_ltp: current LTP via Kite's /quote/ltp, used to
+    compute Stage 2 exit P&L directly rather than trusting Kite's own positions/
+    holdings pnl field (that field can go stale same-day). Raises ValueError if no
+    LTP is returned."""
+    session, _ = _kite_session()
+    resp = session.get(f"{_KITE_BASE}/quote/ltp", params={"i": f"NSE:{symbol}"}, timeout=15)
+    resp.raise_for_status()
+    entry = resp.json().get("data", {}).get(f"NSE:{symbol}")
+    if not entry or entry.get("last_price") is None:
+        raise ValueError(f"[mtf] No LTP found for {symbol}.")
+    return float(entry["last_price"])
+
+
+# ── Positions JSON (shared with run_trades.py) ────────────────────────────────
+
+def _load_pos() -> list:
+    if not _POS_FILE.exists():
+        return []
+    try:
+        return json.loads(_POS_FILE.read_text())
+    except Exception:
+        return []
+
+
+def _save_pos(positions: list) -> None:
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    _POS_FILE.write_text(json.dumps(positions, indent=2, ensure_ascii=False))
+
+
+def _open_pos_mtf(positions: list) -> list:
+    """Positions this script itself entered and still needs to exit. Scoped to rows
+    carrying a "product" key -- run_trades.py never writes that key, so this can
+    never pick up (or touch) its legacy/CNC positions."""
+    return [p for p in positions
+            if p.get("broker") == _BROKER
+            and "product" in p
+            and p.get("status") in ("open", "partial_exit_945_nodata")]
+
+
+# ── Broker quantity cross-check (product-aware) ───────────────────────────────
+
+def _broker_qty(symbol: str, product: str) -> int:
+    """Confirm broker-held quantity for this exact product via Kite positions and
+    holdings endpoints. Unlike run_trades.py's CNC-only version, this filters
+    Kite's /portfolio/positions "net" entries by product too, so a CNC and an MTF
+    holding of the same symbol can't be confused for each other. /portfolio/holdings
+    is CNC delivery-only by definition, so it's only consulted for product=CNC."""
+    session, _ = _kite_session()
+    product = product.upper()
+    try:
+        resp = session.get(f"{_KITE_BASE}/portfolio/positions", timeout=15)
+        if resp.ok:
+            for p in (resp.json().get("data", {}).get("net") or []):
+                if ((p.get("tradingsymbol") or "").upper() == symbol.upper()
+                        and (p.get("product") or "").upper() == product):
+                    qty = int(p.get("quantity") or 0)
+                    if qty > 0:
+                        return qty
+    except Exception:
+        pass
+    if product == "CNC":
+        try:
+            resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
+            if resp.ok:
+                for h in (resp.json().get("data") or []):
+                    if (h.get("tradingsymbol") or "").upper() == symbol.upper():
+                        qty = int(h.get("quantity") or 0) + int(h.get("t1_quantity") or 0)
+                        if qty > 0:
+                            return qty
+        except Exception:
+            pass
+    return 0
+
+
 # ── MTF entries log (separate from positions_zerodha.json) ───────────────────
 
 def _mtf_log_path(trade_date: date) -> Path:
@@ -225,7 +283,8 @@ def _mtf_log_path(trade_date: date) -> Path:
 def _append_mtf_log(trade_date: date, row: dict) -> None:
     path        = _mtf_log_path(trade_date)
     fieldnames  = ["timestamp", "symbol", "quantity", "ref_price", "fill_price",
-                   "leverage", "margin_required", "order_id", "status"]
+                   "leverage", "margin_required", "order_id", "status", "product",
+                   "capital_base"]
     write_header = not path.exists()
     _MTF_LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(path, "a", newline="") as f:
@@ -265,7 +324,7 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
         capital    = capital if capital is not None else TOTAL_CAPITAL
         # Same allocation rule as the CNC flow: capital/4 max per position for
         # n<=4 (idle capital allowed), full equal split once signals hit 5+.
-        allocation = capital / 4 if n <= 4 else capital / n
+        allocation = compute_allocation(capital, n)
 
     print(f"\n{'='*60}")
     print(f"[mtf] MTF Entry {trade_date}{'  DRY RUN' if dry_run else ''}"
@@ -280,7 +339,18 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
     n_entered = 0
     n_skipped = 0
 
+    positions     = _load_pos()
+    entered_today = {
+        p["symbol"] for p in positions
+        if p.get("broker") == _BROKER and p.get("entry_date") == trade_date.isoformat()
+    }
+
     for sym in symbols:
+        if sym in entered_today:
+            print(f"[mtf] {sym} — already entered today (by this script or run_trades.py), skipping.")
+            n_skipped += 1
+            continue
+
         print(f"\n[mtf] {sym}")
 
         try:
@@ -294,7 +364,7 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
         if manual_mode and shares_override is not None:
             shares = shares_override
         else:
-            shares = math.floor(allocation / ref) if ref > 0 else 0
+            shares = compute_shares(allocation, ref)
         if shares == 0:
             print(f"[mtf]   SKIP — 0 shares at ₹{ref:,.2f} (allocation ₹{allocation:,.0f})")
             n_skipped += 1
@@ -302,15 +372,39 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
         print(f"[mtf]   shares to buy: {shares}")
 
         # Live per-symbol leverage/margin check -- never assume a fixed leverage.
-        margin_info = _mtf_margin_check(sym, shares)
-        if margin_info is None:
-            print(f"[mtf]   SKIP — could not verify MTF margin/leverage for {sym}.")
-            n_skipped += 1
-            continue
-
-        leverage        = margin_info["leverage"]
-        margin_required = margin_info["margin_required"]
-        print(f"[mtf]   leverage: {leverage:.2f}x  ·  margin required: ₹{margin_required:,.2f}")
+        # No MTF leverage (check failed, or came back at 1x) falls back to a
+        # smaller CNC buy, resized down from half the original capital base
+        # (not a fixed figure) -- single-stock --symbol mode is left untouched
+        # (no resize) since it's an explicit, deliberately-sized order.
+        margin_info  = _mtf_margin_check(sym, shares)
+        has_leverage = margin_info is not None and margin_info["leverage"] > 1
+        if has_leverage:
+            product         = "MTF"
+            leverage        = margin_info["leverage"]
+            margin_required = margin_info["margin_required"]
+            capital_base    = capital
+            print(f"[mtf]   leverage: {leverage:.2f}x  ·  margin required: ₹{margin_required:,.2f}")
+        else:
+            reason = "MTF margin check failed" if margin_info is None else "no MTF leverage (1x)"
+            if manual_mode:
+                resized_shares = shares
+                capital_base   = capital
+            else:
+                fallback_capital    = capital / 2
+                fallback_allocation = compute_allocation(fallback_capital, n)
+                resized_shares      = compute_shares(fallback_allocation, ref)
+                capital_base        = fallback_capital
+            if resized_shares == 0:
+                print(f"[mtf]   SKIP — {reason}; 0 shares at ₹{ref:,.2f} on "
+                      f"₹{capital_base:,.0f}-based CNC fallback.")
+                n_skipped += 1
+                continue
+            shares          = resized_shares
+            product         = "CNC"
+            leverage        = margin_info["leverage"] if margin_info else 0.0
+            margin_required = shares * ref
+            print(f"[mtf]   {reason} — falling back to CNC at {shares} shares "
+                  f"(₹{capital_base:,.0f}-based)  ·  margin required: ₹{margin_required:,.2f}")
 
         available = _available_margin()
         if available is None:
@@ -326,14 +420,15 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
 
         try:
             order_id = buy(sym, "NSE", shares,
-                          order_type="MARKET", product="MTF", dry_run=dry_run)
+                          order_type="MARKET", product=product, dry_run=dry_run)
         except Exception as exc:
             print(f"[mtf]   ORDER FAILED: {exc}")
             _append_mtf_log(trade_date, {
                 "timestamp": _ts(), "symbol": sym, "quantity": shares,
                 "ref_price": round(ref, 4), "fill_price": "",
                 "leverage": leverage, "margin_required": margin_required,
-                "order_id": "", "status": "order_failed",
+                "order_id": "", "status": "order_failed", "product": product,
+                "capital_base": capital_base,
             })
             n_skipped += 1
             continue
@@ -350,7 +445,8 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
                     "timestamp": _ts(), "symbol": sym, "quantity": shares,
                     "ref_price": round(ref, 4), "fill_price": "",
                     "leverage": leverage, "margin_required": margin_required,
-                    "order_id": order_id, "status": "rejected",
+                    "order_id": order_id, "status": "rejected", "product": product,
+                    "capital_base": capital_base,
                 })
                 n_skipped += 1
                 continue
@@ -361,28 +457,249 @@ def run_entry_315_mtf(trade_date: date | None = None, dry_run: bool = False,
             "timestamp": _ts(), "symbol": sym, "quantity": fill_qty,
             "ref_price": round(ref, 4), "fill_price": round(fill_price, 4),
             "leverage": leverage, "margin_required": margin_required,
-            "order_id": order_id, "status": status,
+            "order_id": order_id, "status": status, "product": product,
+            "capital_base": capital_base,
         })
+
+        positions.append({
+            "broker":               _BROKER,
+            "symbol":               sym,
+            "entry_date":           trade_date.isoformat(),
+            "reference_price":      round(ref, 4),
+            "shares_intended":      shares,
+            "actual_fill_price":    round(fill_price, 4),
+            "actual_fill_quantity": fill_qty,
+            "entry_order_id":       order_id,
+            "status":               "open",
+            "entry_timestamp":      _ts(),
+            "product":              product,
+        })
+        if not dry_run:
+            _save_pos(positions)
+
         n_entered += 1
 
     print(f"\n[mtf] MTF entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[mtf] Log written to {_mtf_log_path(trade_date)}")
+    if not dry_run and n_entered:
+        print(f"[mtf] Live fills also recorded to {_POS_FILE} for this script's --exit-945/--exit-1200 stages.")
     print(
         "\n[mtf] REMINDER: MTF buy orders trigger a pledge request by email that must be "
         "approved (typically by ~7pm same day) for the position to actually be established. "
         "This script cannot complete that approval step -- check your email/Kite for the "
         "pledge request."
     )
-    print("[mtf] This was the MTF-only script. run_trades.py and the CNC pipeline were not touched.")
+    print("[mtf] run_trades.py and trade.py were not touched.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXIT — mirrors run_trades.py's Stage 2 (check_exit_945) / Stage 3 (force_exit_1200),
+# scoped to only the positions this script itself entered (via _open_pos_mtf).
+# ══════════════════════════════════════════════════════════════════════════════
+
+def check_exit_945_mtf(dry_run: bool = False) -> None:
+    positions = _load_pos()
+    open_ps   = _open_pos_mtf(positions)
+
+    print(f"\n{'='*60}")
+    print(f"[mtf] Exit check 9:45am{'  DRY RUN' if dry_run else ''}")
+    print(f"[mtf] {len(open_ps)} open MTF-script position(s)")
+    print(f"{'='*60}")
+
+    if not open_ps:
+        print("[mtf] No open positions — nothing to check.")
+        return
+
+    for pos in open_ps:
+        sym        = pos["symbol"]
+        product    = pos.get("product", "MTF")
+        fill_price = float(pos["actual_fill_price"] or 0)
+        is_partial = pos["status"] == "partial_exit_945_nodata"
+        qty        = (int(pos["shares_remaining"]) if is_partial
+                      else int(pos["actual_fill_quantity"]))
+
+        print(f"\n[mtf] {sym}  [{product}]  fill=₹{fill_price:,.2f}  qty={qty}")
+
+        no_data  = False
+        pnl_live = 0.0
+        try:
+            ltp      = get_ltp(sym)
+            pnl_live = (ltp - fill_price) * qty
+            print(f"[mtf]   LTP: ₹{ltp:,.2f}  live P&L: ₹{pnl_live:+,.2f}")
+        except Exception as exc:
+            print(f"[mtf]   no LTP available: {exc}")
+            no_data = True
+
+        if no_data:
+            half   = math.floor(qty / 2)
+            remain = qty - half
+            if half == 0:
+                print(f"[mtf]   qty too small to halve — holding until 12pm.")
+                continue
+            if not dry_run:
+                bqty = _broker_qty(sym, product)
+                if bqty != qty:
+                    print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
+                          f"Skipping {sym} — manual review required.")
+                    continue
+            print(f"[mtf]   NO-DATA FALLBACK — selling {half} of {qty}")
+            try:
+                oid = sell(sym, "NSE", half,
+                           order_type="MARKET", product=product, dry_run=dry_run)
+            except Exception as exc:
+                print(f"[mtf]   fallback sell failed: {exc}")
+                continue
+            ep, eq = (fill_price, half) if dry_run else _poll_fill_safe(oid, fill_price, half)
+            if eq == 0:
+                print(f"[mtf]   NOT FILLED — fallback sell rejected, position left open.")
+                continue
+            pos.update({
+                "status":             "partial_exit_945_nodata",
+                "shares_exited_945":  half,
+                "shares_remaining":   remain,
+                "exit_price_945":     round(ep, 4),
+                "exit_order_id_945":  oid,
+                "exit_timestamp_945": _ts(),
+            })
+            if not dry_run:
+                _save_pos(positions)
+            continue
+
+        if pnl_live > 0:
+            if not dry_run:
+                bqty = _broker_qty(sym, product)
+                if bqty != qty:
+                    print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
+                          f"Skipping {sym} — manual review required.")
+                    continue
+            print(f"[mtf]   P&L positive — selling {qty}")
+            try:
+                oid = sell(sym, "NSE", qty,
+                           order_type="MARKET", product=product, dry_run=dry_run)
+            except Exception as exc:
+                print(f"[mtf]   sell failed: {exc}")
+                continue
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            if eq == 0:
+                print(f"[mtf]   NOT FILLED — sell rejected, position left open.")
+                continue
+            pnl     = (ep - fill_price) * eq
+            ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
+            pos.update({
+                "status":              "exited_945",
+                "exit_price_945":      round(ep, 4),
+                "exit_order_id_945":   oid,
+                "exit_timestamp_945":  _ts(),
+                "realized_return_pct": round(ret_act, 4),
+                "realized_pnl":        round(pnl, 2),
+            })
+            if not dry_run:
+                _save_pos(positions)
+            print(f"[mtf]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+        else:
+            print(f"[mtf]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 12pm forced exit.")
+
+    print(f"\n[mtf] Exit check 9:45am complete.")
+
+
+def force_exit_1200_mtf(dry_run: bool = False) -> None:
+    positions = _load_pos()
+    open_ps   = _open_pos_mtf(positions)
+
+    print(f"\n{'='*60}")
+    print(f"[mtf] Force exit 12pm{'  DRY RUN' if dry_run else ''}")
+    print(f"[mtf] {len(open_ps)} MTF-script position(s) still open")
+    print(f"{'='*60}")
+
+    if not open_ps:
+        print("[mtf] All MTF-script positions already exited — nothing to force-close.")
+        _daily_summary_mtf(positions, 0, dry_run)
+        return
+
+    n_force = 0
+
+    for pos in open_ps:
+        sym        = pos["symbol"]
+        product    = pos.get("product", "MTF")
+        fill_price = float(pos["actual_fill_price"] or 0)
+        is_partial = pos["status"] == "partial_exit_945_nodata"
+        qty        = (int(pos["shares_remaining"]) if is_partial
+                      else int(pos["actual_fill_quantity"]))
+
+        print(f"\n[mtf] {sym}  [{product}]  qty={qty}")
+
+        if not dry_run:
+            bqty = _broker_qty(sym, product)
+            if bqty != qty:
+                print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
+                      f"Skipping {sym} — manual review required.")
+                continue
+            print(f"[mtf]   broker confirmed: {bqty} shares")
+
+        try:
+            oid = sell(sym, "NSE", qty,
+                       order_type="MARKET", product=product, dry_run=dry_run)
+        except Exception as exc:
+            print(f"[mtf]   sell failed: {exc}")
+            continue
+
+        ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+        if eq == 0:
+            print(f"[mtf]   !! NOT FILLED — force-exit sell rejected for {sym}. "
+                  f"Position left as-is — manual review required.")
+            continue
+
+        if is_partial:
+            s945 = int(pos.get("shares_exited_945") or 0)
+            p945 = float(pos.get("exit_price_945") or fill_price)
+            pnl  = (p945 - fill_price) * s945 + (ep - fill_price) * eq
+            tot  = int(pos["actual_fill_quantity"])
+            ret  = pnl / (fill_price * tot) * 100 if fill_price and tot else 0
+        else:
+            pnl = (ep - fill_price) * eq
+            ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
+
+        pos.update({
+            "status":               "exited_1200",
+            "exit_price_1200":      round(ep, 4),
+            "exit_order_id_1200":   oid,
+            "exit_timestamp_1200":  _ts(),
+            "realized_return_pct":  round(ret, 4),
+            "realized_pnl":         round(pnl, 2),
+        })
+        if not dry_run:
+            _save_pos(positions)
+        print(f"[mtf]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+        n_force += 1
+
+    _daily_summary_mtf(positions, n_force, dry_run)
+    print(f"\n[mtf] Force exit 12pm complete. Force-exited: {n_force}.")
+
+
+def _daily_summary_mtf(positions: list, n_force: int, dry_run: bool) -> None:
+    today    = date.today().isoformat()
+    today_ps = [p for p in positions
+                if p.get("broker") == _BROKER and "product" in p and p.get("entry_date") == today]
+    n_opened  = len(today_ps)
+    n_945     = sum(1 for p in today_ps if p.get("status") == "exited_945")
+    n_partial = sum(1 for p in today_ps
+                    if p.get("status") == "exited_1200" and "exit_order_id_945" in p)
+    total_pnl = sum(p.get("realized_pnl") or 0 for p in today_ps
+                    if p.get("status") in ("exited_945", "exited_1200"))
+    print(f"\n[mtf] Summary — opened={n_opened}  exited@945={n_945}  "
+          f"partial_nodata={n_partial}  force@1200={n_force}  P&L=₹{total_pnl:+,.2f}")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Zerodha MTF entry (standalone, not wired into any cron job)")
-    parser.add_argument("--entry",    action="store_true", required=True, help="Run MTF entry")
+    parser = argparse.ArgumentParser(description="Zerodha MTF entry+exit (standalone, not wired into any cron job)")
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--entry",     action="store_true", help="Run MTF entry")
+    grp.add_argument("--exit-945",  action="store_true", help="Exit check at 9:45am (this script's positions only)")
+    grp.add_argument("--exit-1200", action="store_true", help="Forced exit at 12pm (this script's positions only)")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
-    parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (defaults to today)")
+    parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
                         help="Total capital for MTF entries (independent of the CNC script's "
                              "--capital; defaults to TOTAL_CAPITAL if omitted). In --symbol mode, "
@@ -400,8 +717,13 @@ if __name__ == "__main__":
     td = date.fromisoformat(args.date) if args.date else date.today()
 
     try:
-        run_entry_315_mtf(trade_date=td, dry_run=args.dry_run, capital=args.capital,
-                          symbol=args.symbol, shares_override=args.shares)
+        if args.entry:
+            run_entry_315_mtf(trade_date=td, dry_run=args.dry_run, capital=args.capital,
+                              symbol=args.symbol, shares_override=args.shares)
+        elif args.exit_945:
+            check_exit_945_mtf(dry_run=args.dry_run)
+        else:
+            force_exit_1200_mtf(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)
