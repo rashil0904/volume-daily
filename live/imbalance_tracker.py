@@ -46,7 +46,7 @@ from zoneinfo import ZoneInfo
 _IST = ZoneInfo("Asia/Kolkata")
 
 # ── Tunable constants ─────────────────────────────────────────────────────────
-ROLLING_WINDOW_SECS = 15 * 60   # rolling window width in seconds
+ROLLING_WINDOW_SECS = 20 * 60   # rolling window width in seconds
 LABEL_BUY_THRESHOLD = 0.3       # rolling_imb > this           → "buy_full"
 LABEL_NEUTRAL_FLOOR = 0.0       # rolling_imb in (this, 0.3]  → "wait_recheck"
                                  # rolling_imb <= this          → "skip"
@@ -250,13 +250,13 @@ if __name__ == "__main__":
     print(f"    rolling_label     = {lbl}")
     print(f"    rolling samples   = {len(s.rolling)}")
 
-    # ── Rolling window pruning: samples older than 15 min drop off ───────────
+    # ── Rolling window pruning: samples older than 20 min drop off ───────────
     print("\nRolling window pruning — old samples expire\n")
     s2 = ImbalanceState(symbol="PRUNE")
     update_imbalance(s2, bid_qty=90_000, ask_qty=10_000, now=ts(9, 0, 0))   # will expire
     check("Old sample present before pruning", len(s2.rolling) == 1)
-    i2, r2, lbl2 = update_imbalance(s2, bid_qty=10_000, ask_qty=90_000, now=ts(9, 20, 0))
-    check("Old sample (20 min ago) pruned from rolling window",
+    i2, r2, lbl2 = update_imbalance(s2, bid_qty=10_000, ask_qty=90_000, now=ts(9, 21, 0))
+    check("Old sample (21 min ago) pruned from rolling window",
           len(s2.rolling) == 1, f"len={len(s2.rolling)}")
     check("Rolling reflects only the fresh sample (strongly negative)",
           r2 is not None and r2 < -0.7, f"r2={r2}")

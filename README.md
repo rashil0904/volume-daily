@@ -301,7 +301,7 @@ Runs continuously from **9:13 AM to 3:40 PM** (start/kill via cron — see [Cron
 
 ### Order-book imbalance tracking
 
-Once a symbol qualifies, its 5-level bid/ask depth (`MODE_FULL`-only data) is used to compute `(bid_qty − ask_qty) / (bid_qty + ask_qty)` on every tick — never for the ~440 symbols that haven't qualified, to avoid needless work. A 15-minute trailing average of that ratio is kept per symbol. At **3:15 PM**, once per run, every symbol qualified at that moment gets its rolling imbalance logged to `logs/imbalance_<date>.csv` — a single snapshot, not a running log. This is observation/logging only — it does not feed back into any trading decision.
+Once a symbol qualifies, its 5-level bid/ask depth (`MODE_FULL`-only data) is used to compute `(bid_qty − ask_qty) / (bid_qty + ask_qty)` on every tick — never for the ~440 symbols that haven't qualified, to avoid needless work. A 20-minute trailing average of that ratio is kept per symbol. At **3:20 PM**, once per run, every symbol qualified at that moment gets its rolling imbalance logged to `logs/imbalance_<date>.csv` — a single snapshot, not a running log. This is observation/logging only — it does not feed back into any trading decision.
 
 ### Startup dependencies
 
@@ -359,7 +359,7 @@ volume-daily/
 │
 ├── live/
 │   ├── live_monitor.py         # KiteTicker MODE_FULL monitor, 9:13 AM–3:40 PM — see Live Monitoring section
-│   ├── imbalance_tracker.py    # Order-book depth imbalance (qualified symbols only, logged once at 3:15 PM)
+│   ├── imbalance_tracker.py    # Order-book depth imbalance (qualified symbols only, logged once at 3:20 PM)
 │   └── test_state_machine.py   # Self-test for live_monitor.py's qualified/near_circuit state machine
 │
 ├── zerodha/

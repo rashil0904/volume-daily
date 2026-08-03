@@ -334,7 +334,7 @@ class LiveMonitor:
         self._imb_log = ImbalanceLogger(_LOGS_DIR)
         self._lock    = threading.Lock()
         self._started_notified = False   # fire send_monitor_started() once, on first connect only
-        self._imbalance_snapshot_done = False   # log qualified-symbol imbalance once, at 15:15 IST
+        self._imbalance_snapshot_done = False   # log qualified-symbol imbalance once, at 15:20 IST
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -493,16 +493,16 @@ class LiveMonitor:
         except Exception as exc:
             print(f"  [notify] near_circuit failed: {exc}", file=sys.stderr)
 
-    # ── 15:15 imbalance snapshot ───────────────────────────────────────────────
-    # Fires once, the first tick batch received at/after 15:15 IST: logs each
-    # currently-qualified symbol's last-15min rolling book imbalance to
+    # ── 15:20 imbalance snapshot ───────────────────────────────────────────────
+    # Fires once, the first tick batch received at/after 15:20 IST: logs each
+    # currently-qualified symbol's last-20min rolling book imbalance to
     # logs/imbalance_<date>.csv. Log only — no Telegram, no trading action.
 
     def _maybe_snapshot_imbalance(self) -> None:
         if self._imbalance_snapshot_done:
             return
         now = datetime.now(_IST)
-        if now.hour * 100 + now.minute < 1515:
+        if now.hour * 100 + now.minute < 1520:
             return
         self._imbalance_snapshot_done = True
 
@@ -515,11 +515,11 @@ class LiveMonitor:
                 continue
             rolling = sum(v for _, v in imb_state.rolling) / len(imb_state.rolling)
             self._imb_log.log_event(
-                "snapshot_1515", imb_state,
+                "snapshot_1520", imb_state,
                 imb_state.last_imbalance, rolling, make_label(rolling),
             )
             n_logged += 1
-        print(f"[{now.strftime('%H:%M:%S')}] 15:15 imbalance snapshot — "
+        print(f"[{now.strftime('%H:%M:%S')}] 15:20 imbalance snapshot — "
               f"logged {n_logged} qualified symbol(s).")
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
