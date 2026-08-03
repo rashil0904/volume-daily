@@ -2,4 +2,6 @@ pandas==3.0.3
 requests==2.31.0
 python-dotenv==1.2.2
 openpyxl==3.1.5
-kiteconnect  # not installed in this dev environment -- version unverified, confirm/pin after testing against live_monitor.py
+kiteconnect==5.2.1
+cffi==2.1.0  # kiteconnect -> pyOpenSSL/cryptography dep; pin explicitly -- a system cffi built for a
+             # different Python minor version causes an ABI-mismatch ModuleNotFoundError at import time
