@@ -45,6 +45,10 @@ _POS_FILE  = _ROOT / "results" / "positions_zerodha.json"
 _CSV_FILE  = _ROOT / "results" / "trade_book.csv"
 _XLSX_FILE = _ROOT / "results" / "trade_book.xlsx"
 
+# Real capital (₹1.5L) went live on this date -- earlier positions were test
+# trades and are excluded from the trade book, not just old/low-stakes ones.
+_TRACKING_START_DATE = "2026-07-27"
+
 _FIELDNAMES = [
     "Stock Name", "Position entry date", "Position Exit date", "No of shares",
     "Entry Price", "Exit Price", "Realised PnL", "Realised PnL Pct",
@@ -316,6 +320,12 @@ def main() -> None:
         sys.exit(f"[trade_book] No positions file: {_POS_FILE}")
 
     positions = json.loads(_POS_FILE.read_text())
+    n_before = len(positions)
+    positions = [p for p in positions
+                 if (p.get("entry_date") or "") >= _TRACKING_START_DATE]
+    if n_before != len(positions):
+        print(f"[trade_book] Excluded {n_before - len(positions)} position(s) "
+              f"before {_TRACKING_START_DATE} (pre-live-capital test trades).")
     if not positions:
         print("[trade_book] No positions on record — nothing to write.")
         return
