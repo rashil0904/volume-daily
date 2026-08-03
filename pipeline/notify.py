@@ -242,12 +242,12 @@ def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
     _send(text, topic="entries_exits")
 
 
-def send_exit_945(broker: str, symbol: str, exit_price: float,
+def send_exit_925(broker: str, symbol: str, exit_price: float,
                   return_pct: float, pnl: float, dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} EXIT 9:45am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} EXIT 9:25am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -256,28 +256,28 @@ def send_exit_945(broker: str, symbol: str, exit_price: float,
     _send(text, topic="entries_exits")
 
 
-def send_exit_945_nodata(broker: str, symbol: str, shares_exited: int,
+def send_exit_925_nodata(broker: str, symbol: str, shares_exited: int,
                          shares_remaining: int, exit_price: float,
                          dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#9888; NO-DATA FALLBACK 9:45am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#9888; NO-DATA FALLBACK 9:25am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         "Live price unavailable from broker — sold half position as precaution.",
         f"<b>Shares sold:</b> {shares_exited}  |  <b>Still open:</b> {shares_remaining}",
         f"<b>Partial fill price:</b> &#8377;{exit_price:,.2f}",
-        "Remaining shares will be force-exited at 12pm.",
+        "Remaining shares will be force-exited at 11:59am.",
     ])
     _send(text, topic="entries_exits")
 
 
-def send_force_exit_1200(broker: str, symbol: str, exit_price: float,
+def send_force_exit_1159(broker: str, symbol: str, exit_price: float,
                          return_pct: float, pnl: float,
                          dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} FORCE EXIT 12pm — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} FORCE EXIT 11:59am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -286,25 +286,25 @@ def send_force_exit_1200(broker: str, symbol: str, exit_price: float,
     _send(text, topic="entries_exits")
 
 
-def send_nothing_open_at_1200(broker: str) -> None:
+def send_nothing_open_at_1159(broker: str) -> None:
     _send(
-        f"<b>12pm Exit — {html_lib.escape(broker)}</b>\n"
-        "All positions already exited at 9:45am — nothing to force-close.",
+        f"<b>11:59am Exit — {html_lib.escape(broker)}</b>\n"
+        "All positions already exited at 9:25am — nothing to force-close.",
         topic="entries_exits",
     )
 
 
-def send_daily_summary(broker: str, n_opened: int, n_exited_945: int,
-                       n_partial_nodata: int, n_force_1200: int,
+def send_daily_summary(broker: str, n_opened: int, n_exited_925: int,
+                       n_partial_nodata: int, n_force_1159: int,
                        total_pnl: float, dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if total_pnl >= 0 else "▼"
     text  = "\n".join([
         f"<b>{arrow} Daily Summary — {html_lib.escape(broker)}{tag}</b>",
         f"<b>Positions opened  :</b> {n_opened}",
-        f"<b>Exited at 9:45am  :</b> {n_exited_945}",
+        f"<b>Exited at 9:25am  :</b> {n_exited_925}",
         f"<b>Partial no-data   :</b> {n_partial_nodata}",
-        f"<b>Force-closed 12pm :</b> {n_force_1200}",
+        f"<b>Force-closed 11:59am :</b> {n_force_1159}",
         f"<b>Total P&amp;L     :</b> &#8377;{total_pnl:+,.2f}",
     ])
     _send(text, topic="pnl")

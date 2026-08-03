@@ -2,7 +2,7 @@
 zerodha/run_trades.py — 3-stage live trading via Zerodha Kite
 =============================================================
 Entry price : Upstox intraday V3 candle API  (UPSTOX_ACCESS_TOKEN from pipeline/.env) —
-              close of 15:14 candle, falls back to 15:13 if 15:14 isn't published yet.
+              close of 15:20 candle, falls back to 15:19 if 15:20 isn't published yet.
 Exit check  : Our own recorded entry fill price vs. current LTP from Kite's /quote/ltp
               (Stage 2) — pnl = (ltp - fill_price) * qty, computed directly rather than
               trusting Kite's positions/holdings pnl field, which can go stale same-day.
@@ -11,8 +11,8 @@ Positions   : results/positions_zerodha.json  (full persistent trade book)
 
 Usage:
     python zerodha/run_trades.py --entry          [--dry-run] [--date YYYY-MM-DD]
-    python zerodha/run_trades.py --exit-945       [--dry-run]
-    python zerodha/run_trades.py --exit-1200      [--dry-run]
+    python zerodha/run_trades.py --exit-925       [--dry-run]
+    python zerodha/run_trades.py --exit-1159      [--dry-run]
 """
 
 import argparse
@@ -79,20 +79,20 @@ def _ikey(symbol: str) -> str:
 # ── Candle price fetch (1-minute, via data_loader) ────────────────────────────
 
 def get_reference_price(symbol: str) -> tuple[float, int]:
-    """Close of 15:14 1-min candle — Stage 1 entry sizing. Falls back to 15:13, then to
-    whichever candle at/before 15:14 is actually the most recent available (not a fixed
+    """Close of 15:20 1-min candle — Stage 1 entry sizing. Falls back to 15:19, then to
+    whichever candle at/before 15:20 is actually the most recent available (not a fixed
     older point) if neither of those posted -- e.g. an illiquid stock with no trades in
     that exact minute. Returns (price, hhmm_used). Raises ValueError only if there's no
-    candle data at all up to 15:14."""
+    candle data at all up to 15:20."""
     matched        = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
     candles        = candles_by_sym.get(symbol, [])
     try:
-        return pick_reference_price(candles, 1514, 1513)
+        return pick_reference_price(candles, 1520, 1519)
     except ValueError:
         raise ValueError(
-            f"[zerodha] No candle data at all for {symbol} up to 15:14 "
-            f"({len(candles)} candles). Run after 15:15 IST."
+            f"[zerodha] No candle data at all for {symbol} up to 15:20 "
+            f"({len(candles)} candles). Run after 15:21 IST."
         )
 
 
@@ -132,7 +132,7 @@ def _open_pos(positions: list) -> list:
     """Positions still requiring an exit: fully open OR partial no-data exits from Stage 2."""
     return [p for p in positions
             if p.get("broker") == _BROKER
-            and p.get("status") in ("open", "partial_exit_945_nodata")]
+            and p.get("status") in ("open", "partial_exit_925_nodata")]
 
 
 def _ts() -> str:
@@ -226,7 +226,7 @@ def _load_symbols(trade_date: date) -> list[str]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAGE 1 — Entry at 3:15pm
+# STAGE 1 — Entry at 3:21pm
 # ══════════════════════════════════════════════════════════════════════════════
 
 def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
@@ -317,15 +317,15 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAGE 2 — Exit check at 9:45am
+# STAGE 2 — Exit check at 9:25am
 # ══════════════════════════════════════════════════════════════════════════════
 
-def check_exit_945(dry_run: bool = False) -> None:
+def check_exit_925(dry_run: bool = False) -> None:
     positions = _load_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
-    print(f"[zerodha] Stage 2 — Exit check 9:45am{'  DRY RUN' if dry_run else ''}")
+    print(f"[zerodha] Stage 2 — Exit check 9:25am{'  DRY RUN' if dry_run else ''}")
     print(f"[zerodha] {len(open_ps)} open position(s)")
     print(f"{'='*60}")
 
@@ -336,7 +336,7 @@ def check_exit_945(dry_run: bool = False) -> None:
     for pos in open_ps:
         sym        = pos["symbol"]
         fill_price = float(pos["actual_fill_price"] or 0)
-        is_partial = pos["status"] == "partial_exit_945_nodata"
+        is_partial = pos["status"] == "partial_exit_925_nodata"
         qty        = (int(pos["shares_remaining"]) if is_partial
                       else int(pos["actual_fill_quantity"]))
 
@@ -357,7 +357,7 @@ def check_exit_945(dry_run: bool = False) -> None:
             half   = math.floor(qty / 2)
             remain = qty - half
             if half == 0:
-                print(f"[zerodha]   qty too small to halve — holding until 12pm.")
+                print(f"[zerodha]   qty too small to halve — holding until 11:59am.")
                 continue
             if not dry_run:
                 bqty = _broker_qty(sym)
@@ -377,21 +377,21 @@ def check_exit_945(dry_run: bool = False) -> None:
                 print(f"[zerodha]   NOT FILLED — fallback sell rejected, position left open.")
                 continue
             pos.update({
-                "status":             "partial_exit_945_nodata",
-                "shares_exited_945":  half,
+                "status":             "partial_exit_925_nodata",
+                "shares_exited_925":  half,
                 "shares_remaining":   remain,
-                "exit_price_945":     round(ep, 4),
-                "exit_order_id_945":  oid,
-                "exit_timestamp_945": _ts(),
+                "exit_price_925":     round(ep, 4),
+                "exit_order_id_925":  oid,
+                "exit_timestamp_925": _ts(),
             })
             if not dry_run:
                 _save_pos(positions)
             try:
-                notify.send_exit_945_nodata(broker=_BROKER, symbol=sym,
+                notify.send_exit_925_nodata(broker=_BROKER, symbol=sym,
                                             shares_exited=half, shares_remaining=remain,
                                             exit_price=ep, dry_run=dry_run)
             except Exception as exc:
-                print(f"  [notify] exit_945_nodata failed: {exc}", file=sys.stderr)
+                print(f"  [notify] exit_925_nodata failed: {exc}", file=sys.stderr)
             continue
 
         if pnl_live > 0:
@@ -416,10 +416,10 @@ def check_exit_945(dry_run: bool = False) -> None:
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
             pos.update({
-                "status":              "exited_945",
-                "exit_price_945":      round(ep, 4),
-                "exit_order_id_945":   oid,
-                "exit_timestamp_945":  _ts(),
+                "status":              "exited_925",
+                "exit_price_925":      round(ep, 4),
+                "exit_order_id_925":   oid,
+                "exit_timestamp_925":  _ts(),
                 "realized_return_pct": round(ret_act, 4),
                 "realized_pnl":        round(pnl, 2),
             })
@@ -427,35 +427,35 @@ def check_exit_945(dry_run: bool = False) -> None:
                 _save_pos(positions)
             print(f"[zerodha]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
-                notify.send_exit_945(broker=_BROKER, symbol=sym, exit_price=ep,
+                notify.send_exit_925(broker=_BROKER, symbol=sym, exit_price=ep,
                                      return_pct=ret_act, pnl=pnl, dry_run=dry_run)
             except Exception as exc:
-                print(f"  [notify] exit_945 failed: {exc}", file=sys.stderr)
+                print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
         else:
-            print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 12pm forced exit.")
+            print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
 
     print(f"\n[zerodha] Stage 2 complete.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# STAGE 3 — Forced exit at 12:00pm
+# STAGE 3 — Forced exit at 11:59am
 # ══════════════════════════════════════════════════════════════════════════════
 
-def force_exit_1200(dry_run: bool = False) -> None:
+def force_exit_1159(dry_run: bool = False) -> None:
     positions = _load_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
-    print(f"[zerodha] Stage 3 — Force exit 12pm{'  DRY RUN' if dry_run else ''}")
+    print(f"[zerodha] Stage 3 — Force exit 11:59am{'  DRY RUN' if dry_run else ''}")
     print(f"[zerodha] {len(open_ps)} position(s) still open")
     print(f"{'='*60}")
 
     if not open_ps:
         print("[zerodha] All positions already exited — nothing to force-close.")
         try:
-            notify.send_nothing_open_at_1200(broker=_BROKER)
+            notify.send_nothing_open_at_1159(broker=_BROKER)
         except Exception as exc:
-            print(f"  [notify] nothing_open_at_1200 failed: {exc}", file=sys.stderr)
+            print(f"  [notify] nothing_open_at_1159 failed: {exc}", file=sys.stderr)
         _daily_summary(positions, 0, dry_run)
         return
 
@@ -464,7 +464,7 @@ def force_exit_1200(dry_run: bool = False) -> None:
     for pos in open_ps:
         sym        = pos["symbol"]
         fill_price = float(pos["actual_fill_price"] or 0)
-        is_partial = pos["status"] == "partial_exit_945_nodata"
+        is_partial = pos["status"] == "partial_exit_925_nodata"
         qty        = (int(pos["shares_remaining"]) if is_partial
                       else int(pos["actual_fill_quantity"]))
 
@@ -491,11 +491,11 @@ def force_exit_1200(dry_run: bool = False) -> None:
                   f"Position left as-is — manual review required.")
             continue
 
-        # Blended P&L: partial 9:45am exit + this 12pm remainder
+        # Blended P&L: partial 9:25am exit + this 11:59am remainder
         if is_partial:
-            s945 = int(pos.get("shares_exited_945") or 0)
-            p945 = float(pos.get("exit_price_945") or fill_price)
-            pnl  = (p945 - fill_price) * s945 + (ep - fill_price) * eq
+            s925 = int(pos.get("shares_exited_925") or 0)
+            p925 = float(pos.get("exit_price_925") or fill_price)
+            pnl  = (p925 - fill_price) * s925 + (ep - fill_price) * eq
             tot  = int(pos["actual_fill_quantity"])
             ret  = pnl / (fill_price * tot) * 100 if fill_price and tot else 0
         else:
@@ -503,10 +503,10 @@ def force_exit_1200(dry_run: bool = False) -> None:
             ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
 
         pos.update({
-            "status":               "exited_1200",
-            "exit_price_1200":      round(ep, 4),
-            "exit_order_id_1200":   oid,
-            "exit_timestamp_1200":  _ts(),
+            "status":               "exited_1159",
+            "exit_price_1159":      round(ep, 4),
+            "exit_order_id_1159":   oid,
+            "exit_timestamp_1159":  _ts(),
             "realized_return_pct":  round(ret, 4),
             "realized_pnl":         round(pnl, 2),
         })
@@ -514,10 +514,10 @@ def force_exit_1200(dry_run: bool = False) -> None:
             _save_pos(positions)
         print(f"[zerodha]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         try:
-            notify.send_force_exit_1200(broker=_BROKER, symbol=sym, exit_price=ep,
+            notify.send_force_exit_1159(broker=_BROKER, symbol=sym, exit_price=ep,
                                         return_pct=ret, pnl=pnl, dry_run=dry_run)
         except Exception as exc:
-            print(f"  [notify] force_exit_1200 failed: {exc}", file=sys.stderr)
+            print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
         n_force += 1
 
     _daily_summary(positions, n_force, dry_run)
@@ -529,16 +529,16 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
     today_ps  = [p for p in positions
                  if p.get("broker") == _BROKER and p.get("entry_date") == today]
     n_opened  = len(today_ps)
-    n_945     = sum(1 for p in today_ps if p.get("status") == "exited_945")
+    n_925     = sum(1 for p in today_ps if p.get("status") == "exited_925")
     n_partial = sum(1 for p in today_ps
-                    if p.get("status") == "exited_1200" and "exit_order_id_945" in p)
+                    if p.get("status") == "exited_1159" and "exit_order_id_925" in p)
     total_pnl = sum(p.get("realized_pnl") or 0 for p in today_ps
-                    if p.get("status") in ("exited_945", "exited_1200"))
-    print(f"\n[zerodha] Summary — opened={n_opened}  exited@945={n_945}  "
-          f"partial_nodata={n_partial}  force@1200={n_force}  P&L=₹{total_pnl:+,.2f}")
+                    if p.get("status") in ("exited_925", "exited_1159"))
+    print(f"\n[zerodha] Summary — opened={n_opened}  exited@925={n_925}  "
+          f"partial_nodata={n_partial}  force@1159={n_force}  P&L=₹{total_pnl:+,.2f}")
     try:
-        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_945=n_945,
-                                  n_partial_nodata=n_partial, n_force_1200=n_force,
+        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_925=n_925,
+                                  n_partial_nodata=n_partial, n_force_1159=n_force,
                                   total_pnl=total_pnl, dry_run=dry_run)
     except Exception as exc:
         print(f"  [notify] daily_summary failed: {exc}", file=sys.stderr)
@@ -549,9 +549,9 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Zerodha 3-stage live trading")
     grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--entry",     action="store_true", help="Stage 1: entry at 3:15pm")
-    grp.add_argument("--exit-945",  action="store_true", help="Stage 2: exit check at 9:45am")
-    grp.add_argument("--exit-1200", action="store_true", help="Stage 3: forced exit at 12pm")
+    grp.add_argument("--entry",     action="store_true", help="Stage 1: entry at 3:21pm")
+    grp.add_argument("--exit-925",  action="store_true", help="Stage 2: exit check at 9:25am")
+    grp.add_argument("--exit-1159", action="store_true", help="Stage 3: forced exit at 11:59am")
     parser.add_argument("--dry-run", action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",    default=None,
                         help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
@@ -566,10 +566,10 @@ if __name__ == "__main__":
     try:
         if args.entry:
             run_entry_315(trade_date=td, dry_run=args.dry_run, capital=args.capital)
-        elif args.exit_945:
-            check_exit_945(dry_run=args.dry_run)
+        elif args.exit_925:
+            check_exit_925(dry_run=args.dry_run)
         else:
-            force_exit_1200(dry_run=args.dry_run)
+            force_exit_1159(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)

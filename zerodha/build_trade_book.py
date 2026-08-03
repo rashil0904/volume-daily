@@ -56,9 +56,15 @@ _FIELDNAMES = [
 ]
 
 _EXIT_STAGE_KEYS = {
+    # Pre-2026-08-04 positions recorded exit fields under "945"/"1200" (the
+    # stage names before the 9:25am/11:59am schedule change) -- both sets of
+    # keys are kept permanently so historical trades still read correctly.
     "exited_945":              ("exit_price_945",  "exit_timestamp_945",  "exit_order_id_945"),
     "exited_1200":             ("exit_price_1200", "exit_timestamp_1200", "exit_order_id_1200"),
     "partial_exit_945_nodata": ("exit_price_945",  "exit_timestamp_945",  "exit_order_id_945"),
+    "exited_925":              ("exit_price_925",  "exit_timestamp_925",  "exit_order_id_925"),
+    "exited_1159":             ("exit_price_1159", "exit_timestamp_1159", "exit_order_id_1159"),
+    "partial_exit_925_nodata": ("exit_price_925",  "exit_timestamp_925",  "exit_order_id_925"),
 }
 
 DP_CHARGE = 15.34  # flat, per scrip, sell-side only — not available via any Kite API
