@@ -368,6 +368,24 @@ def send_monitor_reconnect(attempt: int) -> None:
     )
 
 
+def send_monitor_started(n_symbols: int) -> None:
+    text = "\n".join([
+        "<b>&#9989; Monitor Started</b>",
+        f"<b>Tracking:</b> {n_symbols} symbols",
+        "WebSocket connected — live monitoring is up.",
+    ])
+    _send(text, topic="errors")
+
+
+def send_monitor_start_failure(error_msg: str) -> None:
+    text = "\n".join([
+        "<b>&#128308; Monitor FAILED TO START</b>",
+        f"<b>Error:</b> {html_lib.escape(str(error_msg))}",
+        "live_monitor.py did not reach the WebSocket connect stage — no monitoring is running.",
+    ])
+    _send(text, topic="errors")
+
+
 # ── CLI (for manual testing) ──────────────────────────────────────────────────
 
 if __name__ == "__main__":

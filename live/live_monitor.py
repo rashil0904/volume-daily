@@ -31,7 +31,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from kiteconnect import KiteConnect, KiteTicker
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _ROOT         = Path(__file__).resolve().parent.parent   # project root (one above live/)
@@ -55,9 +54,21 @@ if _env_file.exists():
             _k, _, _v = _line.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip())
 
-import data_loader
+# notify is imported before kiteconnect (and wraps it below) so a broken/missing
+# dependency still reaches Telegram instead of dying silently at import time.
 import notify
-from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance
+
+try:
+    from kiteconnect import KiteConnect, KiteTicker
+except Exception as exc:
+    try:
+        notify.send_monitor_start_failure(f"Import failed: {exc}")
+    except Exception:
+        pass
+    raise
+
+import data_loader
+from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance, make_label
 from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 
 # ── Strategy constants (mirror signal_engine.py) ──────────────────────────────
@@ -70,7 +81,7 @@ _WINDOW_END        = 1445
 
 # ── Operational constants ─────────────────────────────────────────────────────
 _QUOTE_CHUNK     = 500       # max symbols per kite.quote() call
-_HEARTBEAT_SECS  = 30 * 60  # 30 minutes
+_HEARTBEAT_SECS  = 60 * 60  # 60 minutes
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -322,6 +333,8 @@ class LiveMonitor:
         self._log     = _CsvLog()
         self._imb_log = ImbalanceLogger(_LOGS_DIR)
         self._lock    = threading.Lock()
+        self._started_notified = False   # fire send_monitor_started() once, on first connect only
+        self._imbalance_snapshot_done = False   # log qualified-symbol imbalance once, at 15:15 IST
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -383,18 +396,29 @@ class LiveMonitor:
             ask_qty_tot = sum(int(lvl.get("quantity") or 0) for lvl in (depth.get("sell") or []))
 
             with self._lock:
-                fired      = evaluate_tick(state, ltp, cum_vol)
-                imb_state  = self._imb_states.get(token)
-                imb_result = (update_imbalance(imb_state, bid_qty_tot, ask_qty_tot)
-                             if imb_state else (None, None, "no_data"))
-                if "qualified"    in fired: self._fire_qualified(state, imb_state, imb_result)
-                if "near_circuit" in fired: self._fire_near_circuit(state, imb_state, imb_result)
+                fired     = evaluate_tick(state, ltp, cum_vol)
+                imb_state = self._imb_states.get(token)
+                # Only accumulate depth-imbalance history for symbols that have
+                # already qualified — no point tracking book pressure on the
+                # other ~440 symbols that never fire a signal.
+                if state.qualified and imb_state is not None:
+                    update_imbalance(imb_state, bid_qty_tot, ask_qty_tot)
+                if "qualified"    in fired: self._fire_qualified(state)
+                if "near_circuit" in fired: self._fire_near_circuit(state)
+
+        self._maybe_snapshot_imbalance()
 
     def _on_connect(self, ws, response) -> None:
         n = len(self._all_tokens)
         print(f"[WebSocket] Connected — subscribing {n} tokens in MODE_FULL…")
         ws.subscribe(self._all_tokens)
         ws.set_mode(ws.MODE_FULL, self._all_tokens)
+        if not self._started_notified:
+            self._started_notified = True
+            try:
+                notify.send_monitor_started(n)
+            except Exception:
+                pass
 
     def _on_close(self, ws, code, reason) -> None:
         print(f"[WebSocket] Closed — code={code}  reason={reason}")
@@ -425,9 +449,7 @@ class LiveMonitor:
 
     # ── Signal events (called under self._lock) ───────────────────────────────
 
-    def _fire_qualified(self, state: _SymState,
-                        imb_state: ImbalanceState | None,
-                        imb_result: tuple) -> None:
+    def _fire_qualified(self, state: _SymState) -> None:
         ts          = datetime.now(_IST).strftime("%H:%M:%S")
         vol_ratio   = state.cum_vol / state.vol_threshold if state.vol_threshold else 0.0
         vwap_target = state.prev_vwap * _RETURN_MULT
@@ -437,9 +459,6 @@ class LiveMonitor:
             f"ltp=₹{state.ltp:>9,.2f}  vwap_target=₹{vwap_target:,.2f}"
         )
         self._log.write("qualified", state)
-        if imb_state is not None:
-            instant, rolling, lbl = imb_result
-            self._imb_log.log_event("qualified", imb_state, instant, rolling, lbl)
         try:
             notify.send_monitor_qualified(
                 symbol      = state.symbol,
@@ -454,9 +473,7 @@ class LiveMonitor:
         except Exception as exc:
             print(f"  [notify] qualified failed: {exc}", file=sys.stderr)
 
-    def _fire_near_circuit(self, state: _SymState,
-                           imb_state: ImbalanceState | None,
-                           imb_result: tuple) -> None:
+    def _fire_near_circuit(self, state: _SymState) -> None:
         ts           = datetime.now(_IST).strftime("%H:%M:%S")
         pct_to_upper = (state.upper_circuit - state.ltp) / state.ltp * 100
         print(
@@ -465,9 +482,6 @@ class LiveMonitor:
             f"gap={pct_to_upper:.2f}%"
         )
         self._log.write("near_circuit", state)
-        if imb_state is not None:
-            instant, rolling, lbl = imb_result
-            self._imb_log.log_event("near_circuit", imb_state, instant, rolling, lbl)
         try:
             notify.send_monitor_near_circuit(
                 symbol        = state.symbol,
@@ -478,6 +492,35 @@ class LiveMonitor:
             )
         except Exception as exc:
             print(f"  [notify] near_circuit failed: {exc}", file=sys.stderr)
+
+    # ── 15:15 imbalance snapshot ───────────────────────────────────────────────
+    # Fires once, the first tick batch received at/after 15:15 IST: logs each
+    # currently-qualified symbol's last-15min rolling book imbalance to
+    # logs/imbalance_<date>.csv. Log only — no Telegram, no trading action.
+
+    def _maybe_snapshot_imbalance(self) -> None:
+        if self._imbalance_snapshot_done:
+            return
+        now = datetime.now(_IST)
+        if now.hour * 100 + now.minute < 1515:
+            return
+        self._imbalance_snapshot_done = True
+
+        n_logged = 0
+        for token, state in self._states.items():
+            if not state.qualified:
+                continue
+            imb_state = self._imb_states.get(token)
+            if imb_state is None or not imb_state.rolling:
+                continue
+            rolling = sum(v for _, v in imb_state.rolling) / len(imb_state.rolling)
+            self._imb_log.log_event(
+                "snapshot_1515", imb_state,
+                imb_state.last_imbalance, rolling, make_label(rolling),
+            )
+            n_logged += 1
+        print(f"[{now.strftime('%H:%M:%S')}] 15:15 imbalance snapshot — "
+              f"logged {n_logged} qualified symbol(s).")
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
@@ -535,8 +578,11 @@ class LiveMonitor:
 if __name__ == "__main__":
     try:
         api_key, access_token = _get_kite_credentials()
+        LiveMonitor(api_key, access_token).run()
     except Exception as exc:
-        print(f"Auth failed: {exc}", file=sys.stderr)
+        print(f"live_monitor.py failed to start: {exc}", file=sys.stderr)
+        try:
+            notify.send_monitor_start_failure(str(exc))
+        except Exception:
+            pass
         sys.exit(1)
-
-    LiveMonitor(api_key, access_token).run()

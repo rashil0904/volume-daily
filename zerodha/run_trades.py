@@ -35,6 +35,7 @@ from zerodha.trade import buy, sell
 from zerodha.trade import order_status as _kite_order_status
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
+import notify
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -306,6 +307,11 @@ def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
         })
         if not dry_run:
             _save_pos(positions)
+        try:
+            notify.send_entry(broker=_BROKER, symbol=sym, ref_price=ref,
+                              shares=fill_qty, order_id=order_id, dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] entry failed: {exc}", file=sys.stderr)
 
     print(f"\n[zerodha] Stage 1 complete.")
 
@@ -380,6 +386,12 @@ def check_exit_945(dry_run: bool = False) -> None:
             })
             if not dry_run:
                 _save_pos(positions)
+            try:
+                notify.send_exit_945_nodata(broker=_BROKER, symbol=sym,
+                                            shares_exited=half, shares_remaining=remain,
+                                            exit_price=ep, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] exit_945_nodata failed: {exc}", file=sys.stderr)
             continue
 
         if pnl_live > 0:
@@ -414,6 +426,11 @@ def check_exit_945(dry_run: bool = False) -> None:
             if not dry_run:
                 _save_pos(positions)
             print(f"[zerodha]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+            try:
+                notify.send_exit_945(broker=_BROKER, symbol=sym, exit_price=ep,
+                                     return_pct=ret_act, pnl=pnl, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] exit_945 failed: {exc}", file=sys.stderr)
         else:
             print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 12pm forced exit.")
 
@@ -435,6 +452,10 @@ def force_exit_1200(dry_run: bool = False) -> None:
 
     if not open_ps:
         print("[zerodha] All positions already exited — nothing to force-close.")
+        try:
+            notify.send_nothing_open_at_1200(broker=_BROKER)
+        except Exception as exc:
+            print(f"  [notify] nothing_open_at_1200 failed: {exc}", file=sys.stderr)
         _daily_summary(positions, 0, dry_run)
         return
 
@@ -492,6 +513,11 @@ def force_exit_1200(dry_run: bool = False) -> None:
         if not dry_run:
             _save_pos(positions)
         print(f"[zerodha]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+        try:
+            notify.send_force_exit_1200(broker=_BROKER, symbol=sym, exit_price=ep,
+                                        return_pct=ret, pnl=pnl, dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] force_exit_1200 failed: {exc}", file=sys.stderr)
         n_force += 1
 
     _daily_summary(positions, n_force, dry_run)
@@ -510,6 +536,12 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
                     if p.get("status") in ("exited_945", "exited_1200"))
     print(f"\n[zerodha] Summary — opened={n_opened}  exited@945={n_945}  "
           f"partial_nodata={n_partial}  force@1200={n_force}  P&L=₹{total_pnl:+,.2f}")
+    try:
+        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_945=n_945,
+                                  n_partial_nodata=n_partial, n_force_1200=n_force,
+                                  total_pnl=total_pnl, dry_run=dry_run)
+    except Exception as exc:
+        print(f"  [notify] daily_summary failed: {exc}", file=sys.stderr)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
