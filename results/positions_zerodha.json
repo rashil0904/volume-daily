@@ -467,8 +467,13 @@
     "actual_fill_price": 920.9981,
     "actual_fill_quantity": 27,
     "entry_order_id": "260731221121660",
-    "status": "open",
-    "entry_timestamp": "2026-07-31T15:15:05.897012+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-31T15:15:05.897012+05:30",
+    "exit_price_945": 941.8,
+    "exit_order_id_945": "260803220314700",
+    "exit_timestamp_945": "2026-08-03T09:45:06.364620+05:30",
+    "realized_return_pct": 2.2586,
+    "realized_pnl": 561.65
   },
   {
     "broker": "zerodha",
@@ -479,8 +484,13 @@
     "actual_fill_price": 41.95,
     "actual_fill_quantity": 594,
     "entry_order_id": "260731221121927",
-    "status": "open",
-    "entry_timestamp": "2026-07-31T15:15:10.007621+05:30"
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-31T15:15:10.007621+05:30",
+    "exit_price_1200": 41.9,
+    "exit_order_id_1200": "260803220749848",
+    "exit_timestamp_1200": "2026-08-03T12:00:05.642412+05:30",
+    "realized_return_pct": -0.1192,
+    "realized_pnl": -29.7
   },
   {
     "broker": "zerodha",
@@ -491,8 +501,13 @@
     "actual_fill_price": 2100.0,
     "actual_fill_quantity": 11,
     "entry_order_id": "260731221122116",
-    "status": "open",
-    "entry_timestamp": "2026-07-31T15:15:14.099589+05:30"
+    "status": "exited_945",
+    "entry_timestamp": "2026-07-31T15:15:14.099589+05:30",
+    "exit_price_945": 2110.0455,
+    "exit_order_id_945": "260803220315010",
+    "exit_timestamp_945": "2026-08-03T09:45:09.867160+05:30",
+    "realized_return_pct": 0.4784,
+    "realized_pnl": 110.5
   },
   {
     "broker": "zerodha",
@@ -503,7 +518,72 @@
     "actual_fill_price": 259.22,
     "actual_fill_quantity": 96,
     "entry_order_id": "260731221122552",
+    "status": "exited_1200",
+    "entry_timestamp": "2026-07-31T15:15:22.320951+05:30",
+    "exit_price_1200": 254.6828,
+    "exit_order_id_1200": "260803220750474",
+    "exit_timestamp_1200": "2026-08-03T12:00:09.006614+05:30",
+    "realized_return_pct": -1.7503,
+    "realized_pnl": -435.57
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "DALMIASUG",
+    "entry_date": "2026-08-03",
+    "reference_price": 407.55,
+    "shares_intended": 52,
+    "actual_fill_price": 407.5,
+    "actual_fill_quantity": 52,
+    "entry_order_id": "260803221224939",
     "status": "open",
-    "entry_timestamp": "2026-07-31T15:15:22.320951+05:30"
+    "entry_timestamp": "2026-08-03T15:15:06.963437+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "DEEPINDS",
+    "entry_date": "2026-08-03",
+    "reference_price": 646.3,
+    "shares_intended": 33,
+    "actual_fill_price": 646.15,
+    "actual_fill_quantity": 33,
+    "entry_order_id": "260803221225151",
+    "status": "open",
+    "entry_timestamp": "2026-08-03T15:15:11.073790+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "JINDWORLD",
+    "entry_date": "2026-08-03",
+    "reference_price": 40.52,
+    "shares_intended": 528,
+    "actual_fill_price": 40.52,
+    "actual_fill_quantity": 528,
+    "entry_order_id": "260803221225346",
+    "status": "open",
+    "entry_timestamp": "2026-08-03T15:15:15.201846+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "LUMAXIND",
+    "entry_date": "2026-08-03",
+    "reference_price": 5746.0,
+    "shares_intended": 3,
+    "actual_fill_price": 5745.3333,
+    "actual_fill_quantity": 3,
+    "entry_order_id": "260803221225548",
+    "status": "open",
+    "entry_timestamp": "2026-08-03T15:15:19.310578+05:30"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "SPORTKING",
+    "entry_date": "2026-08-03",
+    "reference_price": 227.1,
+    "shares_intended": 94,
+    "actual_fill_price": 228.19,
+    "actual_fill_quantity": 94,
+    "entry_order_id": "260803221225785",
+    "status": "open",
+    "entry_timestamp": "2026-08-03T15:15:23.440594+05:30"
   }
 ]
