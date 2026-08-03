@@ -1,0 +1,1037 @@
+<title>The Trade Book — NSE Momentum Ledger</title>
+<style>
+  @font-face {
+    font-family: 'Fraunces';
+    font-style: normal;
+    font-weight: 550 920;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__FRAUNCES_NORMAL_B64__) format('woff2');
+  }
+  @font-face {
+    font-family: 'Fraunces';
+    font-style: italic;
+    font-weight: 400 600;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__FRAUNCES_ITALIC_B64__) format('woff2');
+  }
+  @font-face {
+    font-family: 'IBM Plex Sans';
+    font-style: normal;
+    font-weight: 350 650;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__PLEXSANS_B64__) format('woff2');
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__PLEXMONO_400_B64__) format('woff2');
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__PLEXMONO_500_B64__) format('woff2');
+  }
+  @font-face {
+    font-family: 'IBM Plex Mono';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url(data:font/woff2;base64,__PLEXMONO_600_B64__) format('woff2');
+  }
+
+  :root {
+    --bg:          #EEEBE1;
+    --surface:     #FBFAF6;
+    --surface-2:   #F2EFE5;
+    --border:      #DAD5C7;
+    --border-soft: #E2DDCE;
+    --ink:         #211D14;
+    --ink-2:       #5C5644;
+    --ink-3:       #8B8571;
+    --accent:      #A8710F;
+    --accent-ink:  #FFFFFF;
+    --win:         #12946F;
+    --loss:        #B8203A;
+    --open:        #3355B8;
+    --win-bg:      rgba(18,148,111,0.12);
+    --loss-bg:     rgba(184,32,58,0.12);
+    --open-bg:     rgba(51,85,184,0.12);
+    --shadow:      0 1px 2px rgba(33,29,20,0.06), 0 8px 24px -12px rgba(33,29,20,0.18);
+    --zero-line:   #B6AF9C;
+    color-scheme: light;
+  }
+  /* Light is the default look regardless of OS preference — dark is still
+     available via the artifact viewer's explicit theme toggle below. */
+  :root[data-theme="dark"] {
+    --bg:          #15130F;
+    --surface:     #1E1B15;
+    --surface-2:   #262219;
+    --border:      #3A3428;
+    --border-soft: #2C271D;
+    --ink:         #F2EDE2;
+    --ink-2:       #A69C87;
+    --ink-3:       #6E6656;
+    --accent:      #E3B341;
+    --accent-ink:  #211804;
+    --win:         #28A17F;
+    --loss:        #E2543F;
+    --open:        #6B85DB;
+    --win-bg:      rgba(40,161,127,0.16);
+    --loss-bg:     rgba(226,84,63,0.16);
+    --open-bg:     rgba(107,133,219,0.16);
+    --shadow:      0 1px 2px rgba(0,0,0,0.3), 0 12px 32px -16px rgba(0,0,0,0.6);
+    --zero-line:   #4A4436;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] {
+    --bg:          #EEEBE1;
+    --surface:     #FBFAF6;
+    --surface-2:   #F2EFE5;
+    --border:      #DAD5C7;
+    --border-soft: #E2DDCE;
+    --ink:         #211D14;
+    --ink-2:       #5C5644;
+    --ink-3:       #8B8571;
+    --accent:      #A8710F;
+    --accent-ink:  #FFFFFF;
+    --win:         #12946F;
+    --loss:        #B8203A;
+    --open:        #3355B8;
+    --win-bg:      rgba(18,148,111,0.12);
+    --loss-bg:     rgba(184,32,58,0.12);
+    --open-bg:     rgba(51,85,184,0.12);
+    --shadow:      0 1px 2px rgba(33,29,20,0.06), 0 8px 24px -12px rgba(33,29,20,0.18);
+    --zero-line:   #B6AF9C;
+    color-scheme: light;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    padding: clamp(20px, 4vw, 56px) clamp(16px, 5vw, 64px) 80px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  /* ---- Header ---- */
+  .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 14px;
+  }
+  .eyebrow .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--win);
+    box-shadow: 0 0 0 3px var(--win-bg);
+  }
+  header h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 620;
+    font-size: clamp(32px, 5vw, 50px);
+    line-height: 1.02;
+    letter-spacing: -0.01em;
+    margin: 0 0 8px;
+    text-wrap: balance;
+  }
+  header h1 em {
+    font-style: italic;
+    font-weight: 480;
+    color: var(--accent);
+  }
+  .sub {
+    font-size: 15px;
+    color: var(--ink-2);
+    max-width: 62ch;
+    line-height: 1.55;
+    margin: 0 0 40px;
+  }
+  .sub strong { color: var(--ink); font-weight: 600; }
+
+  /* ---- Hero stat band ---- */
+  .hero {
+    display: grid;
+    grid-template-columns: 1.3fr 1fr 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow);
+  }
+  .hero-cell {
+    background: var(--surface);
+    padding: 22px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    min-height: 108px;
+  }
+  .hero-cell .label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .hero-cell .value {
+    font-family: 'Fraunces', serif;
+    font-weight: 680;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  .hero-cell.primary .value {
+    font-size: clamp(38px, 4.6vw, 54px);
+  }
+  .hero-cell .value { font-size: 26px; }
+  .hero-cell .foot {
+    font-size: 12.5px;
+    color: var(--ink-3);
+  }
+  .up   { color: var(--win); }
+  .down { color: var(--loss); }
+  .arrow { font-size: 0.72em; vertical-align: 2%; }
+
+  /* ---- Section shell ---- */
+  section.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px clamp(16px, 3vw, 28px) 20px;
+    margin-bottom: 24px;
+    box-shadow: var(--shadow);
+  }
+  .panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .panel-head h2 {
+    font-family: 'Fraunces', serif;
+    font-weight: 600;
+    font-size: 20px;
+    margin: 0;
+    letter-spacing: -0.005em;
+  }
+  .panel-head .note {
+    font-size: 12.5px;
+    color: var(--ink-3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* ---- Equity curve chart ---- */
+  .chart-wrap { position: relative; margin-top: 6px; }
+  svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
+  .gridline { stroke: var(--border-soft); stroke-width: 1; }
+  .zeroline { stroke: var(--zero-line); stroke-width: 1; stroke-dasharray: 3 4; }
+  .axis-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    fill: var(--ink-3);
+  }
+  .line-net {
+    fill: none; stroke: var(--accent); stroke-width: 2.5;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .pt-net   { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .end-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .end-label.net { fill: var(--accent); }
+  .crosshair {
+    stroke: var(--ink-3); stroke-width: 1; stroke-dasharray: 2 3;
+    opacity: 0; pointer-events: none;
+  }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--ink);
+    color: var(--bg);
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    font-family: 'IBM Plex Mono', monospace;
+    box-shadow: 0 8px 20px -6px rgba(0,0,0,0.35);
+    opacity: 0;
+    transition: opacity .1s ease;
+    z-index: 30;
+    white-space: nowrap;
+  }
+  .tooltip b { color: var(--accent); }
+  .tooltip .tt-title { color: var(--ink-2); font-weight: 600; margin-bottom: 3px; display:block; }
+
+  /* ---- Day bars ---- */
+  .daybars {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    height: 148px;
+    margin-top: 18px;
+    padding: 0 2px;
+  }
+  .daybar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    cursor: default;
+    position: relative;
+  }
+  .daybar-track {
+    width: 100%;
+    max-width: 46px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+  }
+  .daybar {
+    width: 100%;
+    border-radius: 4px 4px 3px 3px;
+    min-height: 4px;
+    transition: filter .12s ease, transform .12s ease;
+  }
+  .daybar-col:hover .daybar { filter: brightness(1.12); transform: scaleX(1.08); }
+  .daybar.win  { background: var(--win); }
+  .daybar.loss { background: var(--loss); }
+  .daybar.open {
+    background: repeating-linear-gradient(135deg, var(--open) 0 4px, transparent 4px 8px);
+    border: 1.5px dashed var(--open);
+  }
+  .daybar-date {
+    margin-top: 9px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-align: center;
+    line-height: 1.3;
+  }
+
+  /* ---- Symbol performance ---- */
+  .symbols {
+    display: flex; flex-direction: column; gap: 2px; margin-top: 14px;
+  }
+  .symbol-row {
+    display: grid;
+    grid-template-columns: 90px 1fr 110px;
+    align-items: center;
+    gap: 14px;
+    padding: 7px 4px;
+    border-radius: 6px;
+  }
+  .symbol-row:hover { background: var(--surface-2); }
+  .symbol-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .repeat-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--ink-3);
+    border-radius: 20px;
+    padding: 1px 6px;
+  }
+  .symbol-bar-track {
+    height: 8px;
+    background: var(--surface-2);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .symbol-bar {
+    position: absolute; top: 0; bottom: 0;
+    border-radius: 4px;
+  }
+  .symbol-net {
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+
+  /* ---- Table controls ---- */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 16px 0 14px;
+    flex-wrap: wrap;
+  }
+  .chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 6px 13px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background .12s ease, color .12s ease, border-color .12s ease;
+  }
+  .chip:hover { border-color: var(--ink-3); }
+  .chip.active {
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+  }
+  .search {
+    margin-left: auto;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 12px;
+    color: var(--ink);
+    width: 160px;
+    outline: none;
+  }
+  .search:focus { border-color: var(--accent); }
+  .search::placeholder { color: var(--ink-3); }
+
+  /* ---- Table ---- */
+  .table-scroll { overflow-x: auto; margin: 0 -2px; }
+  table.ledger {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 760px;
+  }
+  table.ledger th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    text-align: right;
+    padding: 0 10px 10px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  table.ledger th:first-child, table.ledger td:first-child { text-align: left; }
+  table.ledger th:nth-child(2), table.ledger td:nth-child(2),
+  table.ledger th:nth-child(5), table.ledger td:nth-child(5),
+  table.ledger th:nth-child(6), table.ledger td:nth-child(6) { text-align: left; }
+  table.ledger th .arrow-sort { opacity: 0.4; margin-left: 3px; font-size: 9px; }
+  table.ledger th.sorted .arrow-sort { opacity: 1; color: var(--accent); }
+  table.ledger th:hover { color: var(--ink); }
+  table.ledger td {
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--border-soft);
+    text-align: right;
+    font-family: 'IBM Plex Mono', monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  table.ledger tbody tr { transition: background .1s ease; }
+  table.ledger tbody tr:hover { background: var(--surface-2); }
+  table.ledger td.sym {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    text-align: left;
+  }
+  table.ledger td.date-cell { color: var(--ink-2); font-size: 12px; }
+  .pnl-pos { color: var(--win); }
+  .pnl-neg { color: var(--loss); }
+  .pnl-mut { color: var(--ink-3); }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    padding: 3px 9px 3px 7px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+  .pill .ic { font-size: 9px; }
+  .pill.win  { background: var(--win-bg); color: var(--win); }
+  .pill.loss { background: var(--loss-bg); color: var(--loss); }
+  .pill.open { background: var(--open-bg); color: var(--open); }
+
+  .empty-row td {
+    text-align: center;
+    color: var(--ink-3);
+    padding: 28px;
+    font-family: 'IBM Plex Sans', sans-serif;
+  }
+
+  /* ---- Footer ---- */
+  footer {
+    margin-top: 32px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--ink-3);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  @media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr 1fr; }
+    .hero-cell.primary, .hero-cell:last-child { grid-column: 1 / -1; }
+    .hero-cell.primary .value { font-size: clamp(34px, 11vw, 46px); }
+    .sparkline { width: 100px; height: 26px; top: 40px; right: 18px; }
+    .symbol-row { grid-template-columns: 76px 1fr 90px; gap: 8px; }
+  }
+
+  /* ---- Focus states (keyboard nav) ---- */
+  .chip:focus-visible,
+  .search:focus-visible,
+  table.ledger th:focus-visible,
+  .daybar-col:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .daybar-col { outline: none; }
+
+  /* ---- Hero hover lift ---- */
+  .hero-cell { transition: background .15s ease; }
+  .hero-cell:hover { background: var(--surface-2); }
+
+  /* ---- Sparkline ---- */
+  .sparkline { position: absolute; right: 22px; top: 44px; opacity: 0.32; pointer-events: none; }
+  .hero-cell.primary { position: relative; }
+
+  /* ---- Chart end-label halo ---- */
+  .end-halo { fill: var(--surface); }
+
+  /* ---- Scroll-shadow affordance (mobile table) ---- */
+  .table-scroll { position: relative; }
+  .table-scroll::after {
+    content: "";
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 28px;
+    background: linear-gradient(to right, transparent, var(--surface));
+    opacity: 0;
+    transition: opacity .15s ease;
+    pointer-events: none;
+  }
+  .table-scroll.scrollable::after { opacity: 1; }
+  .scroll-hint {
+    display: none;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    color: var(--ink-3);
+    text-align: right;
+    margin: -4px 2px 8px;
+  }
+  @media (max-width: 760px) {
+    .scroll-hint.visible { display: block; }
+  }
+
+  /* ---- Entrance motion ---- */
+  .reveal {
+    opacity: 0;
+    transform: translateY(10px);
+    animation: reveal-up .55s cubic-bezier(.2,.7,.3,1) forwards;
+  }
+  @keyframes reveal-up {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .pulse-dot {
+    animation: pulse-breathe 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse-breathe {
+    0%, 100% { box-shadow: 0 0 0 3px var(--win-bg); }
+    50%      { box-shadow: 0 0 0 6px var(--win-bg); }
+  }
+  .draw-in {
+    stroke-dasharray: var(--len);
+    stroke-dashoffset: var(--len);
+    animation: draw .9s cubic-bezier(.3,.6,.2,1) forwards;
+    animation-delay: .15s;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+    .reveal { opacity: 1 !important; transform: none !important; }
+    .draw-in { stroke-dashoffset: 0 !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <div class="eyebrow"><span class="dot pulse-dot"></span> LIVE CAPITAL &nbsp;·&nbsp; ZERODHA &nbsp;·&nbsp; NSE MID-CAP MOMENTUM</div>
+  <header>
+    <h1>The Trade <em>Book</em></h1>
+    <p class="sub">Every position opened with real money, entered at 3:15pm on volume-and-VWAP breakouts and unwound the next session. <strong>₹1,50,000</strong> deployed daily since <strong id="hdr-start"></strong> — nothing before it counts.</p>
+  </header>
+
+  <div class="hero reveal" id="hero"></div>
+
+  <section class="panel reveal" style="animation-delay:.06s">
+    <div class="panel-head">
+      <h2>Cumulative P&amp;L</h2>
+      <span class="note" id="curve-range"></span>
+    </div>
+    <div class="controls" style="margin:12px 0 2px;">
+      <button class="chip active" data-metric="net">Net P&amp;L</button>
+      <button class="chip" data-metric="gross">Gross P&amp;L</button>
+    </div>
+    <div class="chart-wrap" id="chart-wrap">
+      <svg class="chart" id="equity-chart" viewBox="0 0 900 300" preserveAspectRatio="none" role="img"></svg>
+      <div class="tooltip" id="chart-tooltip"></div>
+    </div>
+  </section>
+
+  <section class="panel reveal" style="animation-delay:.11s">
+    <div class="panel-head">
+      <h2>Day by day</h2>
+      <span class="note">by entry date · net P&amp;L</span>
+    </div>
+    <div class="chart-wrap" id="daybars-wrap">
+      <div class="daybars" id="daybars"></div>
+      <div class="tooltip" id="daybar-tooltip"></div>
+    </div>
+  </section>
+
+  <section class="panel reveal" style="animation-delay:.16s">
+    <div class="panel-head">
+      <h2>Repeat names</h2>
+      <span class="note" id="symbols-note"></span>
+    </div>
+    <div class="symbols" id="symbols"></div>
+  </section>
+
+  <section class="panel reveal" style="animation-delay:.21s">
+    <div class="panel-head">
+      <h2>Ledger</h2>
+      <span class="note" id="ledger-count"></span>
+    </div>
+    <div class="controls">
+      <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="open">Open</button>
+      <button class="chip" data-filter="win">Wins</button>
+      <button class="chip" data-filter="loss">Losses</button>
+      <input class="search" id="search" placeholder="Search symbol…" />
+    </div>
+    <div class="scroll-hint" id="scroll-hint">⟷ swipe for entry/exit &amp; charges</div>
+    <div class="table-scroll" id="table-scroll">
+      <table class="ledger">
+        <thead>
+          <tr>
+            <th data-key="symbol">Symbol<span class="arrow-sort">▾</span></th>
+            <th data-key="status">Result<span class="arrow-sort">▾</span></th>
+            <th data-key="net_pnl">Net P&amp;L<span class="arrow-sort">▾</span></th>
+            <th data-key="net_pct">Return<span class="arrow-sort">▾</span></th>
+            <th data-key="entry_date">Entered<span class="arrow-sort">▾</span></th>
+            <th data-key="exit_date">Exited<span class="arrow-sort">▾</span></th>
+            <th data-key="shares">Shares<span class="arrow-sort">▾</span></th>
+            <th data-key="entry_price">Entry ₹<span class="arrow-sort">▾</span></th>
+            <th data-key="exit_price">Exit ₹<span class="arrow-sort">▾</span></th>
+            <th data-key="realised_pnl">Realised<span class="arrow-sort">▾</span></th>
+            <th data-key="charges">Charges<span class="arrow-sort">▾</span></th>
+          </tr>
+        </thead>
+        <tbody id="ledger-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <span id="foot-asof"></span>
+  </footer>
+
+</div>
+
+<script>
+const DATA = __DATA_JSON__;
+
+const fmtMoney = (v, forceSign) => {
+  if (v === null || v === undefined) return '—';
+  const sign = v < 0 ? '−' : (forceSign ? '+' : '');
+  return sign + '₹' + Math.abs(v).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+};
+const fmtMoney0 = (v) => '₹' + Math.round(v).toLocaleString('en-IN');
+const fmtPct = (v) => (v === null || v === undefined) ? '—' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+const fmtDate = (iso) => {
+  if (!iso) return '—';
+  const [y,m,d] = iso.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${parseInt(d)} ${months[parseInt(m)-1]}`;
+};
+const fmtDateFull = (iso) => {
+  const [y,m,d] = iso.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${parseInt(d)} ${months[parseInt(m)-1]} ${y}`;
+};
+
+document.getElementById('hdr-start').textContent = fmtDateFull(DATA.summary.start_date);
+document.getElementById('foot-asof').textContent = 'As of ' + fmtDateFull(DATA.summary.as_of);
+document.getElementById('curve-range').textContent = fmtDate(DATA.curve[0].date) + ' → ' + fmtDate(DATA.curve[DATA.curve.length-1].date);
+document.getElementById('ledger-count').textContent = DATA.summary.total_trades + ' positions · ' + DATA.summary.n_closed + ' closed, ' + DATA.summary.n_open + ' open';
+document.getElementById('symbols-note').textContent = DATA.symbol_stats.filter(s=>s.n>1).length + ' traded more than once';
+
+/* ---------- Hero ---------- */
+function sparklinePath(vals, w, h) {
+  const min = Math.min(0, ...vals), max = Math.max(0, ...vals);
+  const range = (max - min) || 1;
+  return vals.map((v,i) => {
+    const x = (i/(vals.length-1)) * w;
+    const y = h - ((v - min)/range) * h;
+    return `${i===0?'M':'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+  }).join(' ');
+}
+
+function countUp(el, target, opts={}) {
+  const { prefix = '', suffix = '', decimals = 0, duration = 900 } = opts;
+  const fmt = v => v.toLocaleString('en-IN', {minimumFractionDigits: decimals, maximumFractionDigits: decimals});
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) { el.textContent = prefix + fmt(target) + suffix; return; }
+  const start = performance.now();
+  function tick(now) {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = prefix + fmt(target * eased) + suffix;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+(function renderHero(){
+  const s = DATA.summary;
+  const netUp = s.total_net >= 0;
+  const hero = document.getElementById('hero');
+  const curveVals = [0, ...DATA.curve.map(p => p.cum_net)];
+  const spark = sparklinePath(curveVals, 130, 34);
+  hero.innerHTML = `
+    <div class="hero-cell primary">
+      <div class="label">Net P&amp;L since ${fmtDate(s.start_date)}</div>
+      <div class="value ${netUp?'up':'down'}"><span class="arrow">${netUp?'▲':'▼'}</span> ₹<span id="hero-net-num">0.00</span></div>
+      <div class="foot">${fmtMoney(s.total_realised, true)} gross · ${fmtMoney0(s.total_charges)} in charges</div>
+      <svg class="sparkline" width="130" height="34" viewBox="0 0 130 34">
+        <path d="${spark}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="hero-cell">
+      <div class="label">Win rate</div>
+      <div class="value"><span id="hero-winrate">0</span>%</div>
+      <div class="foot">${s.n_wins}W / ${s.n_losses}L of ${s.n_closed} closed</div>
+    </div>
+    <div class="hero-cell">
+      <div class="label">Profit factor</div>
+      <div class="value"><span id="hero-pf">0.00</span>×</div>
+      <div class="foot">avg win ${fmtMoney0(s.avg_win)} · avg loss ${fmtMoney0(Math.abs(s.avg_loss))}</div>
+    </div>
+    <div class="hero-cell">
+      <div class="label">Best / Worst</div>
+      <div class="value" style="font-size:19px; line-height:1.5;">
+        <span class="up">${s.best_trade}</span><br/>
+        <span class="down">${s.worst_trade}</span>
+      </div>
+      <div class="foot">${fmtMoney(s.best_trade_pnl,true)} · ${fmtMoney(s.worst_trade_pnl,true)}</div>
+    </div>
+  `;
+  countUp(document.getElementById('hero-net-num'), Math.abs(s.total_net), {decimals:2});
+  countUp(document.getElementById('hero-winrate'), s.win_rate, {decimals:0});
+  countUp(document.getElementById('hero-pf'), s.profit_factor, {decimals:2});
+})();
+
+/* ---------- Equity curve (hand-built SVG line chart) ---------- */
+function niceStep(range, targetTicks) {
+  const rough = range / targetTicks;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const step = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  return step * mag;
+}
+
+const points = [{date: DATA.summary.start_date, cum_gross: 0, cum_net: 0, day_gross:0, day_net:0, n_trades:0}, ...DATA.curve];
+
+function renderChart(metric){
+  const svg = document.getElementById('equity-chart');
+  const tooltip = document.getElementById('chart-tooltip');
+  const W = 900, H = 300;
+  const padL = 44, padR = 100, padT = 20, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const key = metric === 'gross' ? 'cum_gross' : 'cum_net';
+
+  const allVals = points.map(p => p[key]);
+  const rawMin = Math.min(0, ...allVals), rawMax = Math.max(0, ...allVals);
+  const step = niceStep((rawMax - rawMin) || 1000, 4);
+  const vMin = Math.floor(rawMin / step) * step - step * 0.15;
+  const vMax = Math.ceil(rawMax / step) * step + step * 0.15;
+
+  const x = i => padL + (i / (points.length - 1)) * plotW;
+  const y = v => padT + plotH - ((v - vMin) / (vMax - vMin)) * plotH;
+
+  let svgContent = '';
+
+  // gridlines at nice round steps, labels anchored LEFT (away from the end-label on the right)
+  for (let v = Math.ceil(vMin / step) * step; v <= vMax; v += step) {
+    const yy = y(v);
+    const isZero = Math.abs(v) < step * 0.01;
+    svgContent += `<line class="${isZero ? 'zeroline' : 'gridline'}" x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-padR}" y2="${yy.toFixed(1)}" />`;
+    svgContent += `<text class="axis-label" x="0" y="${(yy+3.5).toFixed(1)}" text-anchor="start">${fmtMoney0(v)}</text>`;
+  }
+
+  // x labels
+  points.forEach((p,i) => {
+    svgContent += `<text class="axis-label" x="${x(i)}" y="${H-8}" text-anchor="middle">${fmtDate(p.date)}</text>`;
+  });
+  // weekend-gap tick between 31 Jul and the next session, if present
+  const gapIdx = points.findIndex((p,i) => i>0 && (new Date(p.date) - new Date(points[i-1].date)) > 1000*60*60*24*2);
+  if (gapIdx > 0) {
+    const midX = (x(gapIdx-1) + x(gapIdx)) / 2;
+    svgContent += `<text class="axis-label" x="${midX}" y="${padT-8}" text-anchor="middle" style="opacity:.6">weekend</text>`;
+  }
+
+  const linePath = points.map((p,i) => `${i===0?'M':'L'} ${x(i).toFixed(1)} ${y(p[key]).toFixed(1)}`).join(' ');
+  svgContent += `<path class="line-net" id="path-metric" d="${linePath}" />`;
+  points.forEach((p,i) => {
+    svgContent += `<circle class="pt-net" cx="${x(i)}" cy="${y(p[key])}" r="4.5" />`;
+  });
+
+  // end-of-line label, right side
+  const last = points[points.length-1];
+  const lastX = x(points.length-1) + 10;
+  const endY = y(last[key]);
+  const endTxt = fmtMoney(last[key], true);
+  svgContent += `<rect class="end-halo" x="${lastX-3}" y="${endY-13}" width="${endTxt.length*7.3+10}" height="17" rx="4"/>`;
+  svgContent += `<text class="end-label net" x="${lastX}" y="${endY+3}">${endTxt}</text>`;
+
+  svgContent += `<line class="crosshair" id="crosshair" x1="0" y1="${padT}" x2="0" y2="${H-padB}" />`;
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('aria-label', `Cumulative ${metric === 'gross' ? 'gross' : 'net'} P&L from ${fmtDateFull(points[0].date)} to ${fmtDateFull(last.date)}, ending at ${endTxt}.`);
+  svg.innerHTML = svgContent;
+
+  // draw-in animation
+  const pathEl = document.getElementById('path-metric');
+  const len = pathEl.getTotalLength();
+  pathEl.style.setProperty('--len', len);
+  pathEl.classList.add('draw-in');
+
+  // hover interaction
+  const crosshair = document.getElementById('crosshair');
+  svg.onmousemove = (e) => {
+    const rect = svg.getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width * W;
+    let idx = Math.round((relX - padL) / plotW * (points.length - 1));
+    idx = Math.max(0, Math.min(points.length - 1, idx));
+    const p = points[idx];
+    crosshair.setAttribute('x1', x(idx)); crosshair.setAttribute('x2', x(idx));
+    crosshair.style.opacity = 1;
+    tooltip.innerHTML = `<span class="tt-title">${fmtDateFull(p.date)}</span>` +
+      (idx===0 ? 'Start of live capital' :
+      `${p.n_trades} exit(s) that day<br/>Net: <b>${fmtMoney(p.day_net,true)}</b> · Gross: ${fmtMoney(p.day_gross,true)}<br/>Cumulative ${metric}: <b>${fmtMoney(p[key],true)}</b>`);
+    const cx = (x(idx) / W) * rect.width;
+    const cy = (y(p[key]) / H) * rect.height;
+    tooltip.style.left = Math.min(cx + 14, rect.width - 190) + 'px';
+    tooltip.style.top  = Math.max(cy - 54, 0) + 'px';
+    tooltip.style.opacity = 1;
+  };
+  svg.onmouseleave = () => {
+    crosshair.style.opacity = 0;
+    tooltip.style.opacity = 0;
+  };
+}
+
+renderChart('net');
+document.querySelectorAll('[data-metric]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-metric]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderChart(btn.dataset.metric);
+  });
+});
+
+/* ---------- Day bars ---------- */
+(function renderDayBars(){
+  const el = document.getElementById('daybars');
+  const vals = DATA.day_bars.map(d => d.net).filter(v => v !== null);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  el.innerHTML = DATA.day_bars.map(d => {
+    const isOpen = d.net === null;
+    const pct = isOpen ? 38 : Math.max(6, Math.abs(d.net) / maxAbs * 100);
+    const cls = isOpen ? 'open' : (d.net >= 0 ? 'win' : 'loss');
+    const label = isOpen ? `${d.n_trades} open` : fmtMoney(d.net, true);
+    return `<div class="daybar-col" tabindex="0" role="img" aria-label="${fmtDateFull(d.date)}, ${d.n_trades} trade(s)${isOpen?'':', net '+fmtMoney(d.net,true)}" data-tt="${fmtDateFull(d.date)} · ${d.n_trades} trade(s)${isOpen?'':' · net '+fmtMoney(d.net,true)}">
+      <div class="daybar-track"><div class="daybar ${cls}" style="height:${pct}%"></div></div>
+      <div class="daybar-date">${fmtDate(d.date)}<br/><span style="color:var(--ink-2)">${label}</span></div>
+    </div>`;
+  }).join('');
+
+  const tooltip = document.getElementById('daybar-tooltip');
+  const wrap = document.getElementById('daybars-wrap');
+  el.querySelectorAll('.daybar-col').forEach(col => {
+    const show = () => { tooltip.innerHTML = col.dataset.tt; tooltip.style.opacity = 1; };
+    const hide = () => { tooltip.style.opacity = 0; };
+    col.addEventListener('mouseenter', show);
+    col.addEventListener('focus', () => {
+      show();
+      const wrapRect = wrap.getBoundingClientRect();
+      const colRect = col.getBoundingClientRect();
+      tooltip.style.left = Math.min(colRect.left - wrapRect.left, wrapRect.width - 190) + 'px';
+      tooltip.style.top  = (colRect.top - wrapRect.top - 46) + 'px';
+    });
+    col.addEventListener('mousemove', (e) => {
+      const wrapRect = wrap.getBoundingClientRect();
+      tooltip.style.left = Math.min(e.clientX - wrapRect.left + 14, wrapRect.width - 190) + 'px';
+      tooltip.style.top  = (e.clientY - wrapRect.top - 40) + 'px';
+    });
+    col.addEventListener('mouseleave', hide);
+    col.addEventListener('blur', hide);
+  });
+})();
+
+/* ---------- Symbol performance ---------- */
+(function renderSymbols(){
+  const el = document.getElementById('symbols');
+  const maxAbs = Math.max(...DATA.symbol_stats.map(s => Math.abs(s.net)));
+  el.innerHTML = DATA.symbol_stats.map(s => {
+    const pos = s.net >= 0;
+    const pct = Math.max(3, Math.abs(s.net) / maxAbs * 100);
+    const left = pos ? 50 : 50 - pct/2;
+    const width = pct/2;
+    return `<div class="symbol-row">
+      <div class="symbol-name">${s.symbol} ${s.n>1?`<span class="repeat-badge">×${s.n}</span>`:''}</div>
+      <div class="symbol-bar-track">
+        <div class="symbol-bar" style="left:${left}%; width:${width}%; background:${pos?'var(--win)':'var(--loss)'}"></div>
+      </div>
+      <div class="symbol-net ${pos?'pnl-pos':'pnl-neg'}">${fmtMoney(s.net, true)}</div>
+    </div>`;
+  }).join('');
+})();
+
+/* ---------- Ledger table ---------- */
+let sortKey = 'entry_date', sortDir = -1, filterMode = 'all', searchTerm = '';
+
+function statusOf(t) {
+  if (!t.exit_date) return 'open';
+  return t.realised_pnl > 0 ? 'win' : (t.realised_pnl < 0 ? 'loss' : 'flat');
+}
+
+function renderTable(){
+  let rows = DATA.trades.slice();
+  if (filterMode !== 'all') rows = rows.filter(t => statusOf(t) === filterMode);
+  if (searchTerm) rows = rows.filter(t => t.symbol.toLowerCase().includes(searchTerm));
+
+  rows.sort((a,b) => {
+    let av = sortKey === 'status' ? statusOf(a) : a[sortKey];
+    let bv = sortKey === 'status' ? statusOf(b) : b[sortKey];
+    if (av === null || av === undefined) av = -Infinity;
+    if (bv === null || bv === undefined) bv = -Infinity;
+    if (typeof av === 'string') return av.localeCompare(bv) * sortDir;
+    return (av - bv) * sortDir;
+  });
+
+  const body = document.getElementById('ledger-body');
+  if (!rows.length) {
+    body.innerHTML = `<tr class="empty-row"><td colspan="10">No positions match this filter.</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = rows.map(t => {
+    const st = statusOf(t);
+    const pillMap = { win: ['win','▲','Win'], loss: ['loss','▼','Loss'], flat: ['loss','●','Flat'], open: ['open','◌','Open'] };
+    const [pillCls, ic, pillText] = pillMap[st];
+    const pnlCls = t.net_pnl === null ? 'pnl-mut' : (t.net_pnl > 0 ? 'pnl-pos' : (t.net_pnl < 0 ? 'pnl-neg' : 'pnl-mut'));
+    const realCls = t.realised_pnl === null ? 'pnl-mut' : (t.realised_pnl > 0 ? 'pnl-pos' : (t.realised_pnl < 0 ? 'pnl-neg' : 'pnl-mut'));
+    return `<tr>
+      <td class="sym">${t.symbol}</td>
+      <td><span class="pill ${pillCls}"><span class="ic">${ic}</span>${pillText}</span></td>
+      <td class="${pnlCls}" style="font-weight:600;">${fmtMoney(t.net_pnl, true)}</td>
+      <td class="${pnlCls}">${fmtPct(t.net_pct)}</td>
+      <td class="date-cell">${fmtDate(t.entry_date)}</td>
+      <td class="date-cell">${fmtDate(t.exit_date)}</td>
+      <td>${t.shares}</td>
+      <td>${t.entry_price.toFixed(2)}</td>
+      <td>${t.exit_price !== null ? t.exit_price.toFixed(2) : '—'}</td>
+      <td class="${realCls}">${fmtMoney(t.realised_pnl, true)}</td>
+      <td class="pnl-mut">${t.charges !== null ? fmtMoney0(t.charges) : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+document.querySelectorAll('table.ledger th').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = -1; }
+    document.querySelectorAll('table.ledger th').forEach(x => {
+      x.classList.remove('sorted');
+      x.querySelector('.arrow-sort').textContent = '▾';
+    });
+    th.classList.add('sorted');
+    th.querySelector('.arrow-sort').textContent = sortDir === 1 ? '▴' : '▾';
+    renderTable();
+  });
+});
+
+document.querySelectorAll('.chip').forEach(chip => {
+  chip.addEventListener('click', () => {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    chip.classList.add('active');
+    filterMode = chip.dataset.filter;
+    renderTable();
+  });
+});
+
+document.getElementById('search').addEventListener('input', (e) => {
+  searchTerm = e.target.value.trim().toLowerCase();
+  renderTable();
+});
+
+renderTable();
+
+/* ---------- Scroll-shadow affordance ---------- */
+(function scrollShadow(){
+  const scroller = document.getElementById('table-scroll');
+  const hint = document.getElementById('scroll-hint');
+  function update() {
+    const overflowing = scroller.scrollWidth > scroller.clientWidth + 2;
+    const atEnd = scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 2;
+    scroller.classList.toggle('scrollable', overflowing && !atEnd);
+    hint.classList.toggle('visible', overflowing);
+  }
+  update();
+  scroller.addEventListener('scroll', update, {passive:true});
+  window.addEventListener('resize', update);
+  new ResizeObserver(update).observe(scroller);
+})();
+</script>
