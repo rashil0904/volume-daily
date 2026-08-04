@@ -2,7 +2,7 @@
 """
 main.py — NSE pipeline production orchestrator
 ===============================================
-Replaces run_daily.py. Called by run_pipeline.sh via cron at 3:01 PM IST Mon–Fri.
+Replaces run_daily.py. Called by run_pipeline.sh via cron at 3:06 PM IST Mon–Fri.
 
 Flow
 ----
