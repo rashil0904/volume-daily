@@ -146,7 +146,7 @@ class OrderRejected(RuntimeError):
     timeout, where the order may well have filled and we just don't know yet."""
 
 
-def _poll_fill(order_id: str, retries: int = 12, delay: float = 3.0) -> tuple[float, int]:
+def _poll_fill(order_id: str, retries: int = 12, delay: float = 1.0) -> tuple[float, int]:
     """Poll until market order fills. Returns (avg_fill_price, filled_qty)."""
     for _ in range(retries):
         time.sleep(delay)
@@ -229,7 +229,7 @@ def _load_symbols(trade_date: date) -> list[str]:
 # STAGE 1 — Entry at 3:21pm
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_entry_315(trade_date: date | None = None, dry_run: bool = False,
+def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                   capital: float | None = None) -> None:
     if trade_date is None:
         trade_date = date.today()
@@ -565,7 +565,7 @@ if __name__ == "__main__":
 
     try:
         if args.entry:
-            run_entry_315(trade_date=td, dry_run=args.dry_run, capital=args.capital)
+            run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital)
         elif args.exit_925:
             check_exit_925(dry_run=args.dry_run)
         else:
