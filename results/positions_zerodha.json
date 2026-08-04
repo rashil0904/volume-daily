@@ -535,8 +535,13 @@
     "actual_fill_price": 407.5,
     "actual_fill_quantity": 52,
     "entry_order_id": "260803221224939",
-    "status": "open",
-    "entry_timestamp": "2026-08-03T15:15:06.963437+05:30"
+    "status": "exited_925",
+    "entry_timestamp": "2026-08-03T15:15:06.963437+05:30",
+    "exit_price_925": 422.2,
+    "exit_order_id_925": "260804220178832",
+    "exit_timestamp_925": "2026-08-04T09:25:04.338647+05:30",
+    "realized_return_pct": 3.6074,
+    "realized_pnl": 764.4
   },
   {
     "broker": "zerodha",
@@ -547,8 +552,13 @@
     "actual_fill_price": 646.15,
     "actual_fill_quantity": 33,
     "entry_order_id": "260803221225151",
-    "status": "open",
-    "entry_timestamp": "2026-08-03T15:15:11.073790+05:30"
+    "status": "exited_1159",
+    "entry_timestamp": "2026-08-03T15:15:11.073790+05:30",
+    "exit_price_1159": 649.1379,
+    "exit_order_id_1159": "260804220866211",
+    "exit_timestamp_1159": "2026-08-04T11:59:03.431450+05:30",
+    "realized_return_pct": 0.4624,
+    "realized_pnl": 98.6
   },
   {
     "broker": "zerodha",
@@ -559,8 +569,13 @@
     "actual_fill_price": 40.52,
     "actual_fill_quantity": 528,
     "entry_order_id": "260803221225346",
-    "status": "open",
-    "entry_timestamp": "2026-08-03T15:15:15.201846+05:30"
+    "status": "exited_1159",
+    "entry_timestamp": "2026-08-03T15:15:15.201846+05:30",
+    "exit_price_1159": 39.12,
+    "exit_order_id_1159": "260804220866361",
+    "exit_timestamp_1159": "2026-08-04T11:59:05.946685+05:30",
+    "realized_return_pct": -3.4551,
+    "realized_pnl": -739.2
   },
   {
     "broker": "zerodha",
@@ -571,8 +586,13 @@
     "actual_fill_price": 5745.3333,
     "actual_fill_quantity": 3,
     "entry_order_id": "260803221225548",
-    "status": "open",
-    "entry_timestamp": "2026-08-03T15:15:19.310578+05:30"
+    "status": "exited_1159",
+    "entry_timestamp": "2026-08-03T15:15:19.310578+05:30",
+    "exit_price_1159": 5710.5,
+    "exit_order_id_1159": "260804220866485",
+    "exit_timestamp_1159": "2026-08-04T11:59:08.082434+05:30",
+    "realized_return_pct": -0.6063,
+    "realized_pnl": -104.5
   },
   {
     "broker": "zerodha",
@@ -583,7 +603,77 @@
     "actual_fill_price": 228.19,
     "actual_fill_quantity": 94,
     "entry_order_id": "260803221225785",
+    "status": "exited_925",
+    "entry_timestamp": "2026-08-03T15:15:23.440594+05:30",
+    "exit_price_925": 228.58,
+    "exit_order_id_925": "260804220179206",
+    "exit_timestamp_925": "2026-08-04T09:25:07.138565+05:30",
+    "realized_return_pct": 0.1709,
+    "realized_pnl": 36.66
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "CAPILLARY",
+    "entry_date": "2026-08-04",
+    "reference_price": 537.0,
+    "shares_intended": 93,
+    "actual_fill_price": 537.7328,
+    "actual_fill_quantity": 93,
+    "entry_order_id": "260804221599269",
     "status": "open",
-    "entry_timestamp": "2026-08-03T15:15:23.440594+05:30"
+    "entry_timestamp": "2026-08-04T15:21:06.320676+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "EPACKPEB",
+    "entry_date": "2026-08-04",
+    "reference_price": 258.65,
+    "shares_intended": 193,
+    "actual_fill_price": 258.6,
+    "actual_fill_quantity": 193,
+    "entry_order_id": "260804221599667",
+    "status": "open",
+    "entry_timestamp": "2026-08-04T15:21:10.622329+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "KKCL",
+    "entry_date": "2026-08-04",
+    "reference_price": 533.85,
+    "shares_intended": 93,
+    "actual_fill_price": 534.4527,
+    "actual_fill_quantity": 93,
+    "entry_order_id": "260804221599957",
+    "status": "open",
+    "entry_timestamp": "2026-08-04T15:21:14.909050+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "MAHASTEEL",
+    "entry_date": "2026-08-04",
+    "reference_price": 1084.0,
+    "shares_intended": 23,
+    "actual_fill_price": 1084.0,
+    "actual_fill_quantity": 23,
+    "entry_order_id": "260804221600248",
+    "status": "open",
+    "entry_timestamp": "2026-08-04T15:21:19.173213+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "PAUSHAKLTD",
+    "entry_date": "2026-08-04",
+    "reference_price": 736.0,
+    "shares_intended": 67,
+    "actual_fill_price": 735.75,
+    "actual_fill_quantity": 67,
+    "entry_order_id": "260804221600520",
+    "status": "open",
+    "entry_timestamp": "2026-08-04T15:21:23.450671+05:30",
+    "product": "MTF"
   }
 ]
