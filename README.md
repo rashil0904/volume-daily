@@ -1,6 +1,6 @@
 # NSE Volume Pipeline
 
-Automated NSE mid-cap momentum scanner running daily at **3:01 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. An interactive P&L dashboard (published as a Claude Artifact) refreshes daily from the trade book. Upstox is used for market data only — no trading happens through Upstox.
+Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. An interactive P&L dashboard (published as a Claude Artifact) refreshes daily from the trade book. Upstox is used for market data only — no trading happens through Upstox.
 
 ---
 
@@ -10,7 +10,7 @@ Automated NSE mid-cap momentum scanner running daily at **3:01 PM IST** (Mon–F
 - [Signal Logic](#signal-logic)
 - [Capital Allocation](#capital-allocation)
 - [Complete Daily Flow](#complete-daily-flow)
-  - [Part 1 — Signal Pipeline (3:01 PM)](#part-1--signal-pipeline-301-pm)
+  - [Part 1 — Signal Pipeline (3:06 PM)](#part-1--signal-pipeline-306-pm)
   - [Part 2 — EOD Candle Fill (4:00 PM)](#part-2--eod-candle-fill-400-pm)
   - [Part 3 — Live Trading (3-Stage, Zerodha CNC)](#part-3--live-trading-3-stage-zerodha-cnc)
   - [Part 4 — Trade Book (4:30 PM)](#part-4--trade-book-430-pm)
@@ -69,7 +69,7 @@ Cumulative volume (09:15–14:45) ≥ 6 × 36-day rolling average full-day volum
 Reference candle open ≥ 5% above previous trading day's VWAP
 ```
 
-- **STRICT mode** (the real 3:01 PM run): reference candle is fixed at 15:00 (falls back to the 14:45 close if 15:00 hasn't posted yet)
+- **STRICT mode** (the real 3:06 PM run): reference candle is fixed at 15:00 (falls back to the 14:45 close if 15:00 hasn't posted yet)
 - **PRORATED mode** (`scan/scan_intraday.py`, anytime preview): reference candle is whatever's latest as of the check time — this is a directional preview only, never read by any execution script
 
 Previous day VWAP is calculated from the 15:00 and 15:15 candles of the prior trading day:
@@ -117,7 +117,7 @@ To change the live capital, edit the `--capital` value in the entry cron line (s
  9:25 AM  — [CRON] Stage 2: exit check — sell if live P&L > 0, else hold for 11:59 AM
 11:59 AM  — [CRON] Stage 3: forced exit — sell whatever's still open
  3:00 PM  — Last auction period begins
- 3:01 PM  — [CRON] Signal pipeline: scans volume/return, writes trade list, notifies Telegram
+ 3:06 PM  — [CRON] Signal pipeline: scans volume/return, writes trade list, notifies Telegram
  3:21 PM  — [CRON] Stage 1: fetch 15:20 reference candle, size positions, place buys
  3:40 PM  — [CRON] Live monitor stopped (pkill)
  4:00 PM  — [CRON] EOD fill: corrects/backfills 15:00 + 15:15 candles via intraday API
@@ -131,9 +131,9 @@ To change the live capital, edit the `--capital` value in the entry cron line (s
 
 ---
 
-### Part 1 — Signal Pipeline (3:01 PM)
+### Part 1 — Signal Pipeline (3:06 PM)
 
-`run_pipeline.sh` is called by cron at 3:01 PM IST. It calls `pipeline/main.py`, which runs the following steps in sequence:
+`run_pipeline.sh` is called by cron at 3:06 PM IST. It calls `pipeline/main.py`, which runs the following steps in sequence:
 
 1. **Fetch market cap** — `data_loader.load_market_cap()` logs into Screener.in (Premium), runs the query `Market Capitalization > 1500 AND Market Capitalization < 5000`, and exports to `data/market_cap_daily/market_cap_<date>.csv`. Falls back to the most recent prior export (with a warning) if the live fetch fails, or fails the whole run if there's no fallback at all.
 2. **Update universe** — compares today's market-cap symbols against `data/universe_combined.csv`; new symbols not previously seen are appended automatically.
@@ -148,8 +148,8 @@ To change the live capital, edit the `--capital` value in the entry cron line (s
 
 Runs via cron at 4:00 PM IST, after NSE closes (3:30 PM). Fixes two real data-completeness gaps:
 
-1. **The candle "in progress" when the 3:01 PM run fetches intraday data is incomplete** — collapsed OHLC, near-zero volume, a single-tick snapshot, not the settled candle.
-2. **The final candle of the session (15:15) doesn't exist yet at 3:01 PM at all.**
+1. **The candle "in progress" when the 3:06 PM run fetches intraday data is incomplete** — collapsed OHLC, near-zero volume, a single-tick snapshot, not the settled candle.
+2. **The final candle of the session (15:15) doesn't exist yet at 3:06 PM at all.**
 
 ```bash
 python3.11 pipeline/data_loader.py --eod-fill
@@ -292,7 +292,7 @@ python zerodha/run_trades_mtf.py --entry --symbol "NSE_EQ|INE002A01018" --shares
 python live/live_monitor.py
 ```
 
-Runs continuously from **9:13 AM to 3:40 PM** (start/kill via cron — see [Cron Schedule Summary](#cron-schedule-summary)), independent of the trade-execution flow above. Connects to Kite's WebSocket (`KiteTicker`, `MODE_FULL`) for every symbol in the mcap-eligible universe with sufficient candle history (typically ~450 of ~490), and watches for the same qualifying conditions as the pipeline signal logic, but live and continuously rather than once at 3:01 PM:
+Runs continuously from **9:13 AM to 3:40 PM** (start/kill via cron — see [Cron Schedule Summary](#cron-schedule-summary)), independent of the trade-execution flow above. Connects to Kite's WebSocket (`KiteTicker`, `MODE_FULL`) for every symbol in the mcap-eligible universe with sufficient candle history (typically ~450 of ~490), and watches for the same qualifying conditions as the pipeline signal logic, but live and continuously rather than once at 3:06 PM:
 
 - **`qualified`**: cumulative volume ≥ 6× the 36-day average *and* LTP ≥ prev-day VWAP × 1.05 — same thresholds as [Signal Logic](#signal-logic), evaluated tick-by-tick instead of once
 - **`near_circuit`**: LTP within 1% of the upper circuit limit, only after a symbol has already qualified
@@ -345,7 +345,7 @@ To publish this dashboard for the first time (or after moving to a new environme
 ```
 volume-daily/
 ├── pipeline/
-│   ├── main.py                # Daily orchestrator — called by cron at 3:01 PM
+│   ├── main.py                # Daily orchestrator — called by cron at 3:06 PM
 │   ├── fetch_market_cap.py    # Logs into Screener.in, exports market cap CSV
 │   ├── data_loader.py         # Upstox V3 — historical + intraday + EOD fill + market cap loader
 │   ├── signal_engine.py       # Signal conditions (market cap / volume / return) — STRICT + PRORATED modes
@@ -533,7 +533,7 @@ python3.11 pipeline/main.py
 # Run only the EOD candle fill
 python3.11 pipeline/data_loader.py --eod-fill
 
-# Preview signals at any time of day (PRORATED mode — not the official 3:01 PM run)
+# Preview signals at any time of day (PRORATED mode — not the official 3:06 PM run)
 python3.11 scan/scan_intraday.py
 ```
 
@@ -602,7 +602,7 @@ Every notification function in `pipeline/notify.py` is wired up and active — r
 
 | Event | Sent by | When |
 |---|---|---|
-| Pipeline **success** | `pipeline/main.py` | After the 3:01 PM run completes — date, signal count, runtime, full trade table |
+| Pipeline **success** | `pipeline/main.py` | After the 3:06 PM run completes — date, signal count, runtime, full trade table |
 | Pipeline **failure** | `pipeline/main.py` | If any step crashes — date, failed step, runtime, error detail |
 | Scan **preview** | `scan/scan_intraday.py` | Whenever run manually — clearly labeled as a preview, not the official signal |
 | **Entry** | `zerodha/run_trades.py` (Stage 1) | Each position opened at 3:21 PM |
@@ -637,7 +637,7 @@ All times IST (UTC+5:30), server timezone set to `Asia/Kolkata`. All jobs below 
 | 9:13 AM | `13 9 * * 1-5` | `scripts/run_live_monitor.sh` |
 | 9:25 AM | `25 9 * * 1-5` | `zerodha/run_trades.py --exit-925` |
 | 11:59 AM | `59 11 * * 1-5` | `zerodha/run_trades.py --exit-1159` |
-| 3:01 PM | `1 15 * * 1-5` | `scripts/run_pipeline.sh` |
+| 3:06 PM | `6 15 * * 1-5` | `scripts/run_pipeline.sh` |
 | 3:21 PM | `21 15 * * 1-5` | `zerodha/run_trades.py --entry --capital 150000` |
 | 3:40 PM | `40 15 * * 1-5` | `pkill -f 'live/live_monitor.py'` |
 | 4:00 PM | `0 16 * * 1-5` | `pipeline/data_loader.py --eod-fill` |
