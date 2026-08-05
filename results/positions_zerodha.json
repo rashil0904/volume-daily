@@ -692,8 +692,39 @@
     "actual_fill_price": 735.75,
     "actual_fill_quantity": 67,
     "entry_order_id": "260804221600520",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-04T15:21:23.450671+05:30",
+    "product": "MTF",
+    "exit_price_1159": 726.5396,
+    "exit_order_id_1159": "260805220803196",
+    "exit_timestamp_1159": "2026-08-05T11:59:05.988757+05:30",
+    "realized_return_pct": -1.2518,
+    "realized_pnl": -617.1
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "JGCHEM",
+    "entry_date": "2026-08-05",
+    "reference_price": 545.65,
+    "shares_intended": 137,
+    "actual_fill_price": 546.2409,
+    "actual_fill_quantity": 137,
+    "entry_order_id": "260805221369426",
+    "status": "open",
+    "entry_timestamp": "2026-08-05T15:21:06.610686+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "UNIPARTS",
+    "entry_date": "2026-08-05",
+    "reference_price": 805.0,
+    "shares_intended": 93,
+    "actual_fill_price": 805.4892,
+    "actual_fill_quantity": 93,
+    "entry_order_id": "260805221369768",
+    "status": "open",
+    "entry_timestamp": "2026-08-05T15:21:11.993603+05:30",
     "product": "MTF"
   }
 ]
