@@ -620,9 +620,14 @@
     "actual_fill_price": 537.7328,
     "actual_fill_quantity": 93,
     "entry_order_id": "260804221599269",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-04T15:21:06.320676+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 557.0672,
+    "exit_order_id_925": "260805220167806",
+    "exit_timestamp_925": "2026-08-05T09:25:52+05:30",
+    "realized_return_pct": 3.5955,
+    "realized_pnl": 1798.1
   },
   {
     "broker": "zerodha",
@@ -633,9 +638,14 @@
     "actual_fill_price": 258.6,
     "actual_fill_quantity": 193,
     "entry_order_id": "260804221599667",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-04T15:21:10.622329+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 264.4503,
+    "exit_order_id_925": "260805220167413",
+    "exit_timestamp_925": "2026-08-05T09:25:49+05:30",
+    "realized_return_pct": 2.2623,
+    "realized_pnl": 1129.1
   },
   {
     "broker": "zerodha",
@@ -646,9 +656,14 @@
     "actual_fill_price": 534.4527,
     "actual_fill_quantity": 93,
     "entry_order_id": "260804221599957",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-04T15:21:14.909050+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 554.5048,
+    "exit_order_id_925": "260805220166788",
+    "exit_timestamp_925": "2026-08-05T09:25:45+05:30",
+    "realized_return_pct": 3.7519,
+    "realized_pnl": 1864.85
   },
   {
     "broker": "zerodha",
@@ -659,9 +674,14 @@
     "actual_fill_price": 1084.0,
     "actual_fill_quantity": 23,
     "entry_order_id": "260804221600248",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-04T15:21:19.173213+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "exit_price_925": 1085.4217,
+    "exit_order_id_925": "260805220161070",
+    "exit_timestamp_925": "2026-08-05T09:25:06.239622+05:30",
+    "realized_return_pct": 0.1312,
+    "realized_pnl": 32.7
   },
   {
     "broker": "zerodha",

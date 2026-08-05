@@ -56,6 +56,7 @@ from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
 from zerodha.trade import buy, sell, order_status as _kite_order_status
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
+import notify
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -241,12 +242,18 @@ def _open_pos_mtf(positions: list) -> list:
 
 # ── Broker quantity cross-check (product-aware) ───────────────────────────────
 
-def _broker_qty(symbol: str, product: str) -> int:
-    """Confirm broker-held quantity for this exact product via Kite positions and
-    holdings endpoints. Unlike run_trades.py's CNC-only version, this filters
-    Kite's /portfolio/positions "net" entries by product too, so a CNC and an MTF
-    holding of the same symbol can't be confused for each other. /portfolio/holdings
-    is CNC delivery-only by definition, so it's only consulted for product=CNC."""
+def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
+    """Confirm broker-held quantity AND the exchange it's actually held under, for
+    this exact product, via Kite positions and holdings endpoints. Returns
+    (quantity, exchange), defaulting to ("NSE", 0) if nothing is found.
+
+    MTF positions settle into holdings overnight -- often under a DIFFERENT
+    exchange than the one the buy order was placed on (confirmed live 2026-08-05:
+    CAPILLARY/EPACKPEB/KKCL/PAUSHAKLTD were all bought on NSE but held under BSE
+    by the next day, per Kite's holdings[].exchange). /portfolio/holdings is
+    consulted for MTF too -- via the nested "mtf": {"quantity", "used_quantity"}
+    fields -- not just CNC as before; a stale/netted "positions" entry alone
+    caused false MISMATCH skips on real, sellable MTF holdings that morning."""
     session, _ = _kite_session()
     product = product.upper()
     try:
@@ -257,21 +264,25 @@ def _broker_qty(symbol: str, product: str) -> int:
                         and (p.get("product") or "").upper() == product):
                     qty = int(p.get("quantity") or 0)
                     if qty > 0:
-                        return qty
+                        return qty, (p.get("exchange") or "NSE").upper()
     except Exception:
         pass
-    if product == "CNC":
-        try:
-            resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
-            if resp.ok:
-                for h in (resp.json().get("data") or []):
-                    if (h.get("tradingsymbol") or "").upper() == symbol.upper():
-                        qty = int(h.get("quantity") or 0) + int(h.get("t1_quantity") or 0)
-                        if qty > 0:
-                            return qty
-        except Exception:
-            pass
-    return 0
+    try:
+        resp = session.get(f"{_KITE_BASE}/portfolio/holdings", timeout=15)
+        if resp.ok:
+            for h in (resp.json().get("data") or []):
+                if (h.get("tradingsymbol") or "").upper() != symbol.upper():
+                    continue
+                if product == "CNC":
+                    qty = int(h.get("quantity") or 0) + int(h.get("t1_quantity") or 0)
+                else:
+                    mtf = h.get("mtf") or {}
+                    qty = int(mtf.get("quantity") or 0) + int(mtf.get("used_quantity") or 0)
+                if qty > 0:
+                    return qty, (h.get("exchange") or "NSE").upper()
+    except Exception:
+        pass
+    return 0, "NSE"
 
 
 # ── MTF entries log (separate from positions_zerodha.json) ───────────────────
@@ -478,6 +489,11 @@ def run_entry_321_mtf(trade_date: date | None = None, dry_run: bool = False,
         })
         if not dry_run:
             _save_pos(positions)
+        try:
+            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", ref_price=ref,
+                              shares=fill_qty, order_id=order_id, dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] entry failed: {exc}", file=sys.stderr)
 
         n_entered += 1
 
@@ -538,15 +554,16 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             if half == 0:
                 print(f"[mtf]   qty too small to halve — holding until 11:59am.")
                 continue
+            exch = "NSE"
             if not dry_run:
-                bqty = _broker_qty(sym, product)
+                bqty, exch = _broker_qty(sym, product)
                 if bqty != qty:
                     print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
                           f"Skipping {sym} — manual review required.")
                     continue
             print(f"[mtf]   NO-DATA FALLBACK — selling {half} of {qty}")
             try:
-                oid = sell(sym, "NSE", half,
+                oid = sell(sym, exch, half,
                            order_type="MARKET", product=product, dry_run=dry_run)
             except Exception as exc:
                 print(f"[mtf]   fallback sell failed: {exc}")
@@ -565,18 +582,25 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             })
             if not dry_run:
                 _save_pos(positions)
+            try:
+                notify.send_exit_925_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
+                                            shares_exited=half, shares_remaining=remain,
+                                            exit_price=ep, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] exit_925_nodata failed: {exc}", file=sys.stderr)
             continue
 
         if pnl_live > 0:
+            exch = "NSE"
             if not dry_run:
-                bqty = _broker_qty(sym, product)
+                bqty, exch = _broker_qty(sym, product)
                 if bqty != qty:
                     print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
                           f"Skipping {sym} — manual review required.")
                     continue
             print(f"[mtf]   P&L positive — selling {qty}")
             try:
-                oid = sell(sym, "NSE", qty,
+                oid = sell(sym, exch, qty,
                            order_type="MARKET", product=product, dry_run=dry_run)
             except Exception as exc:
                 print(f"[mtf]   sell failed: {exc}")
@@ -598,6 +622,11 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             if not dry_run:
                 _save_pos(positions)
             print(f"[mtf]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+            try:
+                notify.send_exit_925(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
+                                     return_pct=ret_act, pnl=pnl, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
         else:
             print(f"[mtf]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
 
@@ -615,6 +644,10 @@ def force_exit_1159_mtf(dry_run: bool = False) -> None:
 
     if not open_ps:
         print("[mtf] All MTF-script positions already exited — nothing to force-close.")
+        try:
+            notify.send_nothing_open_at_1159(broker=_BROKER)
+        except Exception as exc:
+            print(f"  [notify] nothing_open_at_1159 failed: {exc}", file=sys.stderr)
         _daily_summary_mtf(positions, 0, dry_run)
         return
 
@@ -630,16 +663,17 @@ def force_exit_1159_mtf(dry_run: bool = False) -> None:
 
         print(f"\n[mtf] {sym}  [{product}]  qty={qty}")
 
+        exch = "NSE"
         if not dry_run:
-            bqty = _broker_qty(sym, product)
+            bqty, exch = _broker_qty(sym, product)
             if bqty != qty:
                 print(f"[mtf]   !! MISMATCH — local={qty} broker={bqty}. "
                       f"Skipping {sym} — manual review required.")
                 continue
-            print(f"[mtf]   broker confirmed: {bqty} shares")
+            print(f"[mtf]   broker confirmed: {bqty} shares [{exch}]")
 
         try:
-            oid = sell(sym, "NSE", qty,
+            oid = sell(sym, exch, qty,
                        order_type="MARKET", product=product, dry_run=dry_run)
         except Exception as exc:
             print(f"[mtf]   sell failed: {exc}")
@@ -672,6 +706,11 @@ def force_exit_1159_mtf(dry_run: bool = False) -> None:
         if not dry_run:
             _save_pos(positions)
         print(f"[mtf]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+        try:
+            notify.send_force_exit_1159(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
+                                        return_pct=ret, pnl=pnl, dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
         n_force += 1
 
     _daily_summary_mtf(positions, n_force, dry_run)
@@ -690,6 +729,12 @@ def _daily_summary_mtf(positions: list, n_force: int, dry_run: bool) -> None:
                     if p.get("status") in ("exited_925", "exited_1159"))
     print(f"\n[mtf] Summary — opened={n_opened}  exited@925={n_925}  "
           f"partial_nodata={n_partial}  force@1159={n_force}  P&L=₹{total_pnl:+,.2f}")
+    try:
+        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_925=n_925,
+                                  n_partial_nodata=n_partial, n_force_1159=n_force,
+                                  total_pnl=total_pnl, dry_run=dry_run)
+    except Exception as exc:
+        print(f"  [notify] daily_summary failed: {exc}", file=sys.stderr)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

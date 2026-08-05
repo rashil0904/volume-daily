@@ -235,7 +235,7 @@ def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
     text = "\n".join([
         f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
-        f"<b>Ref price (15:15 close):</b> &#8377;{ref_price:,.2f}",
+        f"<b>Ref price:</b> &#8377;{ref_price:,.2f}",
         f"<b>Shares:</b> {shares}",
         f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
