@@ -6,8 +6,16 @@ Writes  : results/trade_book.csv          (one row per position, git-diffable so
           results/trade_book.xlsx         (same data, day-boxed visual view)
 
 Columns: Stock Name, Position entry date, Position Exit date, No of shares,
-         Entry Price, Exit Price, Realised PnL, Realised PnL Pct,
-         Total Charges, Net PnL, Net PnL Pct
+         Entry Price, Capital Deployed, Margin Used, Exit Price, Realised PnL,
+         Realised PnL Pct, Total Charges, Net PnL, Net PnL Pct
+
+Capital Deployed is the full position value (shares x entry price) -- the same
+for every trade regardless of product. Margin Used is the actual cash/margin
+locked up: for MTF trades this is less than Capital Deployed (leverage reduces
+what you actually put up), read from results/trades/mtf_entries_<date>.csv's
+margin_required column (matched by entry_order_id, since positions_zerodha.json
+itself doesn't store margin/leverage). For CNC and legacy positions with no
+matching MTF log entry, Margin Used equals Capital Deployed (no leverage).
 
 Open positions (not yet exited, at any stage -- 945, 1200, or a 945-nodata partial)
 get entry-side fields only; exit date/price/P&L/charges stay blank until they close.
@@ -51,8 +59,8 @@ _TRACKING_START_DATE = "2026-07-27"
 
 _FIELDNAMES = [
     "Stock Name", "Position entry date", "Position Exit date", "No of shares",
-    "Entry Price", "Exit Price", "Realised PnL", "Realised PnL Pct",
-    "Total Charges", "Net PnL", "Net PnL Pct",
+    "Entry Price", "Capital Deployed", "Margin Used", "Exit Price", "Realised PnL",
+    "Realised PnL Pct", "Total Charges", "Net PnL", "Net PnL Pct",
 ]
 
 _EXIT_STAGE_KEYS = {
@@ -97,7 +105,32 @@ def _fetch_charge(leg: dict) -> float:
     return r.json()["data"][0]["charges"]["total"]
 
 
+def _load_mtf_margin_lookup(positions: list) -> dict:
+    """entry_order_id -> margin_required, read from results/trades/mtf_entries_<date>.csv
+    for every entry_date present among the given positions. That log is the only
+    place actual margin/leverage is recorded -- positions_zerodha.json doesn't
+    store it. Missing/unreadable log files are skipped silently (older, pre-MTF
+    positions never had one)."""
+    lookup = {}
+    entry_dates = {p.get("entry_date") for p in positions if p.get("entry_date")}
+    mtf_log_dir = _ROOT / "results" / "trades"
+    for d in entry_dates:
+        log_path = mtf_log_dir / f"mtf_entries_{d}.csv"
+        if not log_path.exists():
+            continue
+        with open(log_path, newline="") as f:
+            for row in csv.DictReader(f):
+                oid, margin = row.get("order_id"), row.get("margin_required")
+                if oid and margin not in (None, ""):
+                    try:
+                        lookup[oid] = float(margin)
+                    except ValueError:
+                        pass
+    return lookup
+
+
 def _build_rows(positions: list) -> list:
+    mtf_margin = _load_mtf_margin_lookup(positions)
     charges = {}  # position_index -> {"entry": total, "exit": total}
     for i, p in enumerate(positions):
         product   = p.get("product", "CNC")
@@ -146,12 +179,20 @@ def _build_rows(positions: list) -> list:
             invested      = entry_price * qty
             net_pnl_pct   = round(net_pnl / invested * 100, 4) if invested else 0
 
+        capital_deployed = round(entry_price * qty, 2) if entry_price is not None and qty is not None else None
+        if p.get("product") == "MTF":
+            margin_used = mtf_margin.get(p.get("entry_order_id"), capital_deployed)
+        else:
+            margin_used = capital_deployed
+
         rows.append({
             "Stock Name":           p.get("symbol"),
             "Position entry date":  p.get("entry_date"),
             "Position Exit date":   exit_date,
             "No of shares":         qty,
             "Entry Price":          entry_price,
+            "Capital Deployed":     capital_deployed,
+            "Margin Used":          round(margin_used, 2) if margin_used is not None else None,
             "Exit Price":           exit_price,
             "Realised PnL":         realized,
             "Realised PnL Pct":     return_pct,
@@ -172,7 +213,8 @@ def _write_csv(rows: list) -> None:
 # ── XLSX (dashboard + day-boxed trade log) ───────────────────────────────
 
 _XLSX_COLUMNS = ["Result"] + _FIELDNAMES
-_MONEY_COLS = {"Entry Price", "Exit Price", "Realised PnL", "Total Charges", "Net PnL"}
+_MONEY_COLS = {"Entry Price", "Capital Deployed", "Margin Used", "Exit Price",
+               "Realised PnL", "Total Charges", "Net PnL"}
 _PCT_COLS   = {"Realised PnL Pct", "Net PnL Pct"}
 _INT_COLS   = {"No of shares"}
 
@@ -309,7 +351,7 @@ def _build_trade_sheet(wb, rows):
             bot_cell.border = Border(bottom=_THICK, left=bot_cell.border.left,
                                       right=bot_cell.border.right, top=bot_cell.border.top)
 
-    widths = [10, 13, 15, 15, 10, 11, 11, 12, 13, 12, 11, 11]
+    widths = [10, 13, 15, 15, 10, 11, 15, 13, 11, 12, 13, 12, 11, 11]
     for c, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(c)].width = w
 

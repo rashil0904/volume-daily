@@ -51,6 +51,8 @@ def build_data() -> dict:
             "exit_date":      r["Position Exit date"] or None,
             "shares":         int(float(r["No of shares"])),
             "entry_price":    _f(r["Entry Price"]),
+            "capital_deployed": _f(r["Capital Deployed"]),
+            "margin_used":    _f(r["Margin Used"]),
             "exit_price":     _f(r["Exit Price"]),
             "realised_pnl":   _f(r["Realised PnL"]),
             "realised_pct":   _f(r["Realised PnL Pct"]),

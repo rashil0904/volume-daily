@@ -599,7 +599,7 @@
   <div class="eyebrow"><span class="dot pulse-dot"></span> LIVE CAPITAL &nbsp;·&nbsp; ZERODHA &nbsp;·&nbsp; NSE MID-CAP MOMENTUM</div>
   <header>
     <h1>The Trade <em>Book</em></h1>
-    <p class="sub">Every position opened with real money, entered at 3:15pm on volume-and-VWAP breakouts and unwound the next session. <strong>₹1,50,000</strong> deployed daily since <strong id="hdr-start"></strong> — nothing before it counts.</p>
+    <p class="sub"><strong>₹1,50,000</strong> deployed daily for CNC, <strong>₹3,00,000</strong> for MTF. Every position opened with real money, entered at 3:21pm on volume-and-VWAP breakouts and unwound the next session, since <strong id="hdr-start"></strong> — nothing before it counts.</p>
   </header>
 
   <div class="hero reveal" id="hero"></div>
@@ -650,7 +650,7 @@
       <button class="chip" data-filter="loss">Losses</button>
       <input class="search" id="search" placeholder="Search symbol…" />
     </div>
-    <div class="scroll-hint" id="scroll-hint">⟷ swipe for entry/exit &amp; charges</div>
+    <div class="scroll-hint" id="scroll-hint">⟷ swipe for capital, entry/exit &amp; charges</div>
     <div class="table-scroll" id="table-scroll">
       <table class="ledger">
         <thead>
@@ -662,9 +662,12 @@
             <th data-key="entry_date">Entered<span class="arrow-sort">▾</span></th>
             <th data-key="exit_date">Exited<span class="arrow-sort">▾</span></th>
             <th data-key="shares">Shares<span class="arrow-sort">▾</span></th>
+            <th data-key="capital_deployed">Deployed<span class="arrow-sort">▾</span></th>
+            <th data-key="margin_used">Margin<span class="arrow-sort">▾</span></th>
             <th data-key="entry_price">Entry ₹<span class="arrow-sort">▾</span></th>
             <th data-key="exit_price">Exit ₹<span class="arrow-sort">▾</span></th>
             <th data-key="realised_pnl">Realised<span class="arrow-sort">▾</span></th>
+            <th data-key="realised_pct">Gross Return<span class="arrow-sort">▾</span></th>
             <th data-key="charges">Charges<span class="arrow-sort">▾</span></th>
           </tr>
         </thead>
@@ -963,7 +966,7 @@ function renderTable(){
 
   const body = document.getElementById('ledger-body');
   if (!rows.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="10">No positions match this filter.</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="14">No positions match this filter.</td></tr>`;
     return;
   }
 
@@ -981,9 +984,12 @@ function renderTable(){
       <td class="date-cell">${fmtDate(t.entry_date)}</td>
       <td class="date-cell">${fmtDate(t.exit_date)}</td>
       <td>${t.shares}</td>
+      <td>${t.capital_deployed !== null ? fmtMoney0(t.capital_deployed) : '—'}</td>
+      <td>${t.margin_used !== null ? fmtMoney0(t.margin_used) : '—'}</td>
       <td>${t.entry_price.toFixed(2)}</td>
       <td>${t.exit_price !== null ? t.exit_price.toFixed(2) : '—'}</td>
       <td class="${realCls}">${fmtMoney(t.realised_pnl, true)}</td>
+      <td class="${realCls}">${fmtPct(t.realised_pct)}</td>
       <td class="pnl-mut">${t.charges !== null ? fmtMoney0(t.charges) : '—'}</td>
     </tr>`;
   }).join('');
