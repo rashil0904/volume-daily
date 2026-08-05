@@ -67,7 +67,9 @@ _EXIT_STAGE_KEYS = {
     "partial_exit_925_nodata": ("exit_price_925",  "exit_timestamp_925",  "exit_order_id_925"),
 }
 
-DP_CHARGE = 15.34  # flat, per scrip, sell-side only — not available via any Kite API
+DP_CHARGE         = 15.34  # flat, per scrip, sell-side only — not available via any Kite API
+MTF_PLEDGE_CHARGE = 35.4   # flat, MTF-product trades only — pledge + unpledge charges,
+                           # not available via any Kite API (same category as DP_CHARGE)
 
 
 # ── Charges (Kite API) ───────────────────────────────────────────────────
@@ -138,7 +140,8 @@ def _build_rows(positions: list) -> list:
         total_charges = net_pnl = net_pnl_pct = None
         leg_totals = charges.get(i, {})
         if exit_date and leg_totals.get("entry") is not None and leg_totals.get("exit") is not None:
-            total_charges = round(leg_totals["entry"] + leg_totals["exit"] + DP_CHARGE, 2)
+            pledge_charge = MTF_PLEDGE_CHARGE if p.get("product") == "MTF" else 0
+            total_charges = round(leg_totals["entry"] + leg_totals["exit"] + DP_CHARGE + pledge_charge, 2)
             net_pnl       = round(realized - total_charges, 2)
             invested      = entry_price * qty
             net_pnl_pct   = round(net_pnl / invested * 100, 4) if invested else 0
