@@ -622,7 +622,11 @@
   <section class="panel reveal" style="animation-delay:.11s">
     <div class="panel-head">
       <h2>Day by day</h2>
-      <span class="note">by entry date · net P&amp;L</span>
+      <span class="note">by entry date</span>
+    </div>
+    <div class="controls" style="margin:12px 0 2px;">
+      <button class="chip active" data-daymetric="net">Net P&amp;L</button>
+      <button class="chip" data-daymetric="gross">Gross P&amp;L</button>
     </div>
     <div class="chart-wrap" id="daybars-wrap">
       <div class="daybars" id="daybars"></div>
@@ -885,16 +889,17 @@ document.querySelectorAll('[data-metric]').forEach(btn => {
 });
 
 /* ---------- Day bars ---------- */
-(function renderDayBars(){
+function renderDayBars(metric){
+  const key = metric === 'gross' ? 'gross' : 'net';
   const el = document.getElementById('daybars');
-  const vals = DATA.day_bars.map(d => d.net).filter(v => v !== null);
+  const vals = DATA.day_bars.map(d => d[key]).filter(v => v !== null);
   const maxAbs = Math.max(...vals.map(Math.abs), 1);
   el.innerHTML = DATA.day_bars.map(d => {
-    const isOpen = d.net === null;
-    const pct = isOpen ? 38 : Math.max(6, Math.abs(d.net) / maxAbs * 100);
-    const cls = isOpen ? 'open' : (d.net >= 0 ? 'win' : 'loss');
-    const label = isOpen ? `${d.n_trades} open` : fmtMoney(d.net, true);
-    return `<div class="daybar-col" tabindex="0" role="img" aria-label="${fmtDateFull(d.date)}, ${d.n_trades} trade(s)${isOpen?'':', net '+fmtMoney(d.net,true)}" data-tt="${fmtDateFull(d.date)} · ${d.n_trades} trade(s)${isOpen?'':' · net '+fmtMoney(d.net,true)}">
+    const isOpen = d[key] === null;
+    const pct = isOpen ? 38 : Math.max(6, Math.abs(d[key]) / maxAbs * 100);
+    const cls = isOpen ? 'open' : (d[key] >= 0 ? 'win' : 'loss');
+    const label = isOpen ? `${d.n_trades} open` : fmtMoney(d[key], true);
+    return `<div class="daybar-col" tabindex="0" role="img" aria-label="${fmtDateFull(d.date)}, ${d.n_trades} trade(s)${isOpen?'':', '+metric+' '+fmtMoney(d[key],true)}" data-tt="${fmtDateFull(d.date)} · ${d.n_trades} trade(s)${isOpen?'':' · '+(metric==='gross'?'gross':'net')+' '+fmtMoney(d[key],true)}">
       <div class="daybar-track"><div class="daybar ${cls}" style="height:${pct}%"></div></div>
       <div class="daybar-date">${fmtDate(d.date)}<br/><span style="color:var(--ink-2)">${label}</span></div>
     </div>`;
@@ -921,7 +926,16 @@ document.querySelectorAll('[data-metric]').forEach(btn => {
     col.addEventListener('mouseleave', hide);
     col.addEventListener('blur', hide);
   });
-})();
+}
+
+renderDayBars('net');
+document.querySelectorAll('[data-daymetric]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-daymetric]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderDayBars(btn.dataset.daymetric);
+  });
+});
 
 /* ---------- Symbol performance ---------- */
 (function renderSymbols(){
