@@ -49,7 +49,6 @@ TOPIC_IDS = {
     "entries_exits": os.environ.get("TELEGRAM_TOPIC_ENTRIES_EXITS"),
     "live_tracking": os.environ.get("TELEGRAM_TOPIC_LIVE_TRACKING"),
     "errors":        os.environ.get("TELEGRAM_TOPIC_ERRORS"),
-    "pnl":           os.environ.get("TELEGRAM_TOPIC_PNL"),
 }
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -297,17 +296,7 @@ def send_nothing_open_at_1159(broker: str) -> None:
 def send_daily_summary(broker: str, n_opened: int, n_exited_925: int,
                        n_partial_nodata: int, n_force_1159: int,
                        total_pnl: float, dry_run: bool = False) -> None:
-    tag   = "  [DRY RUN]" if dry_run else ""
-    arrow = "▲" if total_pnl >= 0 else "▼"
-    text  = "\n".join([
-        f"<b>{arrow} Daily Summary — {html_lib.escape(broker)}{tag}</b>",
-        f"<b>Positions opened  :</b> {n_opened}",
-        f"<b>Exited at 9:25am  :</b> {n_exited_925}",
-        f"<b>Partial no-data   :</b> {n_partial_nodata}",
-        f"<b>Force-closed 11:59am :</b> {n_force_1159}",
-        f"<b>Total P&amp;L     :</b> &#8377;{total_pnl:+,.2f}",
-    ])
-    _send(text, topic="pnl")
+    pass  # PnL topic removed
 
 
 # ── Live monitor notifications ────────────────────────────────────────────────
