@@ -746,9 +746,14 @@
     "actual_fill_price": 385.55,
     "actual_fill_quantity": 111,
     "entry_order_id": "260806221404555",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:07.072009+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 388.1,
+    "exit_order_id_925": "260807220147983",
+    "exit_timestamp_925": "2026-08-07T09:25:05.626580+05:30",
+    "realized_return_pct": 0.6614,
+    "realized_pnl": 283.05
   },
   {
     "broker": "zerodha",
@@ -759,9 +764,14 @@
     "actual_fill_price": 225.1953,
     "actual_fill_quantity": 190,
     "entry_order_id": "260806221405138",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:13.046568+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 228.9489,
+    "exit_order_id_925": "260807220148616",
+    "exit_timestamp_925": "2026-08-07T09:25:10.313187+05:30",
+    "realized_return_pct": 1.6668,
+    "realized_pnl": 713.19
   },
   {
     "broker": "zerodha",
@@ -772,9 +782,14 @@
     "actual_fill_price": 978.7314,
     "actual_fill_quantity": 43,
     "entry_order_id": "260806221405563",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-06T15:21:18.081931+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 980.5,
+    "exit_order_id_1159": "260807220660127",
+    "exit_timestamp_1159": "2026-08-07T11:59:05.997485+05:30",
+    "realized_return_pct": 0.1807,
+    "realized_pnl": 76.05
   },
   {
     "broker": "zerodha",
@@ -785,9 +800,14 @@
     "actual_fill_price": 429.4303,
     "actual_fill_quantity": 99,
     "entry_order_id": "260806221405989",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:23.110462+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 431.7773,
+    "exit_order_id_925": "260807220149232",
+    "exit_timestamp_925": "2026-08-07T09:25:14.561326+05:30",
+    "realized_return_pct": 0.5465,
+    "realized_pnl": 232.35
   },
   {
     "broker": "zerodha",
@@ -798,9 +818,14 @@
     "actual_fill_price": 153.48,
     "actual_fill_quantity": 279,
     "entry_order_id": "260806221406424",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:28.124244+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 153.9539,
+    "exit_order_id_925": "260807220149818",
+    "exit_timestamp_925": "2026-08-07T09:25:18.606611+05:30",
+    "realized_return_pct": 0.3088,
+    "realized_pnl": 132.23
   },
   {
     "broker": "zerodha",
@@ -811,9 +836,14 @@
     "actual_fill_price": 776.25,
     "actual_fill_quantity": 55,
     "entry_order_id": "260806221406927",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:33.151144+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 783.7027,
+    "exit_order_id_925": "260807220150382",
+    "exit_timestamp_925": "2026-08-07T09:25:22.675930+05:30",
+    "realized_return_pct": 0.9601,
+    "realized_pnl": 409.9
   },
   {
     "broker": "zerodha",
@@ -824,8 +854,65 @@
     "actual_fill_price": 798.9,
     "actual_fill_quantity": 53,
     "entry_order_id": "260806221407418",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-06T15:21:38.156295+05:30",
+    "product": "MTF",
+    "exit_price_925": 805.6151,
+    "exit_order_id_925": "260807220150982",
+    "exit_timestamp_925": "2026-08-07T09:25:26.759733+05:30",
+    "realized_return_pct": 0.8405,
+    "realized_pnl": 355.9
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ARVSMART",
+    "entry_date": "2026-08-07",
+    "reference_price": 650.2,
+    "shares_intended": 92,
+    "actual_fill_price": 651.1261,
+    "actual_fill_quantity": 92,
+    "entry_order_id": "260807221164165",
+    "status": "open",
+    "entry_timestamp": "2026-08-07T15:21:07.156495+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ELLEN",
+    "entry_date": "2026-08-07",
+    "reference_price": 293.55,
+    "shares_intended": 204,
+    "actual_fill_price": 293.2,
+    "actual_fill_quantity": 204,
+    "entry_order_id": "260807221164468",
+    "status": "open",
+    "entry_timestamp": "2026-08-07T15:21:12.648385+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "GOCLCORP",
+    "entry_date": "2026-08-07",
+    "reference_price": 439.85,
+    "shares_intended": 136,
+    "actual_fill_price": 439.7,
+    "actual_fill_quantity": 136,
+    "entry_order_id": "260807221164685",
+    "status": "open",
+    "entry_timestamp": "2026-08-07T15:21:17.824360+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "WINDMACHIN",
+    "entry_date": "2026-08-07",
+    "reference_price": 305.0,
+    "shares_intended": 196,
+    "actual_fill_price": 304.813,
+    "actual_fill_quantity": 196,
+    "entry_order_id": "260807221165137",
+    "status": "open",
+    "entry_timestamp": "2026-08-07T15:21:27.286728+05:30",
     "product": "MTF"
   }
 ]
