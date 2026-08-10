@@ -1,0 +1,3 @@
+[build]
+  command = "python3 dashboard/build_dashboard.py && mkdir -p dist && cp dashboard/trade_book.html dist/index.html"
+  publish = "dist"
