@@ -872,9 +872,14 @@
     "actual_fill_price": 651.1261,
     "actual_fill_quantity": 92,
     "entry_order_id": "260807221164165",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-07T15:21:07.156495+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 679.619,
+    "exit_order_id_925": "260810220162031",
+    "exit_timestamp_925": "2026-08-10T09:25:05.830170+05:30",
+    "realized_return_pct": 4.3759,
+    "realized_pnl": 2621.35
   },
   {
     "broker": "zerodha",
@@ -885,9 +890,14 @@
     "actual_fill_price": 293.2,
     "actual_fill_quantity": 204,
     "entry_order_id": "260807221164468",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-07T15:21:12.648385+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 302.1953,
+    "exit_order_id_925": "260810220162658",
+    "exit_timestamp_925": "2026-08-10T09:25:10.366626+05:30",
+    "realized_return_pct": 3.068,
+    "realized_pnl": 1835.05
   },
   {
     "broker": "zerodha",
@@ -898,9 +908,14 @@
     "actual_fill_price": 439.7,
     "actual_fill_quantity": 136,
     "entry_order_id": "260807221164685",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-07T15:21:17.824360+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 426.0838,
+    "exit_order_id_1159": "260810220775650",
+    "exit_timestamp_1159": "2026-08-10T11:59:05.961443+05:30",
+    "realized_return_pct": -3.0967,
+    "realized_pnl": -1851.8
   },
   {
     "broker": "zerodha",
@@ -911,8 +926,65 @@
     "actual_fill_price": 304.813,
     "actual_fill_quantity": 196,
     "entry_order_id": "260807221165137",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-07T15:21:27.286728+05:30",
+    "product": "MTF",
+    "exit_price_1159": 293.7582,
+    "exit_order_id_1159": "260810220775937",
+    "exit_timestamp_1159": "2026-08-10T11:59:10.442906+05:30",
+    "realized_return_pct": -3.6268,
+    "realized_pnl": -2166.75
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "GARUDA",
+    "entry_date": "2026-08-10",
+    "reference_price": 194.09,
+    "shares_intended": 128,
+    "actual_fill_price": 194.0,
+    "actual_fill_quantity": 128,
+    "entry_order_id": "260810221270192",
+    "status": "open",
+    "entry_timestamp": "2026-08-10T15:21:06.630924+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "JGCHEM",
+    "entry_date": "2026-08-10",
+    "reference_price": 622.75,
+    "shares_intended": 80,
+    "actual_fill_price": 619.3,
+    "actual_fill_quantity": 80,
+    "entry_order_id": "260810221270462",
+    "status": "open",
+    "entry_timestamp": "2026-08-10T15:21:12.085763+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "PIXTRANS",
+    "entry_date": "2026-08-10",
+    "reference_price": 1969.1,
+    "shares_intended": 25,
+    "actual_fill_price": 1972.0,
+    "actual_fill_quantity": 25,
+    "entry_order_id": "260810221270893",
+    "status": "open",
+    "entry_timestamp": "2026-08-10T15:21:21.415737+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "RAMCOIND",
+    "entry_date": "2026-08-10",
+    "reference_price": 372.8,
+    "shares_intended": 134,
+    "actual_fill_price": 373.5836,
+    "actual_fill_quantity": 134,
+    "entry_order_id": "260810221271146",
+    "status": "open",
+    "entry_timestamp": "2026-08-10T15:21:26.657960+05:30",
     "product": "MTF"
   }
 ]
