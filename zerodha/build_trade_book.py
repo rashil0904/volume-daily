@@ -36,6 +36,7 @@ Usage:
 import csv
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from itertools import groupby
 
@@ -75,9 +76,13 @@ _EXIT_STAGE_KEYS = {
     "partial_exit_925_nodata": ("exit_price_925",  "exit_timestamp_925",  "exit_order_id_925"),
 }
 
-DP_CHARGE         = 15.34  # flat, per scrip, sell-side only — not available via any Kite API
-MTF_PLEDGE_CHARGE = 35.4   # flat, MTF-product trades only — pledge + unpledge charges,
-                           # not available via any Kite API (same category as DP_CHARGE)
+DP_CHARGE          = 15.34   # flat, per scrip, sell-side only — not available via any Kite API
+MTF_PLEDGE_CHARGE  = 35.4    # flat, MTF-product trades only — pledge + unpledge charges,
+                             # not available via any Kite API (same category as DP_CHARGE)
+MTF_INTEREST_RATE  = 0.0004  # 0.04%/day on the funded (borrowed) portion of an MTF position,
+                             # charged per calendar day held — not available via any Kite API
+                             # (Kite Connect's /charges/orders response has no interest field;
+                             # this only shows up in Zerodha Console's funds/P&L statement)
 
 
 # ── Charges (Kite API) ───────────────────────────────────────────────────
@@ -170,20 +175,26 @@ def _build_rows(positions: list) -> list:
         realized   = p.get("realized_pnl")
         return_pct = p.get("realized_return_pct")
 
-        total_charges = net_pnl = net_pnl_pct = None
-        leg_totals = charges.get(i, {})
-        if exit_date and leg_totals.get("entry") is not None and leg_totals.get("exit") is not None:
-            pledge_charge = MTF_PLEDGE_CHARGE if p.get("product") == "MTF" else 0
-            total_charges = round(leg_totals["entry"] + leg_totals["exit"] + DP_CHARGE + pledge_charge, 2)
-            net_pnl       = round(realized - total_charges, 2)
-            invested      = entry_price * qty
-            net_pnl_pct   = round(net_pnl / invested * 100, 4) if invested else 0
-
         capital_deployed = round(entry_price * qty, 2) if entry_price is not None and qty is not None else None
         if p.get("product") == "MTF":
             margin_used = mtf_margin.get(p.get("entry_order_id"), capital_deployed)
         else:
             margin_used = capital_deployed
+
+        total_charges = net_pnl = net_pnl_pct = None
+        leg_totals = charges.get(i, {})
+        if exit_date and leg_totals.get("entry") is not None and leg_totals.get("exit") is not None:
+            pledge_charge = MTF_PLEDGE_CHARGE if p.get("product") == "MTF" else 0
+            interest_charge = 0
+            if p.get("product") == "MTF" and capital_deployed is not None and margin_used is not None:
+                funded = capital_deployed - margin_used
+                days_held = (date.fromisoformat(exit_date) - date.fromisoformat(p["entry_date"])).days
+                interest_charge = round(funded * MTF_INTEREST_RATE * days_held, 2)
+            total_charges = round(leg_totals["entry"] + leg_totals["exit"] + DP_CHARGE
+                                   + pledge_charge + interest_charge, 2)
+            net_pnl       = round(realized - total_charges, 2)
+            invested      = entry_price * qty
+            net_pnl_pct   = round(net_pnl / invested * 100, 4) if invested else 0
 
         rows.append({
             "Stock Name":           p.get("symbol"),
