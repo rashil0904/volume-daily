@@ -944,9 +944,14 @@
     "actual_fill_price": 194.0,
     "actual_fill_quantity": 128,
     "entry_order_id": "260810221270192",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-10T15:21:06.630924+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "exit_price_1159": 194.315,
+    "exit_order_id_1159": "260811220766306",
+    "exit_timestamp_1159": "2026-08-11T11:59:05.951218+05:30",
+    "realized_return_pct": 0.1624,
+    "realized_pnl": 40.32
   },
   {
     "broker": "zerodha",
@@ -957,9 +962,14 @@
     "actual_fill_price": 619.3,
     "actual_fill_quantity": 80,
     "entry_order_id": "260810221270462",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-10T15:21:12.085763+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 646.95,
+    "exit_order_id_925": "260811220161421",
+    "exit_timestamp_925": "2026-08-11T09:25:06.414507+05:30",
+    "realized_return_pct": 4.4647,
+    "realized_pnl": 2212.0
   },
   {
     "broker": "zerodha",
@@ -970,9 +980,14 @@
     "actual_fill_price": 1972.0,
     "actual_fill_quantity": 25,
     "entry_order_id": "260810221270893",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-10T15:21:21.415737+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 2022.372,
+    "exit_order_id_925": "260811220162079",
+    "exit_timestamp_925": "2026-08-11T09:25:10.978656+05:30",
+    "realized_return_pct": 2.5544,
+    "realized_pnl": 1259.3
   },
   {
     "broker": "zerodha",
@@ -983,8 +998,52 @@
     "actual_fill_price": 373.5836,
     "actual_fill_quantity": 134,
     "entry_order_id": "260810221271146",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-10T15:21:26.657960+05:30",
+    "product": "MTF",
+    "exit_price_925": 382.15,
+    "exit_order_id_925": "260811220162742",
+    "exit_timestamp_925": "2026-08-11T09:25:15.358097+05:30",
+    "realized_return_pct": 2.293,
+    "realized_pnl": 1147.9
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "KOLTEPATIL",
+    "entry_date": "2026-08-11",
+    "reference_price": 516.8,
+    "shares_intended": 145,
+    "actual_fill_price": 516.6731,
+    "actual_fill_quantity": 145,
+    "entry_order_id": "260811221361903",
+    "status": "open",
+    "entry_timestamp": "2026-08-11T15:21:11.013632+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "ROLEXRINGS",
+    "entry_date": "2026-08-11",
+    "reference_price": 176.41,
+    "shares_intended": 425,
+    "actual_fill_price": 177.4387,
+    "actual_fill_quantity": 425,
+    "entry_order_id": "260811221362372",
+    "status": "open",
+    "entry_timestamp": "2026-08-11T15:21:16.471004+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "zerodha",
+    "symbol": "WINDLAS",
+    "entry_date": "2026-08-11",
+    "reference_price": 941.0,
+    "shares_intended": 79,
+    "actual_fill_price": 941.6797,
+    "actual_fill_quantity": 79,
+    "entry_order_id": "260811221362878",
+    "status": "open",
+    "entry_timestamp": "2026-08-11T15:21:22.120669+05:30",
     "product": "MTF"
   }
 ]
