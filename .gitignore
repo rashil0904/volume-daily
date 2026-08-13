@@ -2,6 +2,10 @@
 .env
 zerodha/.token.json
 .zerodha_token.json
+dhan/.token.json
+
+# Downloaded instrument caches (regenerated on demand)
+data/instruments/dhan_scrip_master.csv
 
 
 # Python cache

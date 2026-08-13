@@ -285,6 +285,36 @@ def send_force_exit_1159(broker: str, symbol: str, exit_price: float,
     _send(text, topic="entries_exits")
 
 
+def send_short_open(broker: str, symbol: str, entry_price: float, shares: int,
+                    source_exit_stage: str, order_id: str, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#128721; SHORT OPEN — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Triggered by:</b> {html_lib.escape(source_exit_stage)} long exit",
+        f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
+        f"<b>Shares:</b> {shares}",
+        "Squares off at 2:39pm.",
+        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
+    ])
+    _send(text, topic="entries_exits")
+
+
+def send_square_off_239(broker: str, symbol: str, entry_price: float, exit_price: float,
+                        return_pct: float, pnl: float, dry_run: bool = False) -> None:
+    tag   = "  [DRY RUN]" if dry_run else ""
+    arrow = "▲" if return_pct >= 0 else "▼"
+    text  = "\n".join([
+        f"<b>{arrow} SHORT SQUARE-OFF 2:39pm — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
+        f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text, topic="entries_exits")
+
+
 def send_nothing_open_at_1159(broker: str) -> None:
     _send(
         f"<b>11:59am Exit — {html_lib.escape(broker)}</b>\n"
