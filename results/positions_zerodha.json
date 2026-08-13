@@ -1070,9 +1070,14 @@
     "actual_fill_price": 1228.55,
     "actual_fill_quantity": 24,
     "entry_order_id": "260812221242769",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:06.444060+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 1192.0,
+    "exit_order_id_1159": "260813220730657",
+    "exit_timestamp_1159": "2026-08-13T11:59:05.491677+05:30",
+    "realized_return_pct": -2.9751,
+    "realized_pnl": -877.2
   },
   {
     "broker": "zerodha",
@@ -1083,9 +1088,14 @@
     "actual_fill_price": 499.3,
     "actual_fill_quantity": 30,
     "entry_order_id": "260812221243101",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-12T15:21:11.824450+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "exit_price_925": 510.0,
+    "exit_order_id_925": "260813220156622",
+    "exit_timestamp_925": "2026-08-13T09:25:06.248514+05:30",
+    "realized_return_pct": 2.143,
+    "realized_pnl": 321.0
   },
   {
     "broker": "zerodha",
@@ -1096,9 +1106,14 @@
     "actual_fill_price": 174.17,
     "actual_fill_quantity": 172,
     "entry_order_id": "260812221243597",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:21.334192+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 174.05,
+    "exit_order_id_1159": "260813220730923",
+    "exit_timestamp_1159": "2026-08-13T11:59:09.935454+05:30",
+    "realized_return_pct": -0.0689,
+    "realized_pnl": -20.64
   },
   {
     "broker": "zerodha",
@@ -1109,9 +1124,14 @@
     "actual_fill_price": 669.6,
     "actual_fill_quantity": 44,
     "entry_order_id": "260812221243862",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:26.364252+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 656.6909,
+    "exit_order_id_1159": "260813220731160",
+    "exit_timestamp_1159": "2026-08-13T11:59:14.045577+05:30",
+    "realized_return_pct": -1.9279,
+    "realized_pnl": -568.0
   },
   {
     "broker": "zerodha",
@@ -1122,9 +1142,14 @@
     "actual_fill_price": 599.1,
     "actual_fill_quantity": 50,
     "entry_order_id": "260812221244140",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:31.406910+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 589.6,
+    "exit_order_id_1159": "260813220731405",
+    "exit_timestamp_1159": "2026-08-13T11:59:18.370769+05:30",
+    "realized_return_pct": -1.5857,
+    "realized_pnl": -475.0
   },
   {
     "broker": "zerodha",
@@ -1135,9 +1160,14 @@
     "actual_fill_price": 4952.0,
     "actual_fill_quantity": 6,
     "entry_order_id": "260812221244421",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:36.421254+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 5063.8167,
+    "exit_order_id_1159": "260813220731656",
+    "exit_timestamp_1159": "2026-08-13T11:59:22.548584+05:30",
+    "realized_return_pct": 2.258,
+    "realized_pnl": 670.9
   },
   {
     "broker": "zerodha",
@@ -1148,9 +1178,14 @@
     "actual_fill_price": 1047.6,
     "actual_fill_quantity": 28,
     "entry_order_id": "260812221244644",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-12T15:21:41.515179+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_925": 1066.2554,
+    "exit_order_id_925": "260813220157301",
+    "exit_timestamp_925": "2026-08-13T09:25:11.082096+05:30",
+    "realized_return_pct": 1.7808,
+    "realized_pnl": 522.35
   },
   {
     "broker": "zerodha",
@@ -1161,8 +1196,13 @@
     "actual_fill_price": 619.35,
     "actual_fill_quantity": 48,
     "entry_order_id": "260812221245088",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-12T15:21:50.867731+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_1159": 615.5771,
+    "exit_order_id_1159": "260813220731919",
+    "exit_timestamp_1159": "2026-08-13T11:59:26.619856+05:30",
+    "realized_return_pct": -0.6092,
+    "realized_pnl": -181.1
   }
 ]

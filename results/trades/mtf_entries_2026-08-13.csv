@@ -1,0 +1,2 @@
+timestamp,symbol,quantity,ref_price,fill_price,leverage,margin_required,order_id,status,product,capital_base
+2026-08-13T15:21:06.191589+05:30,JUBLCPL,32,2322.6,,2.0,37161.6,260813221342426,rejected,MTF,300000.0
