@@ -1,0 +1,67 @@
+[
+  {
+    "broker": "dhan",
+    "symbol": "DREDGECORP",
+    "entry_date": "2026-08-14",
+    "reference_price": 1169.0,
+    "shares_intended": 1,
+    "actual_fill_price": 1169.5,
+    "actual_fill_quantity": 1,
+    "entry_order_id": "34126081476809",
+    "status": "open",
+    "entry_timestamp": "2026-08-14T15:21:06.368078+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "MOTISONS",
+    "entry_date": "2026-08-14",
+    "reference_price": 16.63,
+    "shares_intended": 85,
+    "actual_fill_price": 16.67,
+    "actual_fill_quantity": 85,
+    "entry_order_id": "221260814682509",
+    "status": "open",
+    "entry_timestamp": "2026-08-14T15:21:13.149317+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SHANTIGOLD",
+    "entry_date": "2026-08-14",
+    "reference_price": 247.49,
+    "shares_intended": 5,
+    "actual_fill_price": 247.9,
+    "actual_fill_quantity": 5,
+    "entry_order_id": "23126081477709",
+    "status": "open",
+    "entry_timestamp": "2026-08-14T15:21:16.141166+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "STYLEBAAZA",
+    "entry_date": "2026-08-14",
+    "reference_price": 365.25,
+    "shares_intended": 3,
+    "actual_fill_price": 365.25,
+    "actual_fill_quantity": 3,
+    "entry_order_id": "221260814682809",
+    "status": "open",
+    "entry_timestamp": "2026-08-14T15:21:31.579126+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "TARSONS",
+    "entry_date": "2026-08-14",
+    "reference_price": 360.25,
+    "shares_intended": 3,
+    "actual_fill_price": 359.3,
+    "actual_fill_quantity": 3,
+    "entry_order_id": "34126081477009",
+    "status": "open",
+    "entry_timestamp": "2026-08-14T15:21:34.606858+05:30",
+    "product": "CNC"
+  }
+]
