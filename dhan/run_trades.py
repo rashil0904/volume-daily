@@ -427,7 +427,7 @@ def _append_log(trade_date: date, row: dict) -> None:
 
 def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                   capital: float | None = None, symbol: str | None = None,
-                  shares_override: int | None = None) -> None:
+                  shares_override: int | None = None, cnc_only: bool = False) -> None:
     if trade_date is None:
         trade_date = date.today()
 
@@ -499,9 +499,20 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             n_skipped += 1
             continue
 
-        margin_info  = _margin_check(sym, shares, ref)
-        has_leverage = margin_info is not None and margin_info["leverage"] >= 2
-        if has_leverage:
+        if cnc_only:
+            product         = "CNC"
+            leverage        = 0.0
+            margin_required = shares * ref
+            capital_base    = capital
+            print(f"[dhan]   --cnc-only — buying {shares} shares CNC (no leverage check)  "
+                  f"·  margin required: ₹{margin_required:,.2f}")
+        else:
+            margin_info  = _margin_check(sym, shares, ref)
+            has_leverage = margin_info is not None and margin_info["leverage"] >= 2
+
+        if cnc_only:
+            pass
+        elif has_leverage:
             product         = "MTF"
             leverage        = margin_info["leverage"]
             margin_required = margin_info["margin_required"]
@@ -938,6 +949,9 @@ if __name__ == "__main__":
                              "Shares are sized from --capital/ref-price unless --shares is given.")
     parser.add_argument("--shares",   type=int, default=None,
                         help="Exact quantity to buy in --symbol mode (skips allocation-based sizing).")
+    parser.add_argument("--cnc-only", action="store_true",
+                        help="Skip the MTF leverage check entirely -- buy every entry as CNC "
+                             "using the full per-position allocation (--entry only).")
     args = parser.parse_args()
 
     if args.shares is not None and args.symbol is None:
@@ -948,7 +962,7 @@ if __name__ == "__main__":
     try:
         if args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
-                          symbol=args.symbol, shares_override=args.shares)
+                          symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
         elif args.exit_925:
             check_exit_925(dry_run=args.dry_run)
         elif args.exit_1159:
