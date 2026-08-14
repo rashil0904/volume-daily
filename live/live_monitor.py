@@ -3,6 +3,7 @@
 live_monitor.py — KiteTicker live signal monitor for NSE mid-cap momentum
 =========================================================================
 Monitoring and notification only. No orders. No positions. No execution.
+Telegram is the only output -- no CSV event log, no local logs/ directory.
 
 Run at or after 9:15 AM IST (market open):
     python live_monitor.py
@@ -19,7 +20,6 @@ def _ipv4_only_getaddrinfo(*args, **kwargs):
 _socket.getaddrinfo = _ipv4_only_getaddrinfo
 # ─────────────────────────────────────────────────────────────────────────────
 
-import csv
 import json
 import os
 import sys
@@ -36,14 +36,12 @@ import pandas as pd
 _ROOT         = Path(__file__).resolve().parent.parent   # project root (one above live/)
 _PIPELINE_DIR = _ROOT / "pipeline"
 _CANDLES_DIR  = _ROOT / "data" / "candles"
-_LOGS_DIR     = _ROOT / "logs"
 _TOKEN_FILE   = _ROOT / "zerodha" / ".token.json"
 _IST          = ZoneInfo("Asia/Kolkata")
 
-# Add pipeline/ and live/ to path so pipeline modules and imbalance_tracker resolve
+# Add pipeline/ to path so pipeline modules resolve
 sys.path.insert(0, str(_PIPELINE_DIR))
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # live/ for imbalance_tracker
 
 # Load .env before importing pipeline modules that consume it at module level
 _env_file = _PIPELINE_DIR / ".env"
@@ -68,7 +66,6 @@ except Exception as exc:
     raise
 
 import data_loader
-from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance, make_label
 from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 
 # ── Strategy constants (mirror signal_engine.py) ──────────────────────────────
@@ -278,49 +275,6 @@ def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
     return fired
 
 
-# ── CSV event log ─────────────────────────────────────────────────────────────
-
-_LOG_FIELDS = [
-    "timestamp", "symbol", "event",
-    "ltp", "cum_vol", "vol_threshold", "vol_ratio",
-    "prev_vwap", "vwap_target", "upper_circuit", "pct_to_upper",
-]
-
-
-class _CsvLog:
-    def __init__(self):
-        _LOGS_DIR.mkdir(exist_ok=True)
-        self._path = _LOGS_DIR / f"live_monitor_{date.today().isoformat()}.csv"
-        self._lock = threading.Lock()
-        if not self._path.exists():
-            with open(self._path, "w", newline="") as f:
-                csv.DictWriter(f, fieldnames=_LOG_FIELDS).writeheader()
-
-    def write(self, event: str, state: _SymState) -> None:
-        vol_ratio    = round(state.cum_vol / state.vol_threshold, 4) if state.vol_threshold else 0.0
-        vwap_target  = round(state.prev_vwap * _RETURN_MULT, 2)
-        pct_to_upper = (
-            round((state.upper_circuit - state.ltp) / state.ltp * 100, 2)
-            if state.ltp > 0 and state.upper_circuit > 0 else ""
-        )
-        row = {
-            "timestamp":     datetime.now(_IST).isoformat(timespec="seconds"),
-            "symbol":        state.symbol,
-            "event":         event,
-            "ltp":           state.ltp,
-            "cum_vol":       int(state.cum_vol),
-            "vol_threshold": int(state.vol_threshold),
-            "vol_ratio":     vol_ratio,
-            "prev_vwap":     round(state.prev_vwap, 2),
-            "vwap_target":   vwap_target,
-            "upper_circuit": state.upper_circuit,
-            "pct_to_upper":  pct_to_upper,
-        }
-        with self._lock:
-            with open(self._path, "a", newline="") as f:
-                csv.DictWriter(f, fieldnames=_LOG_FIELDS).writerow(row)
-
-
 # ── Monitor ────────────────────────────────────────────────────────────────────
 
 class LiveMonitor:
@@ -328,13 +282,9 @@ class LiveMonitor:
         self._api_key      = api_key
         self._access_token = access_token
         self._states: dict[int, _SymState] = {}       # instrument_token -> state
-        self._imb_states: dict[int, ImbalanceState] = {}  # instrument_token -> imbalance state
         self._all_tokens: list[int] = []
-        self._log     = _CsvLog()
-        self._imb_log = ImbalanceLogger(_LOGS_DIR)
         self._lock    = threading.Lock()
         self._started_notified = False   # fire send_monitor_started() once, on first connect only
-        self._imbalance_snapshot_done = False   # log qualified-symbol imbalance once, at 15:20 IST
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -371,10 +321,9 @@ class LiveMonitor:
                 upper_circuit = upper,
                 lower_circuit = lower,
             )
-            self._imb_states[token] = ImbalanceState(symbol=sym)
 
         self._all_tokens = list(self._states)
-        print(f"\nReady — monitoring {len(self._all_tokens)} symbols via KiteTicker MODE_FULL.")
+        print(f"\nReady — monitoring {len(self._all_tokens)} symbols via KiteTicker MODE_QUOTE.")
 
     # ── WebSocket callbacks ───────────────────────────────────────────────────
 
@@ -388,31 +337,16 @@ class LiveMonitor:
             ltp     = float(tick.get("last_price")   or 0.0)
             cum_vol = float(tick.get("volume_traded") or 0.0)
 
-            # MODE_FULL-only field: 5-level bid/ask depth. Summed across all
-            # levels on each side (not just best bid/ask) to smooth out a
-            # single large resting order at one level.
-            depth       = tick.get("depth") or {}
-            bid_qty_tot = sum(int(lvl.get("quantity") or 0) for lvl in (depth.get("buy")  or []))
-            ask_qty_tot = sum(int(lvl.get("quantity") or 0) for lvl in (depth.get("sell") or []))
-
             with self._lock:
-                fired     = evaluate_tick(state, ltp, cum_vol)
-                imb_state = self._imb_states.get(token)
-                # Only accumulate depth-imbalance history for symbols that have
-                # already qualified — no point tracking book pressure on the
-                # other ~440 symbols that never fire a signal.
-                if state.qualified and imb_state is not None:
-                    update_imbalance(imb_state, bid_qty_tot, ask_qty_tot)
+                fired = evaluate_tick(state, ltp, cum_vol)
                 if "qualified"    in fired: self._fire_qualified(state)
                 if "near_circuit" in fired: self._fire_near_circuit(state)
 
-        self._maybe_snapshot_imbalance()
-
     def _on_connect(self, ws, response) -> None:
         n = len(self._all_tokens)
-        print(f"[WebSocket] Connected — subscribing {n} tokens in MODE_FULL…")
+        print(f"[WebSocket] Connected — subscribing {n} tokens in MODE_QUOTE…")
         ws.subscribe(self._all_tokens)
-        ws.set_mode(ws.MODE_FULL, self._all_tokens)
+        ws.set_mode(ws.MODE_QUOTE, self._all_tokens)
         if not self._started_notified:
             self._started_notified = True
             try:
@@ -437,7 +371,7 @@ class LiveMonitor:
         if self._all_tokens:
             try:
                 ws.subscribe(self._all_tokens)
-                ws.set_mode(ws.MODE_FULL, self._all_tokens)
+                ws.set_mode(ws.MODE_QUOTE, self._all_tokens)
             except Exception:
                 pass
 
@@ -458,7 +392,6 @@ class LiveMonitor:
             f"vol={state.cum_vol:>12,.0f} / {state.vol_threshold:>12,.0f} ({vol_ratio:.2f}x)  "
             f"ltp=₹{state.ltp:>9,.2f}  vwap_target=₹{vwap_target:,.2f}"
         )
-        self._log.write("qualified", state)
         try:
             notify.send_monitor_qualified(
                 symbol      = state.symbol,
@@ -481,7 +414,6 @@ class LiveMonitor:
             f"ltp=₹{state.ltp:>9,.2f}  upper=₹{state.upper_circuit:,.2f}  "
             f"gap={pct_to_upper:.2f}%"
         )
-        self._log.write("near_circuit", state)
         try:
             notify.send_monitor_near_circuit(
                 symbol        = state.symbol,
@@ -492,35 +424,6 @@ class LiveMonitor:
             )
         except Exception as exc:
             print(f"  [notify] near_circuit failed: {exc}", file=sys.stderr)
-
-    # ── 15:20 imbalance snapshot ───────────────────────────────────────────────
-    # Fires once, the first tick batch received at/after 15:20 IST: logs each
-    # currently-qualified symbol's last-20min rolling book imbalance to
-    # logs/imbalance_<date>.csv. Log only — no Telegram, no trading action.
-
-    def _maybe_snapshot_imbalance(self) -> None:
-        if self._imbalance_snapshot_done:
-            return
-        now = datetime.now(_IST)
-        if now.hour * 100 + now.minute < 1520:
-            return
-        self._imbalance_snapshot_done = True
-
-        n_logged = 0
-        for token, state in self._states.items():
-            if not state.qualified:
-                continue
-            imb_state = self._imb_states.get(token)
-            if imb_state is None or not imb_state.rolling:
-                continue
-            rolling = sum(v for _, v in imb_state.rolling) / len(imb_state.rolling)
-            self._imb_log.log_event(
-                "snapshot_1520", imb_state,
-                imb_state.last_imbalance, rolling, make_label(rolling),
-            )
-            n_logged += 1
-        print(f"[{now.strftime('%H:%M:%S')}] 15:20 imbalance snapshot — "
-              f"logged {n_logged} qualified symbol(s).")
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 

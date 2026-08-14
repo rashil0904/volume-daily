@@ -3,6 +3,7 @@
 dhan/live_monitor.py — Dhan MarketFeed live signal monitor for NSE mid-cap momentum
 =====================================================================================
 Monitoring and notification only. No orders. No positions. No execution.
+Telegram is the only output -- no CSV event log, no local logs/ directory.
 Independent of live/live_monitor.py (Zerodha/KiteTicker) -- same strategy math
 (evaluate_tick, thresholds), different data source, kept as a separate file per
 this pipeline's pattern of not cross-wiring broker-specific execution paths.
@@ -38,7 +39,6 @@ def _ipv4_only_getaddrinfo(*args, **kwargs):
 _socket.getaddrinfo = _ipv4_only_getaddrinfo
 # ─────────────────────────────────────────────────────────────────────────────
 
-import csv
 import json
 import os
 import sys
@@ -53,16 +53,11 @@ from zoneinfo import ZoneInfo
 _ROOT         = Path(__file__).resolve().parent.parent   # project root (one above dhan/)
 _PIPELINE_DIR = _ROOT / "pipeline"
 _CANDLES_DIR  = _ROOT / "data" / "candles"
-_LOGS_DIR     = _ROOT / "logs" / "dhan"   # separate subdir -- keeps this from ever
-                                          # colliding with live/live_monitor.py's
-                                          # logs/live_monitor_*.csv + logs/imbalance_*.csv
 _TOKEN_FILE   = _ROOT / "dhan" / ".token.json"
 _IST          = ZoneInfo("Asia/Kolkata")
 
 sys.path.insert(0, str(_PIPELINE_DIR))
 sys.path.insert(0, str(_ROOT))
-sys.path.insert(0, str(_ROOT / "live"))   # imbalance_tracker.py lives there -- shared,
-                                          # broker-agnostic, not duplicated here
 
 _env_file = _PIPELINE_DIR / ".env"
 if _env_file.exists():
@@ -84,7 +79,6 @@ except Exception as exc:
     raise
 
 import data_loader
-from imbalance_tracker import ImbalanceLogger, ImbalanceState, update_imbalance, make_label
 from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.instruments import security_id
@@ -278,49 +272,6 @@ def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
     return fired
 
 
-# ── CSV event log ─────────────────────────────────────────────────────────────
-
-_LOG_FIELDS = [
-    "timestamp", "symbol", "event",
-    "ltp", "cum_vol", "vol_threshold", "vol_ratio",
-    "prev_vwap", "vwap_target", "upper_circuit", "pct_to_upper",
-]
-
-
-class _CsvLog:
-    def __init__(self):
-        _LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        self._path = _LOGS_DIR / f"dhan_live_monitor_{date.today().isoformat()}.csv"
-        self._lock = threading.Lock()
-        if not self._path.exists():
-            with open(self._path, "w", newline="") as f:
-                csv.DictWriter(f, fieldnames=_LOG_FIELDS).writeheader()
-
-    def write(self, event: str, state: _SymState) -> None:
-        vol_ratio    = round(state.cum_vol / state.vol_threshold, 4) if state.vol_threshold else 0.0
-        vwap_target  = round(state.prev_vwap * _RETURN_MULT, 2)
-        pct_to_upper = (
-            round((state.upper_circuit - state.ltp) / state.ltp * 100, 2)
-            if state.ltp > 0 and state.upper_circuit > 0 else ""
-        )
-        row = {
-            "timestamp":     datetime.now(_IST).isoformat(timespec="seconds"),
-            "symbol":        state.symbol,
-            "event":         event,
-            "ltp":           state.ltp,
-            "cum_vol":       int(state.cum_vol),
-            "vol_threshold": int(state.vol_threshold),
-            "vol_ratio":     vol_ratio,
-            "prev_vwap":     round(state.prev_vwap, 2),
-            "vwap_target":   vwap_target,
-            "upper_circuit": state.upper_circuit,
-            "pct_to_upper":  pct_to_upper,
-        }
-        with self._lock:
-            with open(self._path, "a", newline="") as f:
-                csv.DictWriter(f, fieldnames=_LOG_FIELDS).writerow(row)
-
-
 # ── Monitor ────────────────────────────────────────────────────────────────────
 
 class LiveMonitor:
@@ -328,14 +279,10 @@ class LiveMonitor:
         self._client_id    = client_id
         self._access_token = access_token
         self._states: dict[int, _SymState] = {}          # securityId -> state
-        self._imb_states: dict[int, ImbalanceState] = {}  # securityId -> imbalance state
         self._all_sids: list[int] = []
-        self._log     = _CsvLog()
-        self._imb_log = ImbalanceLogger(_LOGS_DIR)
         self._lock    = threading.Lock()
         self._connect_count = 0   # 0 -> first connect fires send_monitor_started;
                                   # every call after that is a reconnect
-        self._imbalance_snapshot_done = False   # log qualified-symbol imbalance once, at 15:20 IST
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -369,10 +316,9 @@ class LiveMonitor:
                 upper_circuit = upper,
                 lower_circuit = lower,
             )
-            self._imb_states[sid] = ImbalanceState(symbol=sym)
 
         self._all_sids = list(self._states)
-        print(f"\nReady — monitoring {len(self._all_sids)} symbols via Dhan MarketFeed (Full mode).")
+        print(f"\nReady — monitoring {len(self._all_sids)} symbols via Dhan MarketFeed (Quote mode).")
 
     # ── WebSocket callback ───────────────────────────────────────────────────
     # dhanhq's MarketFeed calls on_message(feed, data) once per parsed message
@@ -380,8 +326,8 @@ class LiveMonitor:
     # which batches. See module docstring.
 
     def _on_message(self, feed, data: dict) -> None:
-        if not data or data.get("type") != "Full Data":
-            return   # ignore OI/status/prev-close packets, not subscribed to Ticker/Quote
+        if not data or data.get("type") != "Quote Data":
+            return   # ignore OI/status/prev-close packets, not subscribed to Ticker/Full
 
         try:
             sid = int(data.get("security_id"))
@@ -397,28 +343,16 @@ class LiveMonitor:
         except (TypeError, ValueError):
             return
 
-        # Full-mode depth: 5 levels, raw int quantities (unlike LTP/OHLC, not
-        # string-formatted) -- summed both sides, same smoothing rationale as
-        # live/live_monitor.py's MODE_FULL depth handling.
-        depth       = data.get("depth") or []
-        bid_qty_tot = sum(int(lvl.get("bid_quantity") or 0) for lvl in depth)
-        ask_qty_tot = sum(int(lvl.get("ask_quantity") or 0) for lvl in depth)
-
         with self._lock:
-            fired     = evaluate_tick(state, ltp, cum_vol)
-            imb_state = self._imb_states.get(sid)
-            if state.qualified and imb_state is not None:
-                update_imbalance(imb_state, bid_qty_tot, ask_qty_tot)
+            fired = evaluate_tick(state, ltp, cum_vol)
             if "qualified"    in fired: self._fire_qualified(state)
             if "near_circuit" in fired: self._fire_near_circuit(state)
-
-        self._maybe_snapshot_imbalance()
 
     def _on_connect(self, feed) -> None:
         n = len(self._all_sids)
         self._connect_count += 1
         if self._connect_count == 1:
-            print(f"[WebSocket] Connected — subscribed {n} securityIds in Full mode…")
+            print(f"[WebSocket] Connected — subscribed {n} securityIds in Quote mode…")
             try:
                 notify.send_monitor_started(n)
             except Exception:
@@ -453,7 +387,6 @@ class LiveMonitor:
             f"vol={state.cum_vol:>12,.0f} / {state.vol_threshold:>12,.0f} ({vol_ratio:.2f}x)  "
             f"ltp=₹{state.ltp:>9,.2f}  vwap_target=₹{vwap_target:,.2f}"
         )
-        self._log.write("qualified", state)
         try:
             notify.send_monitor_qualified(
                 symbol      = f"{state.symbol} [DHAN]",
@@ -476,7 +409,6 @@ class LiveMonitor:
             f"ltp=₹{state.ltp:>9,.2f}  upper=₹{state.upper_circuit:,.2f}  "
             f"gap={pct_to_upper:.2f}%"
         )
-        self._log.write("near_circuit", state)
         try:
             notify.send_monitor_near_circuit(
                 symbol        = f"{state.symbol} [DHAN]",
@@ -487,32 +419,6 @@ class LiveMonitor:
             )
         except Exception as exc:
             print(f"  [notify] near_circuit failed: {exc}", file=sys.stderr)
-
-    # ── 15:20 imbalance snapshot ───────────────────────────────────────────────
-
-    def _maybe_snapshot_imbalance(self) -> None:
-        if self._imbalance_snapshot_done:
-            return
-        now = datetime.now(_IST)
-        if now.hour * 100 + now.minute < 1520:
-            return
-        self._imbalance_snapshot_done = True
-
-        n_logged = 0
-        for sid, state in self._states.items():
-            if not state.qualified:
-                continue
-            imb_state = self._imb_states.get(sid)
-            if imb_state is None or not imb_state.rolling:
-                continue
-            rolling = sum(v for _, v in imb_state.rolling) / len(imb_state.rolling)
-            self._imb_log.log_event(
-                "snapshot_1520", imb_state,
-                imb_state.last_imbalance, rolling, make_label(rolling),
-            )
-            n_logged += 1
-        print(f"[{now.strftime('%H:%M:%S')}] 15:20 imbalance snapshot — "
-              f"logged {n_logged} qualified symbol(s).")
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
@@ -543,7 +449,7 @@ class LiveMonitor:
     def run(self) -> None:
         self.setup()
 
-        instruments = [(MarketFeed.NSE, str(sid), MarketFeed.Full) for sid in self._all_sids]
+        instruments = [(MarketFeed.NSE, str(sid), MarketFeed.Quote) for sid in self._all_sids]
         dhan_context = DhanContext(self._client_id, self._access_token)
 
         hb = threading.Thread(target=self._heartbeat_loop, daemon=True)
