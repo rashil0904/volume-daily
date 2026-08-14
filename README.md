@@ -1,6 +1,6 @@
 # NSE Volume Pipeline
 
-Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. An interactive P&L dashboard (published as a Claude Artifact) refreshes daily from the trade book. Upstox is used for market data only — no trading happens through Upstox.
+Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. Upstox is used for market data only — no trading happens through Upstox.
 
 ---
 
@@ -17,7 +17,6 @@ Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–F
   - [Part 5 — Auto-Push Data & Results (5:00 PM)](#part-5--auto-push-data--results-500-pm)
 - [MTF (Leveraged) Entries — Standalone Script](#mtf-leveraged-entries--standalone-script)
 - [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts)
-- [Trade Book Dashboard (Artifact)](#trade-book-dashboard-artifact)
 - [Repository Structure](#repository-structure)
 - [First-Time VM Setup](#first-time-vm-setup)
 - [Configuration](#configuration)
@@ -123,11 +122,10 @@ To change the live capital, edit the `--capital` value in the entry cron line (s
  4:00 PM  — [CRON] EOD fill: corrects/backfills 15:00 + 15:15 candles via intraday API
  4:30 PM  — [CRON] Regenerate results/trade_book.csv
  5:00 PM  — [CRON] Auto-commit + push data/results changes to GitHub
- 5:05 PM  — [CLOUD ROUTINE] Rebuild + republish the Trade Book dashboard Artifact
 ─────────── overnight hold, cycle repeats ─────────────────────────────────────
 ```
 
-> All of the above (except the 5:05 PM step) are live cron jobs on the VM, Mon–Fri only (`1-5`) — see [Cron Schedule Summary](#cron-schedule-summary) for exact times and commands. The **Zerodha access token still requires a manual daily login before 9:13 AM** (the live monitor is the first job that needs it) — see [Daily Operations](#daily-operations); nothing in this pipeline can automate that step (Kite Connect's OAuth login is a regulatory requirement, not a limitation of this code). The 5:05 PM dashboard refresh runs as a separate Claude Code cloud routine, not a local cron job — see [Trade Book Dashboard (Artifact)](#trade-book-dashboard-artifact).
+> All of the above are live cron jobs on the VM, Mon–Fri only (`1-5`) — see [Cron Schedule Summary](#cron-schedule-summary) for exact times and commands. The **Zerodha access token still requires a manual daily login before 9:13 AM** (the live monitor is the first job that needs it) — see [Daily Operations](#daily-operations); nothing in this pipeline can automate that step (Kite Connect's OAuth login is a regulatory requirement, not a limitation of this code).
 
 ---
 
@@ -252,7 +250,7 @@ python3.11 zerodha/build_trade_book.py
 
 Flattens `results/positions_zerodha.json` into `results/trade_book.csv` — one row per position with: **Stock Name, Position entry date, Position Exit date, No of shares, Entry Price, Exit Price, Realised PnL, Realised PnL Pct, Total Charges, Net PnL, Net PnL Pct**. Open positions show entry-side fields only; exit fields stay blank until they close. Runs daily right after the 4:00 PM EOD fill, so it always reflects that day's Stage 2/3 exits. Positions entered before **27 Jul 2026** (pre-live-capital test trades) are filtered out entirely — see `_TRACKING_START_DATE` in the script.
 
-Charges (brokerage, STT, exchange/SEBI, GST, and a flat ₹15.34 DP charge) are fetched per-leg from Kite's actual `/charges/orders` API — not estimated — and rolled up into `Total Charges`/`Net PnL`/`Net PnL Pct`. Also writes `results/trade_book.xlsx`, a day-boxed visual version with 🟢/🔴/⏳ result tags and in-cell P&L data bars. See [Trade Book Dashboard (Artifact)](#trade-book-dashboard-artifact) for the interactive web version built from this same CSV.
+Charges (brokerage, STT, exchange/SEBI, GST, and a flat ₹15.34 DP charge) are fetched per-leg from Kite's actual `/charges/orders` API — not estimated — and rolled up into `Total Charges`/`Net PnL`/`Net PnL Pct`. Also writes `results/trade_book.xlsx`, a day-boxed visual version with 🟢/🔴/⏳ result tags and in-cell P&L data bars.
 
 ---
 
@@ -320,26 +318,6 @@ Once a symbol qualifies, its 5-level bid/ask depth (`MODE_FULL`-only data) is us
 
 ---
 
-## Trade Book Dashboard (Artifact)
-
-An interactive P&L dashboard — equity curve (Net/Gross toggle), day-by-day breakdown, repeat-symbol performance, and a sortable/filterable trade ledger — published as a Claude Artifact from `results/trade_book.csv`.
-
-```bash
-python3.11 dashboard/build_dashboard.py    # writes dashboard/trade_book.html
-```
-
-`dashboard/template.html` is the self-contained HTML/CSS/JS shell (fonts embedded as base64 in `dashboard/fonts/*.b64`, no external requests). `build_dashboard.py` reads `results/trade_book.csv`, computes the summary/equity-curve/day-bar/symbol aggregates, and substitutes them into the template. The output (`dashboard/trade_book.html`) is gitignored — it's a build artifact, regenerated from the CSV each time, not versioned.
-
-**Kept current by a Claude Code cloud routine** ("Refresh Trade Book artifact"), not a local cron job — manage it at [claude.ai/code/routines](https://claude.ai/code/routines). It runs at **5:05 PM IST, Mon–Fri**, five minutes after `push_data_updates.sh` puts that day's `trade_book.csv` on GitHub, and:
-
-1. Clones the repo (cloud routines have no access to this VM, local files, or the Zerodha session)
-2. Runs `dashboard/build_dashboard.py` against whatever's on GitHub — **not** `zerodha/build_trade_book.py` itself, since that needs a live Kite-authenticated session (for the `/charges/orders` lookup) that doesn't exist in the cloud sandbox
-3. Republishes the same Artifact URL in place (never mints a new link)
-
-To publish this dashboard for the first time (or after moving to a new environment), run `dashboard/build_dashboard.py` locally and use Claude Code's `Artifact` tool on the resulting HTML.
-
----
-
 ## Repository Structure
 
 ```
@@ -366,12 +344,6 @@ volume-daily/
 │   ├── live_monitor.py         # KiteTicker MODE_QUOTE monitor, 9:13 AM–3:40 PM — Telegram-only, no CSV log — see Live Monitoring section
 │   ├── test_state_machine.py   # Self-test for live_monitor.py's qualified/near_circuit state machine
 │   └── build_trade_book.py     # Flattens positions_zerodha.json → results/trade_book.csv (+ .xlsx)
-│
-├── dashboard/
-│   ├── template.html           # Self-contained HTML/CSS/JS shell for the Trade Book Artifact (fonts embedded)
-│   ├── fonts/*.b64             # Embedded webfonts (Fraunces, IBM Plex Sans/Mono), base64-encoded
-│   ├── build_dashboard.py      # results/trade_book.csv + template.html → dashboard/trade_book.html
-│   └── trade_book.html         # Build output — gitignored, regenerated each run
 │
 ├── scripts/
 │   ├── run_pipeline.sh         # Cron entry point — calls pipeline/main.py
@@ -434,7 +406,7 @@ After filling in `.env`, run a manual test:
 python3.11 pipeline/main.py
 ```
 
-Then register all the cron jobs listed in [Cron Schedule Summary](#cron-schedule-summary) via `crontab -e`, and set up the dashboard-refresh cloud routine per [Trade Book Dashboard (Artifact)](#trade-book-dashboard-artifact).
+Then register all the cron jobs listed in [Cron Schedule Summary](#cron-schedule-summary) via `crontab -e`.
 
 ---
 
@@ -639,12 +611,6 @@ All times IST (UTC+5:30), server timezone set to `Asia/Kolkata`. All jobs below 
 | 4:00 PM | `0 16 * * 1-5` | `pipeline/data_loader.py --eod-fill` |
 | 4:30 PM | `30 16 * * 1-5` | `zerodha/build_trade_book.py` |
 | 5:00 PM | `0 17 * * 1-5` | `scripts/push_data_updates.sh` |
-
-Plus one **cloud routine** (not a local cron job — see [Trade Book Dashboard (Artifact)](#trade-book-dashboard-artifact)):
-
-| Time (IST) | Schedule | What |
-|---|---|---|
-| 5:05 PM | Mon–Fri | Rebuild + republish the Trade Book Artifact from that day's `trade_book.csv` |
 
 `zerodha/run_trades_mtf.py` is **not** in the local cron list above — it's a standalone script, run manually. (A single one-off cron line pinned to a specific past date was added for a one-time dry-run test; it's dormant and won't fire again until that day-of-month/month combination recurs.)
 
