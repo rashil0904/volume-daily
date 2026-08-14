@@ -4,7 +4,7 @@ dhan/live_monitor.py — Dhan MarketFeed live signal monitor for NSE mid-cap mom
 =====================================================================================
 Monitoring and notification only. No orders. No positions. No execution.
 Telegram is the only output -- no CSV event log, no local logs/ directory.
-Independent of live/live_monitor.py (Zerodha/KiteTicker) -- same strategy math
+Independent of zerodha/live_monitor.py (Zerodha/KiteTicker) -- same strategy math
 (evaluate_tick, thresholds), different data source, kept as a separate file per
 this pipeline's pattern of not cross-wiring broker-specific execution paths.
 
@@ -83,7 +83,7 @@ from common.calc_utils import load_clean_candles, compute_36day_avg_volume, comp
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.instruments import security_id
 
-# ── Strategy constants (mirror signal_engine.py / live/live_monitor.py exactly) ─
+# ── Strategy constants (mirror signal_engine.py / zerodha/live_monitor.py exactly) ─
 _MIN_PERIODS       = 36
 _VOLUME_MULT       = 6
 _RETURN_MULT       = 1.05    # LTP >= prev_vwap * 1.05  (5%)
@@ -102,7 +102,7 @@ def _get_dhan_credentials() -> tuple[str, str]:
     """
     Validate/refresh via dhan.auth.get_session() (raises DhanAuthError if no
     valid token), then read client_id/access_token directly -- same pattern
-    live/live_monitor.py uses for Zerodha.
+    zerodha/live_monitor.py uses for Zerodha.
     """
     _dhan_session()  # validates existing token
     token_data   = json.loads(_TOKEN_FILE.read_text())
@@ -115,7 +115,7 @@ def _get_dhan_credentials() -> tuple[str, str]:
     return client_id, access_token
 
 
-# ── Volume baseline + VWAP precomputation (identical to live/live_monitor.py) ──
+# ── Volume baseline + VWAP precomputation (identical to zerodha/live_monitor.py) ──
 
 @dataclass
 class _Baseline:
@@ -219,7 +219,7 @@ def _build_security_id_maps(symbols: set[str]) -> tuple[dict[int, str], dict[str
     return sid_to_sym, sym_to_sid
 
 
-# ── Per-symbol live state (identical shape to live/live_monitor.py) ───────────
+# ── Per-symbol live state (identical shape to zerodha/live_monitor.py) ───────────
 
 @dataclass
 class _SymState:
@@ -240,7 +240,7 @@ _EVAL_CUTOFF_HHMM = 1500   # signal_engine takes over from 3:01 PM onwards
 
 def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
     """Pure state-machine evaluation for one tick on one symbol -- byte-for-byte
-    the same rule as live/live_monitor.py's evaluate_tick(), duplicated rather
+    the same rule as zerodha/live_monitor.py's evaluate_tick(), duplicated rather
     than imported to keep this file self-contained (see module docstring)."""
     state.ltp     = ltp
     state.cum_vol = cum_vol

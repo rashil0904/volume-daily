@@ -10,7 +10,7 @@ live/:
                                  pipeline/main.py, scan/scan_intraday.py,
                                  zerodha/execute_trades.py
   - compute_shares            : all five files above
-  - load_clean_candles        : pipeline/signal_engine.py, live/live_monitor.py
+  - load_clean_candles        : pipeline/signal_engine.py, zerodha/live_monitor.py
   - compute_36day_avg_volume  : same two
   - compute_prev_day_vwap     : same two
 

@@ -289,7 +289,7 @@ python zerodha/run_trades_mtf.py --entry --symbol "NSE_EQ|INE002A01018" --shares
 ## Live Monitoring & Signal Alerts
 
 ```bash
-python live/live_monitor.py
+python zerodha/live_monitor.py
 ```
 
 Runs continuously from **9:13 AM to 3:40 PM** (start/kill via cron — see [Cron Schedule Summary](#cron-schedule-summary)), independent of the trade-execution flow above. Connects to Kite's WebSocket (`KiteTicker`, `MODE_FULL`) for every symbol in the mcap-eligible universe with sufficient candle history (typically ~450 of ~490), and watches for the same qualifying conditions as the pipeline signal logic, but live and continuously rather than once at 3:06 PM:
@@ -357,17 +357,14 @@ volume-daily/
 ├── scan/
 │   └── scan_intraday.py       # Anytime preview scanner (PRORATED mode) — not read by any execution script
 │
-├── live/
-│   ├── live_monitor.py         # KiteTicker MODE_FULL monitor, 9:13 AM–3:40 PM — see Live Monitoring section
-│   ├── imbalance_tracker.py    # Order-book depth imbalance (qualified symbols only, logged once at 3:20 PM)
-│   └── test_state_machine.py   # Self-test for live_monitor.py's qualified/near_circuit state machine
-│
 ├── zerodha/
 │   ├── auth.py                 # Kite session management (daily login, expires 6 AM IST)
 │   ├── trade.py                 # buy(), sell(), order_status() via Kite — CLI too; market_protection fixed at 0.75%
 │   ├── execute_trades.py       # Batch buyer from trade list CSV via Kite
 │   ├── run_trades.py           # 3-stage live trading (CNC) via Kite — Stage 1/2/3 with positions JSON
 │   ├── run_trades_mtf.py       # Standalone MTF entry script — separate from the CNC flow entirely
+│   ├── live_monitor.py         # KiteTicker MODE_QUOTE monitor, 9:13 AM–3:40 PM — Telegram-only, no CSV log — see Live Monitoring section
+│   ├── test_state_machine.py   # Self-test for live_monitor.py's qualified/near_circuit state machine
 │   └── build_trade_book.py     # Flattens positions_zerodha.json → results/trade_book.csv (+ .xlsx)
 │
 ├── dashboard/
@@ -399,7 +396,6 @@ volume-daily/
 │   ├── trade_book.csv                    # Flattened per-position P&L view (regenerated daily at 4:30 PM)
 │   └── trade_book.xlsx                   # Day-boxed visual version of the same data
 │
-├── logs/                       # live_monitor.py event log + imbalance_<date>.csv (untracked, not committed)
 └── .env.example                # Credential template — copy to pipeline/.env and fill in
 ```
 
@@ -609,9 +605,9 @@ Every notification function in `pipeline/notify.py` is wired up and active — r
 | **Exit 9:25 AM** / no-data fallback | `zerodha/run_trades.py` (Stage 2) | Each position closed (or half-closed, if broker LTP was unavailable) |
 | **Force exit 11:59 AM** / nothing-to-close | `zerodha/run_trades.py` (Stage 3) | Each position force-closed, or a no-op notice if Stage 2 already closed everything |
 | **Daily summary** | `zerodha/run_trades.py` (end of Stage 3) | Opened/exited/force-closed counts + total P&L for the day |
-| Monitor **started** / **failed to start** | `live/live_monitor.py` | First successful WebSocket connect each day / any crash before it connects |
-| Monitor **qualified** / **near circuit** | `live/live_monitor.py` | Live, continuously — see [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts) |
-| Monitor **disconnect** / **reconnect** / **heartbeat** | `live/live_monitor.py` | WebSocket connection events + a 60-minute status ping |
+| Monitor **started** / **failed to start** | `zerodha/live_monitor.py` | First successful WebSocket connect each day / any crash before it connects |
+| Monitor **qualified** / **near circuit** | `zerodha/live_monitor.py` | Live, continuously — see [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts) |
+| Monitor **disconnect** / **reconnect** / **heartbeat** | `zerodha/live_monitor.py` | WebSocket connection events + a 60-minute status ping |
 
 Every trading-stage and live-monitor notification call is wrapped in its own `try/except` — a Telegram outage can never break order placement, position tracking, or the monitor loop itself; a failed send just prints to stderr (`[notify] ... failed: ...`) instead of raising.
 
@@ -639,7 +635,7 @@ All times IST (UTC+5:30), server timezone set to `Asia/Kolkata`. All jobs below 
 | 11:59 AM | `59 11 * * 1-5` | `zerodha/run_trades.py --exit-1159` |
 | 3:06 PM | `6 15 * * 1-5` | `scripts/run_pipeline.sh` |
 | 3:21 PM | `21 15 * * 1-5` | `zerodha/run_trades.py --entry --capital 150000` |
-| 3:40 PM | `40 15 * * 1-5` | `pkill -f 'live/live_monitor.py'` |
+| 3:40 PM | `40 15 * * 1-5` | `pkill -f 'zerodha/live_monitor.py'` |
 | 4:00 PM | `0 16 * * 1-5` | `pipeline/data_loader.py --eod-fill` |
 | 4:30 PM | `30 16 * * 1-5` | `zerodha/build_trade_book.py` |
 | 5:00 PM | `0 17 * * 1-5` | `scripts/push_data_updates.sh` |

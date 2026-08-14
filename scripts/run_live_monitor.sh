@@ -15,12 +15,12 @@ echo "=========================================="
 echo "$LOG_PREFIX  Starting live_monitor.py"
 echo "=========================================="
 
-OLD_PID="$(pgrep -f 'live/live_monitor.py')"
+OLD_PID="$(pgrep -f 'zerodha/live_monitor.py')"
 if [ -n "$OLD_PID" ]; then
     echo "$LOG_PREFIX  Killing leftover instance (PID $OLD_PID)"
     kill $OLD_PID
     sleep 2
 fi
 
-nohup python3.11 live/live_monitor.py >> /root/live_monitor.log 2>&1 &
+nohup python3.11 zerodha/live_monitor.py >> /root/live_monitor.log 2>&1 &
 echo "$LOG_PREFIX  Started live_monitor.py (PID $!)"
