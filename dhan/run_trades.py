@@ -306,15 +306,24 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
     Returns (quantity, exchange_segment), defaulting to (0, "NSE_EQ") if nothing
     is found.
 
-    NOTE: Dhan's published /holdings response doesn't document a separate MTF
-    sub-quantity field the way Kite's does (Kite's holdings expose a nested
-    "mtf": {quantity, used_quantity}, which is what the Zerodha side of this
-    pipeline needed after a real bug where MTF holdings settled onto a
-    different exchange overnight). This function checks /positions first (which
-    DOES have an explicit productType field) and falls back to /holdings'
-    totalQty only if nothing is found there -- but the CNC/MTF split in
-    /holdings hasn't been verified against a real Dhan MTF fill yet. Re-verify
-    this once the first real Dhan MTF position exists and needs exiting."""
+    NOTE: totalQty is already the full holding -- dpQty and t1Qty are a
+    settlement-status BREAKDOWN of totalQty (dpQty + t1Qty == totalQty), not
+    additional to it. Confirmed live 2026-08-17: /holdings showed
+    {"totalQty": 5, "dpQty": 0, "t1Qty": 5} for a T1-only position, and the old
+    "totalQty + t1Qty" formula below double-counted it as 10 -- which then
+    false-mismatched against our local qty=5 and blocked check_exit_925 from
+    selling MOTISONS/SHANTIGOLD/TARSONS entirely that morning. Fixed to use
+    totalQty alone.
+
+    STILL UNVERIFIED: whether totalQty already includes MTF-financed shares
+    too, or whether an MTF position needs "totalQty + mtf_qty" instead. This
+    function checks /positions first (which DOES have an explicit productType
+    field, so MTF vs CNC is unambiguous there) and only falls back to
+    /holdings' totalQty if nothing is found in /positions -- but /holdings'
+    MTF fields (mtf_qty, mtf_t1_qty) have never been checked against a real
+    Dhan MTF fill. Re-verify against /holdings right after the first real MTF
+    entry (e.g. tomorrow's run) before trusting this fallback path for an MTF
+    position."""
     session, _ = _dhan_session()
     product = product.upper()
     try:
@@ -334,9 +343,18 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
             for h in (resp.json() or []):
                 if (h.get("tradingSymbol") or "").upper() != symbol.upper():
                     continue
-                qty = int(h.get("totalQty") or 0) + int(h.get("t1Qty") or 0)
+                qty = int(h.get("totalQty") or 0)
                 if qty > 0:
-                    return qty, (h.get("exchange") or "NSE_EQ").upper()
+                    # /holdings' own "exchange" field is an informational value
+                    # like "ALL" (multi-exchange eligible), not a real tradable
+                    # exchangeSegment -- confirmed live 2026-08-17, every current
+                    # holding returns "ALL" here. Passing that straight into a
+                    # real sell order's exchangeSegment would very likely get
+                    # rejected by Dhan. This pipeline is NSE-equity-only
+                    # everywhere else (see dhan/trade.py's docstring), so always
+                    # return NSE_EQ from this fallback rather than trusting
+                    # holdings' own field.
+                    return qty, "NSE_EQ"
     except Exception:
         pass
     return 0, "NSE_EQ"
