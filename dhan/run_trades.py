@@ -315,6 +315,14 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
     selling MOTISONS/SHANTIGOLD/TARSONS entirely that morning. Fixed to use
     totalQty alone.
 
+    HISTORICAL NOTE (why the exchange segment below isn't just hardcoded):
+    the Zerodha side of this pipeline was once bitten by a holding settling
+    onto a different exchange than it was bought on overnight, which is why
+    Kite's holdings API exposes a nested per-exchange breakdown at all. A
+    position can genuinely shift exchange between entry and exit, so the
+    /holdings fallback below honors Dhan's reported exchange when it's
+    exchange-specific, rather than always assuming NSE_EQ.
+
     STILL UNVERIFIED: whether totalQty already includes MTF-financed shares
     too, or whether an MTF position needs "totalQty + mtf_qty" instead. This
     function checks /positions first (which DOES have an explicit productType
@@ -345,15 +353,18 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
                     continue
                 qty = int(h.get("totalQty") or 0)
                 if qty > 0:
-                    # /holdings' own "exchange" field is an informational value
-                    # like "ALL" (multi-exchange eligible), not a real tradable
-                    # exchangeSegment -- confirmed live 2026-08-17, every current
-                    # holding returns "ALL" here. Passing that straight into a
-                    # real sell order's exchangeSegment would very likely get
-                    # rejected by Dhan. This pipeline is NSE-equity-only
-                    # everywhere else (see dhan/trade.py's docstring), so always
-                    # return NSE_EQ from this fallback rather than trusting
-                    # holdings' own field.
+                    # /holdings' own "exchange" field is usually the literal
+                    # string "ALL" (dual-listed/fungible, confirmed live
+                    # 2026-08-17 for every current holding) -- not itself a
+                    # placeable exchangeSegment, so it can't be passed straight
+                    # through as-is. But honor it when it IS exchange-specific
+                    # (see HISTORICAL NOTE above) -- only "ALL"/unrecognized
+                    # falls back to NSE_EQ (where this pipeline always places
+                    # its buys); a real "NSE" or "BSE" from Dhan is mapped to
+                    # its _EQ segment instead of being overridden.
+                    exch_raw = (h.get("exchange") or "").strip().upper()
+                    if exch_raw in ("NSE", "BSE"):
+                        return qty, f"{exch_raw}_EQ"
                     return qty, "NSE_EQ"
     except Exception:
         pass
