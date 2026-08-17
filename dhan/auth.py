@@ -115,6 +115,13 @@ def get_session() -> tuple[requests.Session, str]:
     session.headers.update({
         "access-token": access_token,
         "dhanClientId": _CLIENT_ID,
+        # Data API endpoints (marketfeed/ltp, marketfeed/quote, optionchain) check a
+        # separate "client-id" header, not "dhanClientId" -- without it they 401 with
+        # {"810":"ClientId is invalid"} even on a fresh token. Confirmed 2026-08-17
+        # against Dhan's own example curl requests, which show both header names used
+        # depending on endpoint (Trading APIs only need dhanClientId/no header at all;
+        # Data APIs need client-id).
+        "client-id":    _CLIENT_ID,
         "Content-Type": "application/json",
         "Accept":       "application/json",
     })
@@ -146,6 +153,7 @@ if __name__ == "__main__":
     session.headers.update({
         "access-token": access_token,
         "dhanClientId": _CLIENT_ID,
+        "client-id":    _CLIENT_ID,
         "Content-Type": "application/json",
         "Accept":       "application/json",
     })
