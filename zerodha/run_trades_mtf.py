@@ -53,7 +53,8 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
 from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
-from zerodha.trade import buy, sell, order_status as _kite_order_status
+from zerodha.trade import (buy, sell, place_order, order_status as _kite_order_status,
+                           cancel_order as _kite_cancel_order)
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 import notify
@@ -349,6 +350,28 @@ def _broker_short_qty(symbol: str) -> int:
     return 0
 
 
+def _fetch_upper_circuit(symbol: str) -> float:
+    """On-demand fetch of a single symbol's upper circuit limit via Kite's /quote,
+    for the UC-based short stop-loss (see _open_short below). Same endpoint/
+    response shape as zerodha/live_monitor.py's own _fetch_circuit_limits() --
+    re-derived here as a raw REST call through zerodha.auth's requests session
+    (confirmed live 2026-08-18: GET /quote?i=NSE:SYMBOL returns
+    upper_circuit_limit/lower_circuit_limit) rather than going through the
+    kiteconnect SDK's kite.quote(), matching this script's existing pattern of
+    talking to Kite's REST API directly instead of cross-wiring broker
+    execution paths. Circuit limits are an exchange-set daily price band, not
+    a live tick value, so a mid-session ad-hoc call returns the same current
+    value the batch call would. Raises if the fetch fails or no circuit data
+    comes back for this symbol."""
+    session, _ = _kite_session()
+    resp = session.get(f"{_KITE_BASE}/quote", params={"i": f"NSE:{symbol}"}, timeout=15)
+    resp.raise_for_status()
+    row = resp.json().get("data", {}).get(f"NSE:{symbol}")
+    if not row or row.get("upper_circuit_limit") is None:
+        raise ValueError(f"[mtf] No circuit data found for {symbol}.")
+    return float(row["upper_circuit_limit"])
+
+
 def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> None:
     """Opens a same-quantity intraday short (product=MIS) mirroring a long exit that
     just filled at either the 9:25am or 11:59am stage -- see run_trades_mtf.py's
@@ -383,19 +406,68 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
         print(f"[mtf]   SHORT NOT FILLED — {sym} short order rejected.")
         return
 
+    cover_price            = round(ep * 0.95, 4)
+    cover_target_order_id  = None
+    cover_target_price     = None
+    try:
+        cover_target_order_id = buy(sym, "NSE", eq, order_type="LIMIT",
+                                    price=cover_price, product="MIS", dry_run=dry_run)
+        cover_target_price = cover_price
+        print(f"[mtf]   cover target placed @ ₹{cover_price:,.2f} — order {cover_target_order_id}")
+    except Exception as exc:
+        print(f"[mtf]   !! SHORT OPENED but cover target placement failed for {sym}: {exc} "
+              f"— manual review required (short is live, unprotected until square-off).")
+
+    # UC-based stop-loss: buy-to-cover if price rises to within 0.5% of the
+    # day's upper circuit. Same never-unwind-a-completed-action rule as the
+    # cover target above -- a failed circuit fetch or a failed order placement
+    # here never touches the already-live short or cover target.
+    upper_circuit = None
+    try:
+        upper_circuit = _fetch_upper_circuit(sym)
+    except Exception as exc:
+        print(f"[mtf]   !! circuit fetch failed for {sym}: {exc} — skipping stop-loss "
+              f"(short + cover target remain live, unprotected by a stop-loss "
+              f"until manual review).")
+        try:
+            notify.send_circuit_fetch_failed(broker=_BROKER, symbol=sym, error_msg=str(exc),
+                                             dry_run=dry_run)
+        except Exception as exc2:
+            print(f"  [notify] circuit_fetch_failed failed: {exc2}", file=sys.stderr)
+
+    stop_order_id      = None
+    stop_trigger_price = None
+    if upper_circuit is not None:
+        try:
+            stop_trigger  = round(upper_circuit * 0.995, 4)
+            stop_order_id = place_order(sym, "NSE", "BUY", eq,
+                                        order_type="SL-M",
+                                        trigger_price=stop_trigger,
+                                        product="MIS", dry_run=dry_run)
+            stop_trigger_price = stop_trigger
+            print(f"[mtf]   stop-loss placed @ trigger ₹{stop_trigger:,.2f} "
+                  f"(0.5% below UC ₹{upper_circuit:,.2f}) — order {stop_order_id}")
+        except Exception as exc:
+            print(f"[mtf]   !! SHORT OPENED (cover target live) but stop-loss placement "
+                  f"failed for {sym}: {exc} — manual review required.")
+
     positions = _load_pos()
     positions.append({
-        "broker":            _BROKER,
-        "symbol":            sym,
-        "direction":         "short",
-        "product":           "MIS",
-        "source_exit_stage": source_stage,
-        "entry_date":        date.today().isoformat(),
-        "entry_price":       round(ep, 4),
-        "quantity":          eq,
-        "entry_order_id":    oid,
-        "status":            "short_open",
-        "entry_timestamp":   _ts(),
+        "broker":                _BROKER,
+        "symbol":                sym,
+        "direction":             "short",
+        "product":               "MIS",
+        "source_exit_stage":     source_stage,
+        "entry_date":            date.today().isoformat(),
+        "entry_price":           round(ep, 4),
+        "quantity":              eq,
+        "entry_order_id":        oid,
+        "cover_target_order_id": cover_target_order_id,
+        "cover_target_price":    cover_target_price,
+        "stop_order_id":         stop_order_id,
+        "stop_trigger_price":    stop_trigger_price,
+        "status":                "short_open",
+        "entry_timestamp":       _ts(),
     })
     if not dry_run:
         _save_pos(positions)
@@ -634,6 +706,67 @@ def run_entry_321_mtf(trade_date: date | None = None, dry_run: bool = False,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PROFIT TARGETS 9:15am — resting 17% LIMIT sell for every open MTF-script long
+# that doesn't already have one. Mirrors dhan/run_trades.py's
+# place_targets_915() exactly. Shorts get their own 5% cover target placed
+# inline at open time (see _open_short above) -- this step only concerns long
+# entry-side targets.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def place_targets_915_mtf(dry_run: bool = False) -> None:
+    positions = _load_pos()
+    open_ps   = _open_pos_mtf(positions)
+
+    print(f"\n{'='*60}")
+    print(f"[mtf] Place targets 9:15am{'  DRY RUN' if dry_run else ''}")
+    print(f"[mtf] {len(open_ps)} open position(s)")
+    print(f"{'='*60}")
+
+    if not open_ps:
+        print("[mtf] No open positions — nothing to place targets for.")
+        return
+
+    n_placed  = 0
+    n_skipped = 0
+
+    for pos in open_ps:
+        sym = pos["symbol"]
+        if pos.get("target_order_id"):
+            print(f"[mtf] {sym} — target already placed ({pos['target_order_id']}), skipping.")
+            continue
+
+        try:
+            product      = pos.get("product", "MTF")
+            is_partial   = pos["status"] == "partial_exit_925_nodata"
+            qty          = (int(pos["shares_remaining"]) if is_partial
+                            else int(pos["actual_fill_quantity"]))
+            fill_price   = float(pos["actual_fill_price"] or 0)
+            target_price = round(fill_price * 1.17, 4)
+
+            print(f"\n[mtf] {sym}  [{product}]  qty={qty}  target=₹{target_price:,.2f}")
+            order_id = sell(sym, "NSE", qty, order_type="LIMIT",
+                            price=target_price, product=product, dry_run=dry_run)
+
+            pos["target_order_id"] = order_id
+            pos["target_price"]    = target_price
+            if not dry_run:
+                _save_pos(positions)
+            print(f"[mtf]   target placed — order {order_id}")
+            try:
+                notify.send_target_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
+                                          target_price=target_price, order_id=order_id,
+                                          dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] target_placed failed: {exc}", file=sys.stderr)
+            n_placed += 1
+        except Exception as exc:
+            print(f"[mtf]   !! target placement failed for {sym}: {exc}. Skipping.")
+            n_skipped += 1
+
+    print(f"\n[mtf] Place targets complete. Placed: {n_placed}  Skipped: {n_skipped}.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # EXIT — mirrors run_trades.py's Stage 2 (check_exit_925) / Stage 3 (force_exit_1159),
 # scoped to only the positions this script itself entered (via _open_pos_mtf).
 # ══════════════════════════════════════════════════════════════════════════════
@@ -666,6 +799,45 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
 
         print(f"\n[mtf] {sym}  [{product}]  fill=₹{fill_price:,.2f}  qty={qty}")
 
+        # Target-order status check, BEFORE the existing no_data/pnl_live branches.
+        # If the resting 17% target already COMPLETEd (placed by
+        # place_targets_915_mtf at 9:15am), close the position from the target's
+        # own fill and skip the rest of this position's processing entirely --
+        # no LTP check, no market sell.
+        target_oid = pos.get("target_order_id")
+        if target_oid:
+            try:
+                t_status = _kite_order_status(target_oid)
+            except Exception as exc:
+                print(f"[mtf]   !! target status check failed for {sym}: {exc}. "
+                      f"Skipping {sym} — manual review required.")
+                continue
+            if (t_status.get("status") or "").upper() == "COMPLETE":
+                ep  = float(t_status.get("average_price") or 0)
+                eq  = int(t_status.get("filled_quantity") or 0) or qty
+                pnl = (ep - fill_price) * eq
+                ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
+                pos.update({
+                    "status":              "exited_925",
+                    "exit_price_925":      round(ep, 4),
+                    "exit_order_id_925":   target_oid,
+                    "exit_timestamp_925":  _ts(),
+                    "realized_return_pct": round(ret, 4),
+                    "realized_pnl":        round(pnl, 2),
+                })
+                if not dry_run:
+                    _save_pos(positions)
+                print(f"[mtf]   TARGET HIT — exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+                try:
+                    notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="925",
+                                           exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
+                except Exception as exc:
+                    print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
+                to_short.append((sym, eq))
+                continue
+            # Not traded -- falls through into the branches below, each of which
+            # cancels this resting target before it does anything of its own.
+
         no_data  = False
         pnl_live = 0.0
         try:
@@ -677,6 +849,11 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             no_data = True
 
         if no_data:
+            if target_oid:
+                try:
+                    _kite_cancel_order(target_oid)
+                except Exception as exc:
+                    print(f"[mtf]   target cancel failed (may already be filled/cancelled): {exc}")
             half   = math.floor(qty / 2)
             remain = qty - half
             if half == 0:
@@ -710,6 +887,20 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             })
             if not dry_run:
                 _save_pos(positions)
+            if remain > 0 and target_oid:
+                # Fresh target for the still-open remainder, at the SAME
+                # target_price (not recomputed) -- carries target protection
+                # into 11:59am for whatever didn't get sold in the half-sell.
+                try:
+                    new_target_oid = sell(sym, exch, remain, order_type="LIMIT",
+                                          price=pos["target_price"], product=product, dry_run=dry_run)
+                    pos["target_order_id"] = new_target_oid
+                    if not dry_run:
+                        _save_pos(positions)
+                    print(f"[mtf]   fresh target placed for remaining {remain} "
+                          f"@ ₹{pos['target_price']:,.2f} — order {new_target_oid}")
+                except Exception as exc:
+                    print(f"[mtf]   !! fresh target placement failed for {sym}: {exc}")
             try:
                 notify.send_exit_925_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
                                             shares_exited=half, shares_remaining=remain,
@@ -720,6 +911,11 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
             continue
 
         if pnl_live > 0:
+            if target_oid:
+                try:
+                    _kite_cancel_order(target_oid)
+                except Exception as exc:
+                    print(f"[mtf]   target cancel failed (may already be filled/cancelled): {exc}")
             exch = "NSE"
             if not dry_run:
                 bqty, exch = _broker_qty(sym, product)
@@ -800,6 +996,54 @@ def force_exit_1159_mtf(dry_run: bool = False) -> None:
                       else int(pos["actual_fill_quantity"]))
 
         print(f"\n[mtf] {sym}  [{product}]  qty={qty}")
+
+        # Target-order status check, same pattern as check_exit_925_mtf: COMPLETE
+        # -> close from the target's own fill and skip; not traded -> cancel it,
+        # then proceed into the existing unconditional force-sell below (no
+        # branching needed here since 11:59 has no P&L gate to begin with).
+        target_oid = pos.get("target_order_id")
+        if target_oid:
+            try:
+                t_status = _kite_order_status(target_oid)
+            except Exception as exc:
+                print(f"[mtf]   !! target status check failed for {sym}: {exc}. "
+                      f"Skipping {sym} — manual review required.")
+                continue
+            if (t_status.get("status") or "").upper() == "COMPLETE":
+                ep = float(t_status.get("average_price") or 0)
+                eq = int(t_status.get("filled_quantity") or 0) or qty
+                if is_partial:
+                    s925 = int(pos.get("shares_exited_925") or 0)
+                    p925 = float(pos.get("exit_price_925") or fill_price)
+                    pnl  = (p925 - fill_price) * s925 + (ep - fill_price) * eq
+                    tot  = int(pos["actual_fill_quantity"])
+                    ret  = pnl / (fill_price * tot) * 100 if fill_price and tot else 0
+                else:
+                    pnl = (ep - fill_price) * eq
+                    ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
+                pos.update({
+                    "status":               "exited_1159",
+                    "exit_price_1159":      round(ep, 4),
+                    "exit_order_id_1159":   target_oid,
+                    "exit_timestamp_1159":  _ts(),
+                    "realized_return_pct":  round(ret, 4),
+                    "realized_pnl":         round(pnl, 2),
+                })
+                if not dry_run:
+                    _save_pos(positions)
+                print(f"[mtf]   TARGET HIT — closed ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+                try:
+                    notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="1159",
+                                           exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
+                except Exception as exc:
+                    print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
+                to_short.append((sym, eq))
+                n_force += 1
+                continue
+            try:
+                _kite_cancel_order(target_oid)
+            except Exception as exc:
+                print(f"[mtf]   target cancel failed (may already be filled/cancelled): {exc}")
 
         exch = "NSE"
         if not dry_run:
@@ -912,6 +1156,116 @@ def square_off_239_mtf(dry_run: bool = False) -> None:
         print(f"\n[mtf] {sym}  [SHORT MIS]  entry=₹{entry_price:,.2f}  qty={qty}  "
               f"(from {pos.get('source_exit_stage', '?')} exit)")
 
+        # OCO status check -- a short now carries TWO live orders (cover_target,
+        # stop-loss). Whichever traded closes the position from ITS OWN fill and
+        # cancels the other; if neither traded, cancel BOTH before the existing
+        # unconditional force-cover below. Every status check is wrapped
+        # individually -- a failed check skips this position entirely for this
+        # run rather than guessing filled/unfilled.
+        cover_oid = pos.get("cover_target_order_id")
+        stop_oid  = pos.get("stop_order_id")
+
+        cover_status = None
+        stop_status  = None
+
+        if cover_oid:
+            try:
+                cover_status = _kite_order_status(cover_oid)
+            except Exception as exc:
+                print(f"[mtf]   !! cover target status check failed for {sym}: {exc}. "
+                      f"Skipping {sym} — manual review required.")
+                continue
+
+        if stop_oid:
+            try:
+                stop_status = _kite_order_status(stop_oid)
+            except Exception as exc:
+                print(f"[mtf]   !! stop-loss status check failed for {sym}: {exc}. "
+                      f"Skipping {sym} — manual review required.")
+                continue
+
+        cover_traded = bool(cover_status) and (cover_status.get("status") or "").upper() == "COMPLETE"
+        stop_traded  = bool(stop_status)  and (stop_status.get("status")  or "").upper() == "COMPLETE"
+
+        if cover_traded and stop_traded:
+            print(f"[mtf]   !! BOTH cover target AND stop-loss show COMPLETE for {sym} -- "
+                  f"OCO race, cannot determine which actually executed first. "
+                  f"Skipping {sym} — manual review required.")
+            continue
+
+        if cover_traded:
+            if stop_oid:
+                try:
+                    _kite_cancel_order(stop_oid)
+                except Exception as exc:
+                    print(f"[mtf]   stop-loss cancel failed (may already be filled/cancelled): {exc}")
+            ep  = float(cover_status.get("average_price") or 0)
+            eq  = int(cover_status.get("filled_quantity") or 0) or qty
+            pnl = (entry_price - ep) * eq
+            ret = (entry_price - ep) / entry_price * 100 if entry_price else 0
+            pos.update({
+                "status":              "short_closed",
+                "exit_price_239":      round(ep, 4),
+                "exit_order_id_239":   cover_oid,
+                "exit_timestamp_239":  _ts(),
+                "realized_return_pct": round(ret, 4),
+                "realized_pnl":        round(pnl, 2),
+            })
+            if not dry_run:
+                _save_pos(positions)
+            print(f"[mtf]   COVER TARGET HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+            try:
+                notify.send_cover_target_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
+                                             entry_price=entry_price, exit_price=ep,
+                                             return_pct=ret, pnl=pnl, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] cover_target_hit failed: {exc}", file=sys.stderr)
+            n_closed += 1
+            continue
+
+        if stop_traded:
+            if cover_oid:
+                try:
+                    _kite_cancel_order(cover_oid)
+                except Exception as exc:
+                    print(f"[mtf]   cover target cancel failed (may already be filled/cancelled): {exc}")
+            ep  = float(stop_status.get("average_price") or 0)
+            eq  = int(stop_status.get("filled_quantity") or 0) or qty
+            pnl = (entry_price - ep) * eq
+            ret = (entry_price - ep) / entry_price * 100 if entry_price else 0
+            pos.update({
+                "status":              "short_closed",
+                "exit_price_239":      round(ep, 4),
+                "exit_order_id_239":   stop_oid,
+                "exit_timestamp_239":  _ts(),
+                "realized_return_pct": round(ret, 4),
+                "realized_pnl":        round(pnl, 2),
+            })
+            if not dry_run:
+                _save_pos(positions)
+            print(f"[mtf]   STOP-LOSS HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+            try:
+                notify.send_short_stoploss_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
+                                               entry_price=entry_price, exit_price=ep,
+                                               return_pct=ret, pnl=pnl, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] short_stoploss_hit failed: {exc}", file=sys.stderr)
+            n_closed += 1
+            continue
+
+        # Neither filled -- cancel BOTH pending orders before the existing
+        # unconditional force-cover below.
+        if cover_oid:
+            try:
+                _kite_cancel_order(cover_oid)
+            except Exception as exc:
+                print(f"[mtf]   cover target cancel failed (may already be filled/cancelled): {exc}")
+        if stop_oid:
+            try:
+                _kite_cancel_order(stop_oid)
+            except Exception as exc:
+                print(f"[mtf]   stop-loss cancel failed (may already be filled/cancelled): {exc}")
+
         if not dry_run:
             bqty = _broker_short_qty(sym)
             if bqty != qty:
@@ -967,6 +1321,8 @@ if __name__ == "__main__":
     grp.add_argument("--exit-1159",     action="store_true", help="Forced exit at 11:59am (this script's positions only)")
     grp.add_argument("--square-off-239", action="store_true",
                      help="Square off shorts opened from 925/1159 exits (unconditional, 2:39pm)")
+    grp.add_argument("--place-targets", action="store_true",
+                     help="Place 17%% profit-target LIMIT sells for open MTF-script longs (9:15am)")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
@@ -993,8 +1349,10 @@ if __name__ == "__main__":
             check_exit_925_mtf(dry_run=args.dry_run)
         elif args.exit_1159:
             force_exit_1159_mtf(dry_run=args.dry_run)
-        else:
+        elif args.square_off_239:
             square_off_239_mtf(dry_run=args.dry_run)
+        else:
+            place_targets_915_mtf(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)

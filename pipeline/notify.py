@@ -315,6 +315,72 @@ def send_square_off_239(broker: str, symbol: str, entry_price: float, exit_price
     _send(text, topic="entries_exits")
 
 
+def send_target_placed(broker: str, symbol: str, target_price: float,
+                       order_id: str, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#127919; TARGET PLACED — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Target price:</b> &#8377;{target_price:,.2f}",
+        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
+    ])
+    _send(text, topic="entries_exits")
+
+
+def send_target_hit(broker: str, symbol: str, stage: str, exit_price: float,
+                    return_pct: float, pnl: float, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#127919; TARGET HIT ({html_lib.escape(stage)}) — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text, topic="entries_exits")
+
+
+def send_cover_target_hit(broker: str, symbol: str, entry_price: float, exit_price: float,
+                          return_pct: float, pnl: float, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#127919; COVER TARGET HIT — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
+        f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text, topic="entries_exits")
+
+
+def send_short_stoploss_hit(broker: str, symbol: str, entry_price: float, exit_price: float,
+                            return_pct: float, pnl: float, dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#128721; STOP-LOSS HIT — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
+        f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
+        f"<b>Return:</b> {return_pct:+.2f}%",
+        f"<b>Realised P&amp;L:</b> &#8377;{pnl:+,.2f}",
+    ])
+    _send(text, topic="entries_exits")
+
+
+def send_circuit_fetch_failed(broker: str, symbol: str, error_msg: str,
+                              dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#128308; CIRCUIT FETCH FAILED — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        "Could not fetch upper circuit for the stop-loss trigger — short and "
+        "cover target remain live, unprotected by a stop-loss.",
+        f"<b>Error:</b> {html_lib.escape(str(error_msg))}",
+    ])
+    _send(text, topic="errors")
+
+
 def send_nothing_open_at_1159(broker: str) -> None:
     _send(
         f"<b>11:59am Exit — {html_lib.escape(broker)}</b>\n"
