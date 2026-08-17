@@ -640,6 +640,11 @@ def check_exit_925(dry_run: bool = False) -> None:
         print("[dhan] No open positions — nothing to check.")
         return
 
+    # Collected here and opened in one pass AFTER every exit below has been
+    # attempted -- all long exits complete first, then all mirrored shorts,
+    # rather than interleaving short(A) between exit(A) and exit(B).
+    to_short: list[tuple[str, int]] = []
+
     for pos in open_ps:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
@@ -700,7 +705,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                                             exit_price=ep, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_925_nodata failed: {exc}", file=sys.stderr)
-            _open_short(sym, eq, "925", dry_run=dry_run)
+            to_short.append((sym, eq))
             continue
 
         if pnl_live > 0:
@@ -740,9 +745,14 @@ def check_exit_925(dry_run: bool = False) -> None:
                                      return_pct=ret_act, pnl=pnl, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
-            _open_short(sym, eq, "925", dry_run=dry_run)
+            to_short.append((sym, eq))
         else:
             print(f"[dhan]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
+
+    if to_short:
+        print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
+        for sym, eq in to_short:
+            _open_short(sym, eq, "925", dry_run=dry_run)
 
     print(f"\n[dhan] Exit check 9:25am complete.")
 
@@ -766,6 +776,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
         return
 
     n_force = 0
+    # Collected here and opened in one pass AFTER every forced exit below has
+    # been attempted -- see the matching comment in check_exit_925.
+    to_short: list[tuple[str, int]] = []
 
     for pos in open_ps:
         sym        = pos["symbol"]
@@ -825,8 +838,13 @@ def force_exit_1159(dry_run: bool = False) -> None:
                                         return_pct=ret, pnl=pnl, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
-        _open_short(sym, eq, "1159", dry_run=dry_run)
+        to_short.append((sym, eq))
         n_force += 1
+
+    if to_short:
+        print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
+        for sym, eq in to_short:
+            _open_short(sym, eq, "1159", dry_run=dry_run)
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")
