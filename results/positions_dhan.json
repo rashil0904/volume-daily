@@ -40,19 +40,6 @@
   },
   {
     "broker": "dhan",
-    "symbol": "STYLEBAAZA",
-    "entry_date": "2026-08-14",
-    "reference_price": 365.25,
-    "shares_intended": 3,
-    "actual_fill_price": 365.25,
-    "actual_fill_quantity": 3,
-    "entry_order_id": "221260814682809",
-    "status": "open",
-    "entry_timestamp": "2026-08-14T15:21:31.579126+05:30",
-    "product": "CNC"
-  },
-  {
-    "broker": "dhan",
     "symbol": "TARSONS",
     "entry_date": "2026-08-14",
     "reference_price": 360.25,

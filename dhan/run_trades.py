@@ -152,6 +152,27 @@ def _poll_fill_safe(order_id: str,
         return fallback_price, fallback_qty
 
 
+def _poll_fill_strict(order_id: str) -> tuple[float, int]:
+    """Like _poll_fill_safe, but never guesses on an unconfirmed timeout --
+    only a genuine broker-confirmed TRADED status counts as filled. Used for
+    ENTRIES only: a MARKET order stuck PENDING with no matching liquidity
+    (e.g. a circuit-locked stock) must never get written to positions_dhan.json
+    as a phantom fill just because the poll gave up waiting (see STYLEBAAZA,
+    2026-08-14 -- an order that sat PENDING for the full 12s poll window on a
+    circuit-locked stock got recorded as filled at the reference price/qty,
+    when nothing had actually traded). Returns (0.0, 0) for BOTH a genuine
+    rejection and an unconfirmed timeout -- either way, nothing gets recorded."""
+    try:
+        return _poll_fill(order_id)
+    except OrderRejected as exc:
+        print(f"[dhan]   ORDER REJECTED — {exc}")
+        return 0.0, 0
+    except Exception as exc:
+        print(f"[dhan]   fill poll failed: {exc} — NOT recording as filled "
+              f"(order may still be pending at the broker; check manually)")
+        return 0.0, 0
+
+
 # ── Margin / funds checks ──────────────────────────────────────────────────────
 
 def _margin_check(symbol: str, quantity: int, ref_price: float) -> dict | None:
@@ -573,14 +594,15 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             print(f"[dhan]   DRY RUN — simulated fill ₹{fill_price:,.2f} × {fill_qty}")
             status = "dry_run"
         else:
-            fill_price, fill_qty = _poll_fill_safe(order_id, ref, shares)
+            fill_price, fill_qty = _poll_fill_strict(order_id)
             if fill_qty == 0:
-                print(f"[dhan]   NOT FILLED — order rejected.")
+                print(f"[dhan]   NOT FILLED — order rejected or unconfirmed "
+                      f"(check broker manually, e.g. a circuit-locked stock).")
                 _append_log(trade_date, {
                     "timestamp": _ts(), "symbol": sym, "quantity": shares,
                     "ref_price": round(ref, 4), "fill_price": "",
                     "leverage": leverage, "margin_required": margin_required,
-                    "order_id": order_id, "status": "rejected", "product": product,
+                    "order_id": order_id, "status": "not_filled", "product": product,
                     "capital_base": capital_base,
                 })
                 n_skipped += 1
