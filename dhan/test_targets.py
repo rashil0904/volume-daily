@@ -33,6 +33,12 @@ for _m in ("data_loader",):
 
 import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 
+# check_exit_925/force_exit_1159/square_off_239 each fire a real Google Sheets
+# push at the end (see dhan/run_trades.py's _push_to_sheets). Neutralized globally
+# for the whole test run -- no scenario here asserts on it, and leaving it live
+# would make this "mocked, zero real I/O" suite reach out to the actual webhook.
+patch.object(rt, "_push_to_sheets", lambda dry_run: None).start()
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 failures = 0
