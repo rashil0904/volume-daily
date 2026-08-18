@@ -30,6 +30,7 @@ _SOURCE_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _MAX_AGE    = timedelta(days=7)
 
 _cache: dict[str, str] = {}
+_tick_cache: dict[str, float] = {}
 
 
 def _refresh_if_stale() -> None:
@@ -46,7 +47,7 @@ def _refresh_if_stale() -> None:
 
 
 def _load_cache() -> None:
-    global _cache
+    global _cache, _tick_cache
     if _cache:
         return
     _refresh_if_stale()
@@ -59,6 +60,22 @@ def _load_cache() -> None:
                 sid = (row.get("SEM_SMST_SECURITY_ID") or "").strip()
                 if sym and sid:
                     _cache[sym] = sid
+                tick_raw = (row.get("SEM_TICK_SIZE") or "").strip()
+                if sym and tick_raw:
+                    try:
+                        # SEM_TICK_SIZE is in paise, not rupees -- confirmed via Dhan's
+                        # own field description ("Minimum decimal point at which an
+                        # instrument can be priced") plus the raw value distribution
+                        # across the whole NSE-EQ master (1/5/10/50/100/500), which only
+                        # makes sense as paise (0.01/0.05/0.10/0.50/1.00/5.00 rupees) --
+                        # a literal "500 rupee tick" would be absurd for any equity.
+                        # Confirmed live 2026-08-18: TVSSRICHAK's raw tick is 10.0000
+                        # (-> ₹0.10), NOT the ₹0.05 every NSE equity was previously
+                        # assumed to share -- that wrong assumption is what caused two
+                        # real order rejections (EXCH:16283) earlier that day.
+                        _tick_cache[sym] = float(tick_raw) / 100
+                    except ValueError:
+                        pass
 
 
 def security_id(symbol: str) -> str:
@@ -73,6 +90,22 @@ def security_id(symbol: str) -> str:
             "-- delete the cache file to force a re-download."
         )
     return sid
+
+
+def tick_size(symbol: str) -> float:
+    """Returns the minimum valid LIMIT-price increment (in rupees) for a plain NSE
+    equity symbol, per Dhan's own scrip master (SEM_TICK_SIZE, paise). Raises
+    ValueError if the symbol/tick isn't found -- never guesses a tick for a real
+    order, same philosophy as security_id() above."""
+    _load_cache()
+    tick = _tick_cache.get(symbol.strip().upper())
+    if not tick:
+        raise ValueError(
+            f"[dhan] '{symbol}' has no tick size in the NSE equity instrument master "
+            f"({_CACHE_FILE}). Symbol may be delisted/renamed, or the cache is stale "
+            "-- delete the cache file to force a re-download."
+        )
+    return tick
 
 
 if __name__ == "__main__":

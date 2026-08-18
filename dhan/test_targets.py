@@ -39,6 +39,15 @@ import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 # would make this "mocked, zero real I/O" suite reach out to the actual webhook.
 patch.object(rt, "_push_to_sheets", lambda dry_run: None).start()
 
+# _tick_round() now looks up each symbol's REAL tick size via dhan.instruments
+# .tick_size() (see run_trades.py -- tick size varies per symbol, e.g. ₹0.10 for
+# TVSSRICHAK vs ₹0.01 for CAMLINFINE, confirmed live 2026-08-18). None of this
+# suite's fictional symbols (DELTA, EPSILON, IOTA, ...) exist in the real scrip
+# master, so tick_size() would raise for every one of them -- pinned to a flat
+# ₹0.05 here, matching every expected price already computed against that tick
+# throughout this file.
+patch.object(rt, "tick_size", lambda sym: 0.05).start()
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 failures = 0
@@ -195,7 +204,11 @@ def fake_get_ltp_c(sym):
 sell_calls_c = []
 def fake_sell_c(symbol, exch, qty, **kw):
     sell_calls_c.append((symbol, exch, qty, kw.get("order_type"), kw.get("price")))
-    if kw.get("order_type") == "LIMIT":
+    # Both the half-sell and the fresh target are LIMIT now (see run_trades.py's
+    # _tick_round-based conversion of every former MARKET order) -- distinguish
+    # by price instead: the fresh target reuses the SAME target_price (117.0),
+    # the half-sell computes its own tick-rounded price off fill_price.
+    if kw.get("price") == 117.0:
         return f"TGT2-{symbol}"
     return f"HALFSELL-{symbol}"
 
@@ -223,8 +236,10 @@ with patch.object(rt, "_load_pos", store.load), \
     rt.check_exit_925(dry_run=False)
 
 check("(c) cancel_order was called for the stale target", cancel_calls_c == ["TGT-DELTA"])
-check("(c) a half-sell (MARKET) happened", any(c[3] == "MARKET" for c in sell_calls_c))
-fresh_targets_c = [c for c in sell_calls_c if c[3] == "LIMIT"]
+half_sells_c = [c for c in sell_calls_c if c[4] != 117.0]
+check("(c) a half-sell (LIMIT, tick-rounded 0.5% below fill price) happened",
+      any(c[3] == "LIMIT" and c[4] == 99.5 for c in half_sells_c), str(sell_calls_c))
+fresh_targets_c = [c for c in sell_calls_c if c[4] == 117.0]
 check("(c) a FRESH target LIMIT sell was placed for shares_remaining",
       len(fresh_targets_c) == 1, str(sell_calls_c))
 check("(c) fresh target qty == shares_remaining (5)", fresh_targets_c[0][2] == 5, str(fresh_targets_c))
@@ -259,7 +274,7 @@ def fake_get_ltp_d(sym):
     return 105.0  # pnl_live = (105-100)*10 = 50 > 0
 
 def fake_sell_d(symbol, exch, qty, **kw):
-    call_order_d.append(("sell", symbol, kw.get("order_type")))
+    call_order_d.append(("sell", symbol, kw.get("order_type"), kw.get("price")))
     return f"MKT-{symbol}"
 
 def fake_poll_fill_safe_d(oid, fallback_price, fallback_qty):
@@ -284,8 +299,8 @@ with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt.notify, "send_exit_925", MagicMock()):
     rt.check_exit_925(dry_run=False)
 
-check("(d) cancel_order called before the market-sell, in that order",
-      call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "MARKET")], str(call_order_d))
+check("(d) cancel_order called before the LIMIT sell, in that order",
+      call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "LIMIT", 104.45)], str(call_order_d))
 row = store.positions[0]
 check("(d) row exited_925", row["status"] == "exited_925")
 check("(d) mirrored short opened", open_short_calls_d == [("EPSILON", 10, "925")])
@@ -427,7 +442,7 @@ def fake_available_balance_g():
 sell_calls_g = []
 buy_calls_g = []
 def fake_sell_g(symbol, exch, qty, **kw):
-    sell_calls_g.append((symbol, exch, qty, kw.get("order_type")))
+    sell_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price")))
     return "SHORTOPEN-1"
 def fake_buy_g(symbol, exch, qty, **kw):
     buy_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
@@ -449,7 +464,8 @@ with patch.object(rt, "_load_pos", store_g.load), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
     rt._open_short("IOTA", 10, "925", dry_run=False)
 
-check("(g) short SELL was placed", sell_calls_g == [("IOTA", "NSE_EQ", 10, "MARKET")])
+check("(g) short SELL was placed as LIMIT, tick-rounded 0.5% below LTP",
+      sell_calls_g == [("IOTA", "NSE_EQ", 10, "LIMIT", 199.0)], str(sell_calls_g))
 check("(g) cover-target BUY was placed", len(buy_calls_g) == 1, str(buy_calls_g))
 check("(g) cover-target order_type is LIMIT", buy_calls_g[0][3] == "LIMIT")
 check("(g) cover-target price == 190.0 (200 * 0.95)", buy_calls_g[0][4] == 190.0)

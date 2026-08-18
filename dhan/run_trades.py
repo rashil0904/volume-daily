@@ -43,7 +43,7 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.trade import (buy, sell, place_order, order_status as _dhan_order_status,
                         cancel_order as _dhan_cancel_order)
-from dhan.instruments import security_id
+from dhan.instruments import security_id, tick_size
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 import notify
@@ -285,6 +285,21 @@ def get_ltp(symbol: str) -> float:
     return float(entry["last_price"])
 
 
+def _tick_round(symbol: str, price: float) -> float:
+    """Rounds to the nearest valid tick for THIS symbol, per Dhan's own scrip
+    master (dhan/instruments.py's tick_size()) -- tick size is NOT a flat ₹0.05
+    across NSE equities as originally assumed (that assumption is what caused
+    two real order rejections, EXCH:16283, on 2026-08-18): TVSSRICHAK/DREDGECORP/
+    RELIANCE are ₹0.10, CAMLINFINE/MOTISONS/SHANTIGOLD are ₹0.01, UFLEX/TARSONS
+    are ₹0.05 -- confirmed live, all different. A LIMIT price that isn't a
+    multiple of the SYMBOL's real tick gets rejected outright by the exchange.
+    Every LIMIT price this file computes should be passed through this instead
+    of a plain round(). Raises if the symbol's tick can't be looked up -- never
+    guesses a tick for a real order."""
+    tick = tick_size(symbol)
+    return round(round(price / tick) * tick, 2)
+
+
 # ── Positions JSON ─────────────────────────────────────────────────────────────
 
 def _load_pos() -> list:
@@ -456,8 +471,10 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
               f"< required ₹{req:,.2f}).")
         return
 
+    short_limit = _tick_round(sym, ltp * 0.995)
     try:
-        oid = sell(sym, "NSE_EQ", qty, order_type="MARKET", product="INTRADAY", dry_run=dry_run)
+        oid = sell(sym, "NSE_EQ", qty, order_type="LIMIT", price=short_limit,
+                  product="INTRADAY", dry_run=dry_run)
     except Exception as exc:
         print(f"[dhan]   SHORT FAILED — {sym}: {exc}")
         return
@@ -467,7 +484,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
         print(f"[dhan]   SHORT NOT FILLED — {sym} short order rejected.")
         return
 
-    cover_price            = round(ep * 0.95, 4)
+    cover_price            = _tick_round(sym, ep * 0.95)
     cover_target_order_id  = None
     cover_target_price     = None
     try:
@@ -500,9 +517,17 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
     stop_trigger_price = None
     if upper_circuit is not None:
         try:
-            stop_trigger  = round(upper_circuit * 0.995, 4)
+            stop_trigger  = _tick_round(sym, upper_circuit * 0.995)
+            # Dhan validates price > triggerPrice even for a MARKET-executing stop
+            # (rejects with DH-906 "Price should be greater than Trigger Price"
+            # otherwise, confirmed live 2026-08-18 with price left at its 0 default)
+            # -- the price itself is never actually used for execution once
+            # triggered, so a small tick-rounded margin above the trigger satisfies
+            # the validation without affecting fill behavior.
+            stop_price    = _tick_round(sym, stop_trigger * 1.01)
             stop_order_id = place_order(sym, "NSE_EQ", "BUY", eq,
                                         order_type="STOP_LOSS_MARKET",
+                                        price=stop_price,
                                         trigger_price=stop_trigger,
                                         product="INTRADAY", dry_run=dry_run)
             stop_trigger_price = stop_trigger
@@ -698,7 +723,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         # places actually comes back from Dhan as orderType=LIMIT near the
         # submission price), and that band is tight enough that CAMLINFINE/UFLEX
         # got 0-filled on ordinary same-second price movement, no circuit lock
-        # involved. Placing our own LIMIT 0.75% above live LTP gives explicit,
+        # involved. Placing our own LIMIT 0.5% above live LTP gives explicit,
         # wider headroom to fill instead of relying on Dhan's undocumented band.
         try:
             entry_ltp = get_ltp(sym)
@@ -706,8 +731,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             entry_ltp = ref
             print(f"[dhan]   live LTP unavailable ({exc}) — using ref price ₹{ref:,.2f} "
                   f"as the limit-price anchor instead.")
-        limit_price = round(entry_ltp * 1.0075, 2)
-        print(f"[dhan]   LIMIT buy @ ₹{limit_price:,.2f}  (0.75% above LTP ₹{entry_ltp:,.2f})")
+        limit_price = _tick_round(sym, entry_ltp * 1.005)
+        print(f"[dhan]   LIMIT buy @ ₹{limit_price:,.2f}  (0.5% above LTP ₹{entry_ltp:,.2f})")
 
         try:
             order_id = buy(sym, "NSE_EQ", shares,
@@ -816,7 +841,7 @@ def place_targets_915(dry_run: bool = False) -> None:
             qty          = (int(pos["shares_remaining"]) if is_partial
                             else int(pos["actual_fill_quantity"]))
             fill_price   = float(pos["actual_fill_price"] or 0)
-            target_price = round(fill_price * 1.17, 4)
+            target_price = _tick_round(sym, fill_price * 1.17)
 
             print(f"\n[dhan] {sym}  [{product}]  qty={qty}  target=₹{target_price:,.2f}")
             order_id = sell(sym, "NSE_EQ", qty, order_type="LIMIT",
@@ -959,9 +984,13 @@ def check_exit_925(dry_run: bool = False) -> None:
                           f"Skipping {sym} — manual review required.")
                     continue
             print(f"[dhan]   NO-DATA FALLBACK — selling {half} of {qty}")
+            # LTP is unavailable in this branch by definition (that's why we're
+            # here) -- anchor the LIMIT price on the recorded fill price instead,
+            # same fallback pattern as the entry order's own LTP-unavailable case.
+            fallback_limit = _tick_round(sym, fill_price * 0.995)
             try:
-                oid = sell(sym, exch, half,
-                           order_type="MARKET", product=product, dry_run=dry_run)
+                oid = sell(sym, exch, half, order_type="LIMIT", price=fallback_limit,
+                          product=product, dry_run=dry_run)
             except Exception as exc:
                 print(f"[dhan]   fallback sell failed: {exc}")
                 continue
@@ -1016,9 +1045,10 @@ def check_exit_925(dry_run: bool = False) -> None:
                           f"Skipping {sym} — manual review required.")
                     continue
             print(f"[dhan]   P&L positive — selling {qty}")
+            sell_limit = _tick_round(sym, ltp * 0.995)
             try:
-                oid = sell(sym, exch, qty,
-                           order_type="MARKET", product=product, dry_run=dry_run)
+                oid = sell(sym, exch, qty, order_type="LIMIT", price=sell_limit,
+                          product=product, dry_run=dry_run)
             except Exception as exc:
                 print(f"[dhan]   sell failed: {exc}")
                 continue
@@ -1149,8 +1179,15 @@ def force_exit_1159(dry_run: bool = False) -> None:
             print(f"[dhan]   broker confirmed: {bqty} shares [{exch}]")
 
         try:
-            oid = sell(sym, exch, qty,
-                       order_type="MARKET", product=product, dry_run=dry_run)
+            exit_ltp = get_ltp(sym)
+        except Exception as exc:
+            exit_ltp = fill_price
+            print(f"[dhan]   live LTP unavailable ({exc}) — using fill price ₹{fill_price:,.2f} "
+                  f"as the limit-price anchor instead.")
+        sell_limit = _tick_round(sym, exit_ltp * 0.995)
+        try:
+            oid = sell(sym, exch, qty, order_type="LIMIT", price=sell_limit,
+                      product=product, dry_run=dry_run)
         except Exception as exc:
             print(f"[dhan]   sell failed: {exc}")
             continue
@@ -1371,7 +1408,15 @@ def square_off_239(dry_run: bool = False) -> None:
             print(f"[dhan]   broker confirmed: {bqty} shares short")
 
         try:
-            oid = buy(sym, "NSE_EQ", qty, order_type="MARKET", product="INTRADAY", dry_run=dry_run)
+            cover_ltp = get_ltp(sym)
+        except Exception as exc:
+            cover_ltp = entry_price
+            print(f"[dhan]   live LTP unavailable ({exc}) — using short entry price "
+                  f"₹{entry_price:,.2f} as the limit-price anchor instead.")
+        buy_limit = _tick_round(sym, cover_ltp * 1.005)
+        try:
+            oid = buy(sym, "NSE_EQ", qty, order_type="LIMIT", price=buy_limit,
+                     product="INTRADAY", dry_run=dry_run)
         except Exception as exc:
             print(f"[dhan]   cover buy failed: {exc}")
             continue
