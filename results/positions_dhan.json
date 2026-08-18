@@ -1,1 +1,80 @@
-[]
+[
+  {
+    "broker": "dhan",
+    "symbol": "ASIANENE",
+    "entry_date": "2026-08-18",
+    "reference_price": 463.55,
+    "shares_intended": 539,
+    "actual_fill_price": 463.7134,
+    "actual_fill_quantity": 539,
+    "entry_order_id": "321260818763709",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:05.918127+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "DOLPHIN",
+    "entry_date": "2026-08-18",
+    "reference_price": 610.8,
+    "shares_intended": 204,
+    "actual_fill_price": 611.9806,
+    "actual_fill_quantity": 204,
+    "entry_order_id": "221260818755709",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:09.534551+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JINDRILL",
+    "entry_date": "2026-08-18",
+    "reference_price": 650.75,
+    "shares_intended": 384,
+    "actual_fill_price": 650.9999,
+    "actual_fill_quantity": 384,
+    "entry_order_id": "321260818763909",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:12.760649+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "NITINSPIN",
+    "entry_date": "2026-08-18",
+    "reference_price": 606.4,
+    "shares_intended": 412,
+    "actual_fill_price": 606.2844,
+    "actual_fill_quantity": 412,
+    "entry_order_id": "321260818764209",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:15.943733+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "PRABHA",
+    "entry_date": "2026-08-18",
+    "reference_price": 194.15,
+    "shares_intended": 1287,
+    "actual_fill_price": 193.9,
+    "actual_fill_quantity": 1287,
+    "entry_order_id": "221260818756009",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:19.163061+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "WINDMACHIN",
+    "entry_date": "2026-08-18",
+    "reference_price": 318.4,
+    "shares_intended": 785,
+    "actual_fill_price": 319.3569,
+    "actual_fill_quantity": 785,
+    "entry_order_id": "321260818764709",
+    "status": "open",
+    "entry_timestamp": "2026-08-18T15:21:22.352404+05:30",
+    "product": "MTF"
+  }
+]
