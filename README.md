@@ -2,6 +2,8 @@
 
 Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. Upstox is used for market data only — no trading happens through Upstox.
 
+A second, **completely independent** live trading pipeline runs the same signals through **Dhan** (`dhan/`) — its own capital pool, its own positions file, its own broker-specific quirks (LIMIT entries, 17% profit targets, mirrored intraday shorts with a UC-based stop-loss) — plus a live Google Sheets dashboard fed from its closed trades. See [Dhan Pipeline](#dhan-pipeline-independent-parallel-broker) and [Google Sheets Dashboard](#google-sheets-dashboard-dhan) below.
+
 ---
 
 ## Table of Contents
@@ -17,6 +19,8 @@ Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–F
   - [Part 5 — Auto-Push Data & Results (5:00 PM)](#part-5--auto-push-data--results-500-pm)
 - [MTF (Leveraged) Entries — Standalone Script](#mtf-leveraged-entries--standalone-script)
 - [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts)
+- [Dhan Pipeline (Independent, Parallel Broker)](#dhan-pipeline-independent-parallel-broker)
+- [Google Sheets Dashboard (Dhan)](#google-sheets-dashboard-dhan)
 - [Repository Structure](#repository-structure)
 - [First-Time VM Setup](#first-time-vm-setup)
 - [Configuration](#configuration)
@@ -318,6 +322,146 @@ Once a symbol qualifies, its 5-level bid/ask depth (`MODE_FULL`-only data) is us
 
 ---
 
+## Dhan Pipeline (Independent, Parallel Broker)
+
+A second live trading pipeline, entirely separate from everything above — own broker (Dhan, via `dhan/`), own capital pool, own positions file (`results/positions_dhan.json`), own live monitor, own auth model. It reads the **same** `results/trades/trade_list_<date>.csv` the Zerodha side reads, but every other moving part is independent: a failure or funds shortfall on one broker never touches the other.
+
+| Parameter | Value |
+|---|---|
+| Broker / product type | Dhan, CNC or MTF (per-symbol leverage check, same as Zerodha) |
+| Live trading capital | ₹15,00,000 total (`TOTAL_CAPITAL` in `dhan/run_trades.py`) |
+| Entry order type | **LIMIT**, 0.75% above live LTP — not MARKET (see note below) |
+| Profit target | 17% LIMIT sell, placed at 9:15 AM for every open long |
+| Mirrored shorts | Opened on every 9:25/11:59 long exit — 5% cover target + UC-based stop-loss |
+| Auth | Manual 24h access token paste — no OAuth handshake (see [Daily Operations](#daily-operations)) |
+
+> **Why LIMIT, not MARKET**: Dhan/NSE silently apply their own price-protection band to a `MARKET` order — every order this pipeline placed as `orderType: MARKET` came back from Dhan's own order records as `orderType: LIMIT` near the submission price (confirmed 2026-08-17). That band is tight enough that ordinary same-second price movement (no circuit lock involved) produced 0-fills. Placing an explicit LIMIT 0.75% above live LTP gives wider, predictable headroom instead of relying on Dhan's undocumented band. Dhan's order API has no exposed market-protection/collar parameter (unlike Kite's `market_protection`).
+
+### Entry — 3:21 PM (`--entry`)
+
+Same reference-price logic and `capital/4`-or-`n` allocation rule as the Zerodha side (see [Capital Allocation](#capital-allocation)), against the ₹15L Dhan capital base. Per symbol: checks live leverage via `POST /margincalculator` (`productType=MTF`) — `product="MTF"` if leverage ≥2x, otherwise falls back to `product="CNC"` at **half** the capital base (`capital/2`, resized allocation/shares). Places a LIMIT buy 0.75% above live LTP (falls back to the reference price as the limit anchor if LTP is momentarily unavailable), polls for a broker-confirmed fill (never records a phantom fill on an unconfirmed timeout), and writes the position to `results/positions_dhan.json`.
+
+### Profit Targets — 9:15 AM (`--place-targets`)
+
+For every open long without one yet, places a resting LIMIT sell at **17% above the recorded fill price** (`target_order_id`/`target_price` saved on the position). This is live at the exchange one cron tick before the 9:25 exit check runs, so a target can fill on its own between checkpoints without the pipeline needing to be watching.
+
+### Exit Check — 9:25 AM (`--exit-925`) / Forced Exit — 11:59 AM (`--exit-1159`)
+
+Same 3-branch shape as Zerodha's Stage 2/3 (P&L-based exit / hold / no-data half-sell fallback), with one addition checked first: if the resting 17% target already filled, the position closes from **the target's own fill**, skipping the LTP check entirely. Otherwise the resting target is cancelled before whichever branch below fires:
+
+- **Target already hit** → close from the target's fill, `status: exited_925` or `exited_1159`.
+- **Live P&L > 0** (925 only) → cancel the resting target, MARKET sell the full position.
+- **No LTP data** → cancel the resting target, sell half as a precaution (`partial_exit_925_nodata`), place a **fresh** target for the remainder at the same target price, remainder carries to 11:59.
+- **P&L ≤ 0** (925 only) → hold for the forced exit; target stays live and untouched.
+- **11:59 forced exit** → unconditional close of whatever's still open (blended P&L across any 925 partial + the 11:59 remainder, same as Zerodha's Stage 3).
+
+Every long exit (full or partial) that actually fills — from any of the branches above — immediately opens a **mirrored intraday short** in the same symbol, same quantity (see below).
+
+### Mirrored Intraday Shorts
+
+Every time a long exit fills (925 full-sell, 925 no-data half-sell, or 1159 force-sell), `_open_short()` opens a same-quantity `productType=INTRADAY` short in the same symbol — skipped (never raising) if the margin check or balance comes up short, since the long exit that triggered it has already happened and is never reversed. Two protective orders go live immediately:
+
+- **Cover target**: LIMIT buy at 5% below the short's entry price.
+- **Stop-loss**: `STOP_LOSS_MARKET` buy, trigger price 0.5% below the day's upper circuit limit (fetched on-demand via `/marketfeed/quote`) — protects against the short being run over on a genuine breakout, since Dhan has no market-protection collar to fall back on for this leg either.
+
+### Short Square-Off — 2:39 PM (`--square-off-239`)
+
+Unconditional close of every open short, with full **OCO** (one-cancels-other) handling between the cover target and the stop-loss: whichever order shows `TRADED` closes the position from **its own fill** and cancels the other; if both somehow show `TRADED` (a race), the position is flagged for manual review rather than guessing; if neither filled, both are cancelled and the position is force-covered at MARKET, same unconditional shape as the 11:59 long exit.
+
+### Live Monitor
+
+```bash
+python -m dhan.live_monitor
+```
+
+Runs 9:13 AM–3:40 PM (cron-managed, mirrors the Zerodha monitor exactly), using the `dhanhq` package's MarketFeed WebSocket for ticks and this repo's own `dhan/auth.py`/`dhan/instruments.py` for REST calls (circuit limits, symbol→securityId). Same `qualified`/`near_circuit` state machine and thresholds as [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts) — Telegram-only, no CSV log, independent of `zerodha/live_monitor.py`.
+
+### Positions JSON Schema (`results/positions_dhan.json`)
+
+Longs and shorts share one file, distinguished by `direction`:
+
+```json
+{
+  "broker": "dhan", "symbol": "TVSSRICHAK", "entry_date": "2026-08-18",
+  "actual_fill_price": 4836.00, "actual_fill_quantity": 3,
+  "entry_order_id": "...", "status": "exited_925", "product": "CNC",
+  "target_order_id": "...", "target_price": 5658.12,
+  "exit_price_925": 5658.12, "exit_order_id_925": "...",
+  "realized_return_pct": 17.0, "realized_pnl": 2466.36
+}
+```
+
+```json
+{
+  "broker": "dhan", "symbol": "TVSSRICHAK", "direction": "short",
+  "entry_price": 5658.12, "quantity": 3, "product": "INTRADAY",
+  "source_exit_stage": "925", "status": "short_closed",
+  "cover_target_order_id": "...", "cover_target_price": 5375.21,
+  "stop_order_id": "...", "stop_trigger_price": 5820.00,
+  "exit_price_239": 5375.21, "exit_order_id_239": "...",
+  "realized_return_pct": 5.0, "realized_pnl": 848.73
+}
+```
+
+### Auth (Manual Daily Token)
+
+Unlike Kite Connect, Dhan has no OAuth handshake for a personal account — generate an access token by hand at **web.dhan.co → Profile → Access DhanHQ Trading APIs** (valid 24h), then:
+
+```bash
+python -m dhan.auth <ACCESS_TOKEN>
+```
+
+Saved to `dhan/.token.json` (gitignored) and reused for the rest of the day by every other Dhan script. Do this **before 9:13 AM** — the live monitor is the first Dhan job that needs it.
+
+### Testing
+
+```bash
+python dhan/test_targets.py
+```
+
+Standalone, fully mocked (no pytest, no real network/file I/O) — covers the profit-target mechanism, the OCO short stop-loss, and every exit-reason branch above.
+
+---
+
+## Google Sheets Dashboard (Dhan)
+
+A live Google Sheets dashboard fed from `results/positions_dhan.json`'s **closed** Dhan trades — deliberately built without any Cloud Console project, service account, or OAuth client. It's a Google Apps Script **Web App** bound directly to the target Sheet: `sheets/apps_script/Code.gs` is pasted once into the Sheet's own Extensions → Apps Script editor and deployed from there.
+
+First day of data is **2026-08-18** — nothing before that date is ever pushed, even if `positions_dhan.json` has earlier rows.
+
+### `sheets/push_to_sheets.py`
+
+Filters `positions_dhan.json` for newly-closed trades (`entry_date >= 2026-08-18`, status `exited_925`/`exited_1159`/`short_closed`, not yet flagged `pushed_to_sheets: true`), derives a human-readable **Exit Reason** per trade by comparing the row's own recorded order IDs against its target/cover/stop order IDs (target hit / profit exit / no-data partial / force exit / cover target hit / stop-loss hit / square-off — never inferred from timing), and POSTs the batch (one call per run, not one per row) to the Apps Script webhook. On success, marks each pushed row `pushed_to_sheets: true` so re-runs never duplicate a row.
+
+Fired **inline**, not via cron — at the end of every return path in `check_exit_925`, `force_exit_1159`, and `square_off_239` in `dhan/run_trades.py` (skipped entirely under `--dry-run`). Wrapped in its own `try/except`: a Sheets/webhook failure is logged and never affects the trading run itself, and re-fires the next checkpoint if a previous push failed.
+
+### `sheets/apps_script/Code.gs`
+
+- **`doPost(e)`** — the live webhook. Verifies a shared secret, appends batched rows to the **Trade Log** tab.
+- **`setupDashboard()`** — one-time, run manually from the Apps Script editor. Builds all 5 tabs off Trade Log:
+  - **Trade Log** — 3-color scale (red/white/green) on Return %/P&L, a distinct background tag color + emoji per Exit Reason.
+  - **Daily Summary** — one row per trading day, every column a self-updating `SUMIFS`/`COUNTIFS` formula off Trade Log; native charts for the equity curve, daily P&L (green/red by sign), and rolling 20-trade win rate.
+  - **Exit-Reason Breakdown** — win rate / avg return / P&L contribution per exit reason, donut + bar charts.
+  - **Symbol Stats** — per-symbol win rate, avg return, best/worst trade, sortable.
+  - **Today** — a dark "command center" tab: KPI tiles (today's P&L, win rates, target/stop-loss hit rates, current streak), a sparkline of the last 20 days' P&L, text-based progress bars, a "best trade this week" trophy card, a hot/cold win-rate regime badge, and a monthly calendar heatmap.
+
+### Setup (One-Time)
+
+1. Paste `sheets/apps_script/Code.gs` into the target Sheet's Apps Script editor, set `SHARED_SECRET` to a random string, deploy as a **Web App** (Execute as: Me, Who has access: Anyone).
+2. Add the deployed `/exec` URL and the same secret to `pipeline/.env` as `SHEETS_WEBHOOK_URL` / `SHEETS_WEBHOOK_SECRET` (see [Configuration](#configuration)).
+3. Run `setupDashboard()` once from the Apps Script editor (Run menu) — approves the one-time authorization prompt, builds every tab.
+4. Optional: run `installMonthlyCalendarTrigger()` once so the Today tab's calendar heatmap reshapes itself automatically on the 1st of each month.
+
+### Testing
+
+```bash
+python sheets/test_push_to_sheets.py
+```
+
+Mocked (no real network calls) — covers Exit Reason derivation for every branch, the `pushed_to_sheets` idempotency flag, the 2026-08-18 cutoff, single-batch posting, and a clean non-raising failure on a simulated webhook/network error.
+
+---
+
 ## Repository Structure
 
 ```
@@ -345,9 +489,24 @@ volume-daily/
 │   ├── test_state_machine.py   # Self-test for live_monitor.py's qualified/near_circuit state machine
 │   └── build_trade_book.py     # Flattens positions_zerodha.json → results/trade_book.csv (+ .xlsx)
 │
+├── dhan/
+│   ├── auth.py                 # Manual daily access-token save/reuse (no OAuth) — dhan/.token.json
+│   ├── trade.py                 # buy(), sell(), place_order(), order_status(), cancel_order() via Dhan — CLI too
+│   ├── instruments.py           # symbol → securityId resolution
+│   ├── run_trades.py           # Entry / 17% targets / 925 & 1159 exits / mirrored shorts / 239 square-off
+│   ├── live_monitor.py         # MarketFeed WebSocket monitor, 9:13 AM–3:40 PM — Telegram-only
+│   └── test_targets.py         # Self-test — profit targets, OCO short stop-loss, all exit-reason branches
+│
+├── sheets/
+│   ├── push_to_sheets.py       # Pushes newly-closed Dhan trades to the Sheets webhook (fired inline, not cron)
+│   ├── test_push_to_sheets.py  # Self-test — exit-reason derivation, idempotency, batching, failure handling
+│   └── apps_script/
+│       └── Code.gs             # Pasted into the Sheet's own Apps Script editor — webhook + setupDashboard()
+│
 ├── scripts/
 │   ├── run_pipeline.sh         # Cron entry point — calls pipeline/main.py
-│   ├── run_live_monitor.sh     # Cron entry point — kills any leftover instance, starts live_monitor.py fresh
+│   ├── run_live_monitor.sh     # Cron entry point — kills any leftover instance, starts zerodha/live_monitor.py fresh
+│   ├── run_dhan_live_monitor.sh # Cron entry point — same, for dhan/live_monitor.py
 │   ├── push_data_updates.sh    # Auto-commit + push data/results — cron'd 5:00 PM
 │   └── setup_vm.sh             # One-time VM provisioning script
 │
@@ -365,6 +524,7 @@ volume-daily/
 │   │   └── mtf_entries_YYYY-MM-DD.csv    # MTF script's own log (see above)
 │   ├── scans/                            # scan_intraday.py preview output (not read by any execution script)
 │   ├── positions_zerodha.json            # Zerodha CNC trade book (all-time, all statuses)
+│   ├── positions_dhan.json               # Dhan trade book (longs + mirrored shorts, all-time, all statuses)
 │   ├── trade_book.csv                    # Flattened per-position P&L view (regenerated daily at 4:30 PM)
 │   └── trade_book.xlsx                   # Day-boxed visual version of the same data
 │
@@ -429,6 +589,9 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 | `ZERODHA_API_KEY` | Zerodha Kite API key — used for order execution |
 | `ZERODHA_API_SECRET` | Zerodha Kite API secret |
 | `ZERODHA_REDIRECT_URI` | `https://kite.trade/` |
+| `DHAN_CLIENT_ID` | Dhan client ID (from web.dhan.co) — the access token itself is *not* stored here, see [Dhan Pipeline auth](#auth-manual-daily-token) |
+| `SHEETS_WEBHOOK_URL` | The deployed Apps Script Web App `/exec` URL — see [Google Sheets Dashboard](#google-sheets-dashboard-dhan) |
+| `SHEETS_WEBHOOK_SECRET` | Shared secret matching `SHARED_SECRET` in `sheets/apps_script/Code.gs` |
 
 > **Security**: `pipeline/.env` is in `.gitignore`. Never commit credentials. Use `.env.example` as the key-name reference only.
 
@@ -449,6 +612,14 @@ If the token is missing/expired, `zerodha.auth._login()` falls through to an int
 
 The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in `.env` only when it eventually expires.
 
+The **Dhan access token** also expires every 24h, but there's no browser/OAuth flow to run — generate it by hand at **web.dhan.co → Profile → Access DhanHQ Trading APIs** and save it before 9:13 AM:
+
+```bash
+python -m dhan.auth <ACCESS_TOKEN>
+```
+
+Saved to `dhan/.token.json`, reused for the rest of the day by every Dhan script. See [Dhan Pipeline → Auth](#auth-manual-daily-token).
+
 ### Monitoring
 
 ```bash
@@ -466,14 +637,19 @@ tail -f ~/push_data_updates.log
 tail -f ~/live_monitor.log
 cat volume-daily/logs/imbalance_$(date +%F).csv
 
+# Dhan trades log + live monitor log
+tail -f ~/dhan_trades.log
+tail -f ~/dhan_live_monitor.log
+
 # Verify all crons are registered
 crontab -l
 
 # Verify system time is IST
 date
 
-# Check today's open positions
+# Check today's open positions (Zerodha / Dhan)
 python3 -m json.tool results/positions_zerodha.json
+python3 -m json.tool results/positions_dhan.json
 
 # Check the flattened P&L view
 column -s, -t results/trade_book.csv
@@ -531,6 +707,32 @@ python zerodha/run_trades_mtf.py --entry --capital 150000 --dry-run
 python zerodha/run_trades_mtf.py --entry --symbol CHEMPLASTS --shares 3 --dry-run
 ```
 
+### Dhan Pipeline
+
+```bash
+# Entry — dry run / live
+python dhan/run_trades.py --entry --dry-run
+python dhan/run_trades.py --entry
+python dhan/run_trades.py --entry --symbol RELIANCE --capital 5000 --dry-run   # single stock
+
+# Profit targets, 9:15 AM
+python dhan/run_trades.py --place-targets
+
+# Exit check 9:25 AM / forced exit 11:59 AM
+python dhan/run_trades.py --exit-925
+python dhan/run_trades.py --exit-1159
+
+# Mirrored short square-off, 2:39 PM
+python dhan/run_trades.py --square-off-239
+
+# Self-test (mocked, no real orders)
+python dhan/test_targets.py
+
+# Push newly-closed trades to the Sheets dashboard manually (normally fires inline, see above)
+python sheets/push_to_sheets.py
+python sheets/test_push_to_sheets.py
+```
+
 ### Trade Book
 
 ```bash
@@ -560,6 +762,9 @@ python -m zerodha.trade cancel <order_id>    # cancel an order
 ```bash
 # Refresh Zerodha trading token (daily, before 9:13 AM)
 python -m zerodha.auth
+
+# Save today's Dhan access token (daily, before 9:13 AM — generate at web.dhan.co first)
+python -m dhan.auth <ACCESS_TOKEN>
 ```
 
 ---
@@ -614,6 +819,22 @@ All times IST (UTC+5:30), server timezone set to `Asia/Kolkata`. All jobs below 
 
 `zerodha/run_trades_mtf.py` is **not** in the local cron list above — it's a standalone script, run manually. (A single one-off cron line pinned to a specific past date was added for a one-time dry-run test; it's dormant and won't fire again until that day-of-month/month combination recurs.)
 
+### Dhan Pipeline Cron
+
+Fully independent of the Zerodha cron lines above — separate log files, separate failure domain.
+
+| Time (IST) | Cron | Command |
+|---|---|---|
+| 9:13 AM | `10 9 * * 1-5` | `scripts/run_dhan_live_monitor.sh` |
+| 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
+| 9:25 AM | `25 9 * * 1-5` | `dhan/run_trades.py --exit-925` |
+| 11:59 AM | `59 11 * * 1-5` | `dhan/run_trades.py --exit-1159` |
+| 2:39 PM | `39 14 * * 1-5` | `dhan/run_trades.py --square-off-239` |
+| 3:21 PM | `21 15 * * 1-5` | `dhan/run_trades.py --entry` |
+| 3:40 PM | `40 15 * * 1-5` | `pkill -f 'dhan\.live_monitor'` |
+
+`sheets/push_to_sheets.py` is **not** its own cron line — it fires inline at the end of the 9:25/11:59/2:39 Dhan checkpoints above (see [Google Sheets Dashboard](#google-sheets-dashboard-dhan)), so Sheets-push timing can never affect the trading script's own execution.
+
 ---
 
-*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution, CNC + standalone MTF, live monitoring) · Telegram alerts throughout · Dashboard published as a Claude Artifact*
+*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution, CNC + standalone MTF, live monitoring) · Dhan (independent parallel execution, live monitoring, Google Sheets dashboard) · Telegram alerts throughout · Dashboard published as a Claude Artifact*
