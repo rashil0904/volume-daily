@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 test_push_to_sheets.py -- standalone verifier for sheets/push_to_sheets.py:
-Exit Reason derivation, the pushed_to_sheets idempotency flag, the
-2026-08-18 first-data-date cutoff, batched (single-call) webhook posting,
-and clean non-raising failure on a webhook/network error.
+Exit Reason derivation, the pushed_to_sheets/pushed_open_to_sheets idempotency
+flags, the 2026-08-18 first-data-date cutoff, the entry-time open-row push,
+batched (single-call) upsert_trades webhook posting, and clean non-raising
+failure on a webhook/network error.
 
 Mocks requests.post and _load_pos/_save_pos with an in-memory store -- zero
 network calls, zero real file writes. Mirrors dhan/test_targets.py's
@@ -94,6 +95,16 @@ def make_short(**overrides) -> dict:
     return row
 
 
+def make_open(**overrides) -> dict:
+    row = {
+        "broker": "dhan", "symbol": "TESTOPEN", "entry_date": "2026-08-18",
+        "actual_fill_price": 100.0, "actual_fill_quantity": 10,
+        "entry_order_id": "E3", "status": "open", "product": "MTF",
+    }
+    row.update(overrides)
+    return row
+
+
 # ── (a) Exit Reason derivation ────────────────────────────────────────────────
 print("\n(a) Exit Reason derivation")
 
@@ -132,8 +143,23 @@ check("short: no exit_order_id_239 -> Unrecognized — review",
       p.derive_exit_reason(make_short(exit_order_id_239=None)) == "Unrecognized — review")
 
 
+# ── (a2) Order Flow legs ───────────────────────────────────────────────────────
+print("\n(a2) Order Flow legs (build_legs)")
+
+check("closed long -> BUY → SELL", p.build_legs(make_long()) == "BUY → SELL",
+      detail=p.build_legs(make_long()))
+check("closed short -> SELL → BUY", p.build_legs(make_short()) == "SELL → BUY",
+      detail=p.build_legs(make_short()))
+check("open long (status=open) -> BUY → … (exit leg unknown)",
+      p.build_legs(make_long(status="open")) == "BUY → …",
+      detail=p.build_legs(make_long(status="open")))
+check("partial-exit long (still not a CLOSED status) -> BUY → …",
+      p.build_legs(make_long(status="partial_exit_925_nodata")) == "BUY → …",
+      detail=p.build_legs(make_long(status="partial_exit_925_nodata")))
+
+
 # ── (b) already-pushed rows are never pushed again ────────────────────────────
-print("\n(b) pushed_to_sheets idempotency")
+print("\n(b) pushed_to_sheets / pushed_open_to_sheets idempotency")
 
 store = FakeStore([make_long(pushed_to_sheets=True)])
 with patch.object(p, "_load_pos", store.load), \
@@ -142,7 +168,16 @@ with patch.object(p, "_load_pos", store.load), \
      patch.object(p, "_WEBHOOK_SECRET", "secret"), \
      patch.object(p, "requests") as mock_requests:
     p.main()
-    check("already-pushed row: requests.post never called", not mock_requests.post.called)
+    check("already-pushed closed row: requests.post never called", not mock_requests.post.called)
+
+store = FakeStore([make_open(pushed_open_to_sheets=True)])
+with patch.object(p, "_load_pos", store.load), \
+     patch.object(p, "_save_pos", store.save), \
+     patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
+     patch.object(p, "_WEBHOOK_SECRET", "secret"), \
+     patch.object(p, "requests") as mock_requests:
+    p.main()
+    check("already-pushed open row: requests.post never called", not mock_requests.post.called)
 
 
 # ── (c) entry_date before 2026-08-18 is never pushed ──────────────────────────
@@ -163,7 +198,7 @@ with patch.object(p, "_load_pos", store2.load), \
      patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
      patch.object(p, "_WEBHOOK_SECRET", "secret"), \
      patch.object(p, "requests") as mock_requests:
-    mock_requests.post.return_value = FakeResponse({"status": "ok", "appended": 1})
+    mock_requests.post.return_value = FakeResponse({"status": "ok", "inserted": 1, "updated": 0})
     p.main()
     check("2026-08-18 row (the first valid date): requests.post WAS called",
           mock_requests.post.called)
@@ -203,7 +238,7 @@ with patch.object(p, "_load_pos", store.load), \
 
 
 # ── (e) multiple new rows -> exactly one batched call ─────────────────────────
-print("\n(e) batched single append call")
+print("\n(e) batched single upsert call")
 
 store = FakeStore([make_long(symbol="A"), make_long(symbol="B"), make_long(symbol="C")])
 with patch.object(p, "_load_pos", store.load), \
@@ -211,16 +246,82 @@ with patch.object(p, "_load_pos", store.load), \
      patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
      patch.object(p, "_WEBHOOK_SECRET", "secret"), \
      patch.object(p, "requests") as mock_requests:
-    mock_requests.post.return_value = FakeResponse({"status": "ok", "appended": 3})
+    mock_requests.post.return_value = FakeResponse({"status": "ok", "inserted": 3, "updated": 0})
     p.main()
     check("exactly one requests.post call for 3 new rows", mock_requests.post.call_count == 1)
-    posted_rows = mock_requests.post.call_args.kwargs["json"]["rows"]
-    check("all 3 rows present in that single call", len(posted_rows) == 3,
-          detail=f"got {len(posted_rows)}")
+    posted_json = mock_requests.post.call_args.kwargs["json"]
+    check("action is upsert_trades", posted_json["action"] == "upsert_trades",
+          detail=posted_json.get("action"))
+    posted_items = posted_json["rows"]
+    check("all 3 items present in that single call", len(posted_items) == 3,
+          detail=f"got {len(posted_items)}")
+    check("every item carries its legs field", all("legs" in it for it in posted_items))
     check("all 3 positions marked pushed_to_sheets after success",
           all(pos.get("pushed_to_sheets") for pos in store.positions))
     check("_save_pos called exactly once for the batch", store.save_count == 1,
           detail=f"save_count={store.save_count}")
+
+
+# ── (f) entry-time open row: pushed with blank exit fields, correct key ───────
+print("\n(f) open-row push at entry")
+
+store = FakeStore([make_open()])
+with patch.object(p, "_load_pos", store.load), \
+     patch.object(p, "_save_pos", store.save), \
+     patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
+     patch.object(p, "_WEBHOOK_SECRET", "secret"), \
+     patch.object(p, "requests") as mock_requests:
+    mock_requests.post.return_value = FakeResponse({"status": "ok", "inserted": 1, "updated": 0})
+    p.main()
+    item = mock_requests.post.call_args.kwargs["json"]["rows"][0]
+    check("open row keyed on entry_order_id", item["key"] == "E3", detail=item["key"])
+    check("open row: legs shows BUY → … (exit leg not known yet)",
+          item["legs"] == "BUY → …", detail=item["legs"])
+    check("open row: Exit Price blank", item["row"][5] == "")
+    check("open row: Exit Reason is the Open label", item["row"][6] == p._OPEN_LABEL,
+          detail=item["row"][6])
+    check("open row: Return % blank", item["row"][8] == "")
+    check("open row: P&L blank", item["row"][9] == "")
+    check("open row: Capital Deployed = fill price * qty",
+          item["row"][10] == 1000.0, detail=item["row"][10])
+    check("position marked pushed_open_to_sheets, NOT pushed_to_sheets (still open)",
+          store.positions[0].get("pushed_open_to_sheets") is True
+          and not store.positions[0].get("pushed_to_sheets"))
+
+# Shorts never get an entry-time open row (see _eligible_open) -- only pushed
+# once closed, same as before this feature.
+store = FakeStore([make_short(status="short_open", pushed_to_sheets=False)])
+with patch.object(p, "_load_pos", store.load), \
+     patch.object(p, "_save_pos", store.save), \
+     patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
+     patch.object(p, "_WEBHOOK_SECRET", "secret"), \
+     patch.object(p, "requests") as mock_requests:
+    p.main()
+    check("an open short (status=short_open) is not pushed at all yet",
+          not mock_requests.post.called)
+
+
+# ── (g) close push after an open push reuses the SAME key -> one row updated ──
+print("\n(g) same entry_order_id: open push then close push upserts, doesn't duplicate")
+
+store = FakeStore([make_open(pushed_open_to_sheets=True)])
+closed = make_long(entry_order_id="E3", status="exited_925")
+store.positions = [closed]
+with patch.object(p, "_load_pos", store.load), \
+     patch.object(p, "_save_pos", store.save), \
+     patch.object(p, "_WEBHOOK_URL", "https://example.invalid/exec"), \
+     patch.object(p, "_WEBHOOK_SECRET", "secret"), \
+     patch.object(p, "requests") as mock_requests:
+    mock_requests.post.return_value = FakeResponse({"status": "ok", "inserted": 0, "updated": 1})
+    p.main()
+    posted_items = mock_requests.post.call_args.kwargs["json"]["rows"]
+    check("close push sends exactly one item", len(posted_items) == 1)
+    check("close push item reuses the SAME key as the earlier open push",
+          posted_items[0]["key"] == "E3", detail=posted_items[0]["key"])
+    check("close push item has the real exit data, not blanks",
+          posted_items[0]["row"][5] == round(117.0, 4))
+    check("close push item's legs now shows the resolved BUY → SELL (no longer …)",
+          posted_items[0]["legs"] == "BUY → SELL", detail=posted_items[0]["legs"])
 
 
 print(f"\n{'='*60}")

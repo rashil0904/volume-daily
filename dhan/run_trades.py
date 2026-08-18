@@ -803,6 +803,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
+    _push_to_sheets(dry_run)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

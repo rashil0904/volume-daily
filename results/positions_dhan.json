@@ -10,7 +10,8 @@
     "entry_order_id": "321260818763709",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:05.918127+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "pushed_open_to_sheets": true
   },
   {
     "broker": "dhan",
@@ -23,7 +24,8 @@
     "entry_order_id": "221260818755709",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:09.534551+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "pushed_open_to_sheets": true
   },
   {
     "broker": "dhan",
@@ -36,7 +38,8 @@
     "entry_order_id": "321260818763909",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:12.760649+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "pushed_open_to_sheets": true
   },
   {
     "broker": "dhan",
@@ -49,7 +52,8 @@
     "entry_order_id": "321260818764209",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:15.943733+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "pushed_open_to_sheets": true
   },
   {
     "broker": "dhan",
@@ -62,7 +66,8 @@
     "entry_order_id": "221260818756009",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:19.163061+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "pushed_open_to_sheets": true
   },
   {
     "broker": "dhan",
@@ -75,6 +80,7 @@
     "entry_order_id": "321260818764709",
     "status": "open",
     "entry_timestamp": "2026-08-18T15:21:22.352404+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "pushed_open_to_sheets": true
   }
 ]

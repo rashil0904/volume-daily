@@ -1,17 +1,35 @@
 """
-sheets/push_to_sheets.py — pushes newly-closed Dhan trades to the Google Sheets
-dashboard, via the Apps Script Web App webhook (see sheets/apps_script/Code.gs).
+sheets/push_to_sheets.py — pushes Dhan trades to the Google Sheets dashboard,
+via the Apps Script Web App webhook (see sheets/apps_script/Code.gs).
 
-Runs on cron a few minutes after each checkpoint that can close a position
-(--exit-925, --exit-1159, --square-off-239 in dhan/run_trades.py), so
+Runs on cron after every checkpoint that touches a position (--entry as well
+as --exit-925, --exit-1159, --square-off-239 in dhan/run_trades.py), so
 positions_dhan.json has already been written by the time this reads it.
+
+Two kinds of row, one webhook action ("upsert_trades"):
+  - OPEN  -- pushed right after entry (3:21pm), before any exit is known.
+             Exit Price/Return %/P&L are blank; Exit Reason reads "🟢 Open".
+  - CLOSED -- pushed after whichever checkpoint actually closes the position
+              (925 target/profit exit, 1159 force exit, 239 short square-off).
+
+Every row carries the broker's own entry_order_id as an idempotency key.
+Code.gs's _upsertTrades matches on that key: the OPEN push creates the row,
+the later CLOSED push overwrites that SAME row in place (not a second row) --
+that's what lets the dashboard show a position live from entry instead of
+only appearing once it's already closed.
+
+Every item also carries `legs` (see build_legs) -- the visible entry-leg/
+exit-leg pair ("BUY → SELL" for a long, "SELL → BUY" for a short, exit leg
+shown as "…" while still open) written to the sheet's Order Flow column,
+separate from the row's own Entry Price/Exit Price numbers.
 
 This is a pure side-effect: a Sheets/webhook failure must never raise past
 main() or affect the trading scripts, which run independently of this.
 
-Idempotency: a row is only pushed once. After a successful push, each pushed
-position is marked "pushed_to_sheets": true in positions_dhan.json, and that
-flag -- not timing or content matching -- is what future runs check.
+Idempotency: each stage is only pushed once. "pushed_open_to_sheets" and
+"pushed_to_sheets" are separate flags in positions_dhan.json (a position
+passes through both, entry then close) -- flags, not timing or content
+matching, are what future runs check.
 
 First day of data is 2026-08-18: positions with an earlier entry_date are
 never pushed, even if otherwise eligible (older rows predate the dashboard).
@@ -49,6 +67,8 @@ _EXIT_REASON_EMOJI = {
     "9:25 no-data partial":  "⚠️",
     "Unrecognized — review": "❓",
 }
+
+_OPEN_LABEL = "🟢 Open"
 
 _env = _ROOT / "pipeline" / ".env"
 if _env.exists():
@@ -137,10 +157,63 @@ def build_row(pos: dict) -> list:
     ]
 
 
+def build_legs(pos: dict) -> str:
+    """Visible entry-leg -> exit-leg pair for the Order Flow column -- e.g.
+    "BUY → SELL" for a long, "SELL → BUY" for a short (opening a short means
+    selling first, closing it means buying to cover). The exit leg reads "…"
+    while the position is still open (pushed at entry, before any exit is
+    known) rather than guessing which leg will eventually close it."""
+    is_short  = pos.get("direction") == "short"
+    entry_leg = "SELL" if is_short else "BUY"
+    exit_leg  = "BUY" if is_short else "SELL"
+    if pos.get("status") not in _CLOSED_STATUSES:
+        exit_leg = "…"
+    return f"{entry_leg} → {exit_leg}"
+
+
+def build_open_row(pos: dict) -> list:
+    """Entry-time row -- whatever fields exist right after the 3:21pm fill.
+    Exit Price/Return %/P&L are genuinely unknown yet, left blank rather than
+    0 (0 would misleadingly read as a completed trade with no P&L)."""
+    entry_price = float(pos.get("actual_fill_price") or 0)
+    qty         = int(pos.get("actual_fill_quantity") or 0)
+    return [
+        pos.get("entry_date", ""),
+        pos.get("symbol", ""),
+        "Long",
+        round(entry_price, 4),
+        qty,
+        "",
+        _OPEN_LABEL,
+        pos.get("product", ""),
+        "",
+        "",
+        round(entry_price * qty, 2),
+    ]
+
+
 def _eligible(pos: dict) -> bool:
     if pos.get("pushed_to_sheets"):
         return False
     if pos.get("status") not in _CLOSED_STATUSES:
+        return False
+    try:
+        entry_date = date.fromisoformat(pos.get("entry_date", ""))
+    except ValueError:
+        return False
+    return entry_date >= _FIRST_DATE
+
+
+def _eligible_open(pos: dict) -> bool:
+    """Long entries only -- shorts are opened intraday from a 925/1159 exit
+    and squared off same day at 239, so they're never open long enough to be
+    worth a separate entry-time row (they still get pushed once, closed, via
+    _eligible/build_row above, same as before this feature)."""
+    if pos.get("direction") == "short":
+        return False
+    if pos.get("pushed_open_to_sheets"):
+        return False
+    if pos.get("status") != "open":
         return False
     try:
         entry_date = date.fromisoformat(pos.get("entry_date", ""))
@@ -155,19 +228,26 @@ def main() -> None:
               "in pipeline/.env -- skipping push.", file=sys.stderr)
         return
 
-    positions = _load_pos()
-    pending   = [p for p in positions if _eligible(p)]
+    positions    = _load_pos()
+    open_pending = [p for p in positions if _eligible_open(p)]
+    closed_pending = [p for p in positions if _eligible(p)]
 
-    if not pending:
-        print("[sheets] No newly-closed trades to push.")
+    if not open_pending and not closed_pending:
+        print("[sheets] Nothing new to push.")
         return
 
-    rows = [build_row(p) for p in pending]
-    print(f"[sheets] Pushing {len(rows)} newly-closed trade(s) to the dashboard...")
+    items = (
+        [{"key": p.get("entry_order_id", ""), "legs": build_legs(p), "row": build_open_row(p)}
+         for p in open_pending]
+        + [{"key": p.get("entry_order_id", ""), "legs": build_legs(p), "row": build_row(p)}
+           for p in closed_pending]
+    )
+    print(f"[sheets] Pushing {len(open_pending)} open + {len(closed_pending)} closed "
+          f"row(s) to the dashboard...")
 
     resp = requests.post(
         _WEBHOOK_URL,
-        json={"secret": _WEBHOOK_SECRET, "action": "append_trades", "rows": rows},
+        json={"secret": _WEBHOOK_SECRET, "action": "upsert_trades", "rows": items},
         timeout=30,
     )
     resp.raise_for_status()
@@ -175,12 +255,14 @@ def main() -> None:
     if result.get("status") != "ok":
         raise RuntimeError(f"webhook returned an error: {result}")
 
-    for p in pending:
+    for p in open_pending:
+        p["pushed_open_to_sheets"] = True
+    for p in closed_pending:
         p["pushed_to_sheets"] = True
     _save_pos(positions)
 
-    print(f"[sheets] Pushed and marked {len(pending)} row(s). "
-          f"Webhook confirmed {result.get('appended')} appended.")
+    print(f"[sheets] Pushed {len(open_pending)} open, {len(closed_pending)} closed row(s). "
+          f"Webhook: {result.get('inserted', 0)} inserted, {result.get('updated', 0)} updated.")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,13 @@
 var SHARED_SECRET = "REPLACE_ME_WITH_A_RANDOM_STRING";
 
 var SHEET_NAMES = {
-  TRADE_LOG:   "Trade Log",
+  TRADE_LOG:   "Trade Log",       // combined long+short log -- Daily Summary/
+                                   // Exit-Reason Breakdown/Symbol Stats/Today
+                                   // all read from THIS one, unchanged.
+  BUY_LOG:     "Buy Trade Log",   // longs only (opened with a BUY) -- a
+                                   // synchronized split view for readability,
+                                   // written alongside Trade Log on every push.
+  SELL_LOG:    "Sell Trade Log",  // shorts only (opened with a SELL), same idea.
   DAILY:       "Daily Summary",
   EXIT_REASON: "Exit-Reason Breakdown",
   SYMBOL:      "Symbol Stats",
@@ -37,7 +43,7 @@ var MAX_ROW = 3000;
 var TRADE_LOG_HEADERS = [
   "Date", "Symbol", "Direction", "Entry Price", "Qty",
   "Exit Price", "Exit Reason", "Product", "Return %", "P&L", "Capital Deployed",
-  "Win (1/0)", "Rolling 20 Win Rate",
+  "Win (1/0)", "Rolling 20 Win Rate", "Order ID", "Order Flow",
 ];
 
 // Order matters here -- it's the fixed row order used on the Exit-Reason
@@ -94,8 +100,8 @@ function doPost(e) {
       return _jsonResponse({ status: "error", message: "invalid secret" });
     }
 
-    if (body.action === "append_trades") {
-      result = _appendTrades(body.rows);
+    if (body.action === "upsert_trades") {
+      result = _upsertTrades(body.rows);
     } else {
       result = { status: "error", message: "unknown action: " + body.action };
     }
@@ -114,28 +120,108 @@ function _jsonResponse(obj) {
       .setMimeType(ContentService.MimeType.JSON);
 }
 
-function _appendTrades(rows) {
-  if (!rows || !rows.length) {
-    return { status: "ok", appended: 0 };
+// sheet.getLastRow() is unusable for finding where real data ends on this
+// sheet: buildTradeLogSheet_ below pre-fills the L/M helper-column FORMULAS across
+// the entire MAX_ROW range (so the Win/Rolling-Win-Rate columns are ready
+// before any row exists), and Apps Script counts a cell holding a formula as
+// "content" even when it evaluates to "" -- so getLastRow() reports 3000
+// right after setupDashboard() runs, and every append after that lands at
+// row 3001+ instead of row 2 (both invisible without scrolling AND past the
+// row-3000 bound every other tab's formulas are limited to). Column A (Date)
+// is never formula-prefilled, only ever written by a real pushed row, so
+// scanning IT for the last non-blank cell is the only reliable signal here.
+function _lastDataRow_(sheet) {
+  var colA = sheet.getRange(1, 1, sheet.getMaxRows(), 1).getValues();
+  for (var i = colA.length - 1; i >= 1; i--) {
+    if (colA[i][0] !== "" && colA[i][0] !== null) {
+      return i + 1;
+    }
   }
-  // rows arrive as the 11 Trade Log data columns (Date..Capital Deployed) --
-  // pad with the 2 helper columns (Win flag, Rolling 20 Win Rate) so every
-  // appended row keeps the sheet's real column count (13) intact; the helper
-  // formulas below fill themselves in on top of these placeholder blanks.
-  var sheet    = _getOrCreateTradeLogSheet();
-  var startRow = sheet.getLastRow() + 1;
-  var padded   = rows.map(function (r) { return r.concat(["", ""]); });
-  sheet.getRange(startRow, 1, padded.length, TRADE_LOG_HEADERS.length).setValues(padded);
-  _fillTradeLogHelperFormulas_(sheet, startRow, padded.length);
-  return { status: "ok", appended: rows.length };
+  return 1; // nothing but the header
 }
 
-function _getOrCreateTradeLogSheet() {
+// Idempotency key column -- N, "Order ID" (the broker's own entry_order_id).
+// Hidden (see buildTradeLogSheet_): it's a system key for matching rows across
+// calls, not a metric anyone reads.
+var ORDER_ID_COL = 14;
+
+// O, "Order Flow" -- the visible entry-leg/exit-leg pair, e.g. "BUY → SELL"
+// for a long or "SELL → BUY" for a short (with the exit leg shown as "…"
+// while the position is still open). NOT hidden, unlike Order ID -- this is
+// real information, not a system key. Computed in push_to_sheets.py
+// (build_legs) and passed alongside `key`/`row` on every item.
+var ORDER_FLOW_COL = 15;
+
+// _upsertTrades: pushed at three points in a trade's life -- entry (3:21pm,
+// open row with blank exit fields), then 9:25am/11:59am/2:39pm (same row,
+// filled in with exit data). Every item is written to TWO sheets: the
+// combined "Trade Log" (unchanged -- Daily Summary/Exit-Reason Breakdown/
+// Symbol Stats/Today all still read only from this one, so none of those
+// formulas needed to change), AND whichever of "Buy Trade Log" (row[2] !==
+// "Short", i.e. a long) or "Sell Trade Log" (row[2] === "Short") matches --
+// a synchronized split view for reading buy-side vs sell-side trades on
+// their own, kept in sync automatically since both writes come from the
+// same push. In both places, a row already on the sheet with a given item's
+// key gets overwritten in place; a key not yet seen there appends a new row.
+function _upsertTrades(items) {
+  if (!items || !items.length) {
+    return { status: "ok", inserted: 0, updated: 0 };
+  }
+
+  var combined = _upsertIntoSheet_(_getOrCreateLogSheet_(SHEET_NAMES.TRADE_LOG), items);
+
+  var buyItems  = items.filter(function (it) { return it.row[2] !== "Short"; });
+  var sellItems = items.filter(function (it) { return it.row[2] === "Short"; });
+  if (buyItems.length)  _upsertIntoSheet_(_getOrCreateLogSheet_(SHEET_NAMES.BUY_LOG), buyItems);
+  if (sellItems.length) _upsertIntoSheet_(_getOrCreateLogSheet_(SHEET_NAMES.SELL_LOG), sellItems);
+
+  return { status: "ok", inserted: combined.inserted, updated: combined.updated };
+}
+
+// Core upsert loop against a single sheet -- shared by Trade Log's combined
+// write and the Buy/Sell split writes above so the matching/insert logic
+// only lives in one place.
+function _upsertIntoSheet_(sheet, items) {
+  var lastRow = _lastDataRow_(sheet);
+  var keys    = lastRow >= 2
+    ? sheet.getRange(2, ORDER_ID_COL, lastRow - 1, 1).getValues().map(function (r) { return String(r[0]); })
+    : [];
+  var nextRow = lastRow + 1;
+
+  var inserted = 0, updated = 0;
+
+  items.forEach(function (item) {
+    var key = String(item.key || "");
+    var row = item.row;
+    var idx = key ? keys.indexOf(key) : -1;
+
+    if (idx >= 0) {
+      var sheetRow = idx + 2;
+      sheet.getRange(sheetRow, 1, 1, row.length).setValues([row]);
+      sheet.getRange(sheetRow, ORDER_ID_COL).setValue(key);
+      sheet.getRange(sheetRow, ORDER_FLOW_COL).setValue(item.legs || "");
+      updated++;
+    } else {
+      var padded = row.concat(["", ""]); // placeholder L/M, filled in below
+      sheet.getRange(nextRow, 1, 1, padded.length).setValues([padded]);
+      sheet.getRange(nextRow, ORDER_ID_COL).setValue(key);
+      sheet.getRange(nextRow, ORDER_FLOW_COL).setValue(item.legs || "");
+      _fillTradeLogHelperFormulas_(sheet, nextRow, 1);
+      keys.push(key);
+      nextRow++;
+      inserted++;
+    }
+  });
+
+  return { inserted: inserted, updated: updated };
+}
+
+function _getOrCreateLogSheet_(name) {
   var ss    = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAMES.TRADE_LOG);
+  var sheet = ss.getSheetByName(name);
 
   if (!sheet) {
-    sheet = ss.insertSheet(SHEET_NAMES.TRADE_LOG);
+    sheet = ss.insertSheet(name);
     var headerRange = sheet.getRange(1, 1, 1, TRADE_LOG_HEADERS.length);
     headerRange.setValues([TRADE_LOG_HEADERS]);
     headerRange.setBackground("#1a1a1a").setFontColor("#ffffff").setFontWeight("bold");
@@ -145,10 +231,15 @@ function _getOrCreateTradeLogSheet() {
 }
 
 // L (Win 1/0) and M (Rolling 20 Win Rate) for the newly-appended row range --
-// set once per push rather than pre-filled across all 3000 rows, so a fresh
-// Trade Log sheet doesn't show thousands of "" placeholder formula results
-// before setupDashboard() has run. setupDashboard() re-fills the FULL bound
-// range afterward (see buildTradeLog_), which is harmless/idempotent here.
+// set once per push for exactly the rows that just got real data. NOT
+// harmless to pre-fill across the full MAX_ROW range (buildTradeLogSheet_ used to
+// do this on every setupDashboard() run) -- a formula cell counts as
+// "content" for Ctrl+End/getLastRow() even when it evaluates to "", so a
+// full-range pre-fill permanently pins the sheet's apparent last row to
+// MAX_ROW regardless of how much real data exists. Confirmed live
+// 2026-08-19: Ctrl+End jumped to ~row 3000 with real data sitting only at
+// row 2, which looked exactly like a failed push. See buildTradeLogSheet_ for the
+// bounded version used at setup time now.
 function _fillTradeLogHelperFormulas_(sheet, startRow, numRows) {
   var winRange = sheet.getRange(startRow, 12, numRows, 1); // L
   winRange.setFormulaR1C1('=IF(RC[-3]="","",IF(RC[-3]>0,1,0))');
@@ -164,7 +255,11 @@ function _fillTradeLogHelperFormulas_(sheet, startRow, numRows) {
 // ============================================================================
 
 function setupDashboard() {
-  buildTradeLog_();
+  // Trade Log (combined) first, then the Buy/Sell split views -- same
+  // builder, same formatting/conditional rules, three separate sheets.
+  buildTradeLogSheet_(SHEET_NAMES.TRADE_LOG);
+  buildTradeLogSheet_(SHEET_NAMES.BUY_LOG);
+  buildTradeLogSheet_(SHEET_NAMES.SELL_LOG);
   buildDailySummary_();
   buildExitReasonBreakdown_();
   buildSymbolStats_();
@@ -173,10 +268,13 @@ function setupDashboard() {
 }
 
 
-// ── Trade Log: helper columns + conditional formatting ───────────────────────
+// ── Trade Log(s): helper columns + conditional formatting ────────────────────
+// Same builder for all three log sheets (Trade Log combined, Buy Trade Log,
+// Sell Trade Log) -- they're identical in shape, just populated with
+// different rows by _upsertTrades.
 
-function buildTradeLog_() {
-  var sheet = _getOrCreateTradeLogSheet();
+function buildTradeLogSheet_(name) {
+  var sheet = _getOrCreateLogSheet_(name);
 
   // Re-assert headers (covers a Trade Log created before the helper columns existed).
   var headerRange = sheet.getRange(1, 1, 1, TRADE_LOG_HEADERS.length);
@@ -184,7 +282,15 @@ function buildTradeLog_() {
   headerRange.setBackground("#1a1a1a").setFontColor("#ffffff").setFontWeight("bold");
   sheet.setFrozenRows(1);
 
-  _fillTradeLogHelperFormulas_(sheet, 2, MAX_ROW - 1);
+  // Bounded to real data only (see _fillTradeLogHelperFormulas_ above) --
+  // clear any formula pollution a PREVIOUS run of this function left below
+  // the real data first (harmless no-op if there isn't any), then refill
+  // only up through the actual last data row.
+  var lastData = _lastDataRow_(sheet);
+  sheet.getRange(2, 12, MAX_ROW - 1, 2).clearContent();
+  if (lastData >= 2) {
+    _fillTradeLogHelperFormulas_(sheet, 2, lastData - 1);
+  }
 
   var rules = [];
 
@@ -217,9 +323,11 @@ function buildTradeLog_() {
   sheet.setConditionalFormatRules(rules);
 
   // Helper columns visually distinguished as "computed, don't touch."
-  sheet.getRange(1, 12, 1, 2).setBackground("#3c3c3c").setFontColor("#bbbbbb");
+  sheet.getRange(1, 12, 1, 3).setBackground("#3c3c3c").setFontColor("#bbbbbb");
   sheet.setColumnWidths(1, 11, 110);
   sheet.setColumnWidths(12, 2, 130);
+  sheet.hideColumns(ORDER_ID_COL); // system key, not a metric -- see _upsertTrades
+  sheet.setColumnWidth(ORDER_FLOW_COL, 120); // visible -- real data, not hidden
 }
 
 
