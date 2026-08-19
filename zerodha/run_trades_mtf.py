@@ -437,16 +437,23 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
 
     stop_order_id      = None
     stop_trigger_price = None
+    stop_limit_price   = None
     if upper_circuit is not None:
         try:
-            stop_trigger  = round(upper_circuit * 0.995, 4)
+            stop_limit_price   = round(upper_circuit, 4)
+            stop_trigger_price = round(upper_circuit * 0.995, 4)
+            # SL (limit), not SL-M -- pinning the limit AT the UC itself (the
+            # highest price legally tradeable that day) puts the order at the
+            # front of the book instead of risking a worse market fill once
+            # the stock is already ripping toward the circuit.
             stop_order_id = place_order(sym, "NSE", "BUY", eq,
-                                        order_type="SL-M",
-                                        trigger_price=stop_trigger,
+                                        order_type="SL",
+                                        price=stop_limit_price,
+                                        trigger_price=stop_trigger_price,
                                         product="MIS", dry_run=dry_run)
-            stop_trigger_price = stop_trigger
-            print(f"[mtf]   stop-loss placed @ trigger ₹{stop_trigger:,.2f} "
-                  f"(0.5% below UC ₹{upper_circuit:,.2f}) — order {stop_order_id}")
+            print(f"[mtf]   stop-loss placed @ trigger ₹{stop_trigger_price:,.2f} "
+                  f"limit ₹{stop_limit_price:,.2f} (0.5% below UC ₹{upper_circuit:,.2f}) "
+                  f"— order {stop_order_id}")
         except Exception as exc:
             print(f"[mtf]   !! SHORT OPENED (cover target live) but stop-loss placement "
                   f"failed for {sym}: {exc} — manual review required.")
@@ -466,6 +473,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
         "cover_target_price":    cover_target_price,
         "stop_order_id":         stop_order_id,
         "stop_trigger_price":    stop_trigger_price,
+        "stop_limit_price":      stop_limit_price,
         "status":                "short_open",
         "entry_timestamp":       _ts(),
     })

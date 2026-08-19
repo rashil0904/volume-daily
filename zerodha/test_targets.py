@@ -413,7 +413,7 @@ def fake_buy_g(symbol, exch, qty, **kw):
     buy_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
     return "COVERTGT-G"
 def fake_place_order_g(symbol, exch, txn, qty, **kw):
-    place_order_calls_g.append((symbol, exch, txn, qty, kw.get("order_type"),
+    place_order_calls_g.append((symbol, exch, txn, qty, kw.get("order_type"), kw.get("price"),
                                 kw.get("trigger_price"), kw.get("product")))
     return "STOPLOSS-G"
 def fake_poll_fill_safe_g(oid, fallback_price, fallback_qty):
@@ -440,13 +440,15 @@ check("(g) cover-target order_type is LIMIT", buy_calls_g[0][3] == "LIMIT")
 check("(g) cover-target price == 190.0 (200 * 0.95)", buy_calls_g[0][4] == 190.0)
 check("(g) cover-target product is MIS", buy_calls_g[0][5] == "MIS")
 check("(g) stop-loss order was placed", len(place_order_calls_g) == 1, str(place_order_calls_g))
-check("(g) stop-loss order_type is SL-M", place_order_calls_g[0][4] == "SL-M")
-check("(g) stop-loss trigger_price == 218.9 (220 * 0.995)", place_order_calls_g[0][5] == 218.9)
-check("(g) stop-loss product is MIS", place_order_calls_g[0][6] == "MIS")
+check("(g) stop-loss order_type is SL (limit, not SL-M)", place_order_calls_g[0][4] == "SL")
+check("(g) stop-loss limit price == 220.0 (== UC)", place_order_calls_g[0][5] == 220.0)
+check("(g) stop-loss trigger_price == 218.9 (220 * 0.995)", place_order_calls_g[0][6] == 218.9)
+check("(g) stop-loss product is MIS", place_order_calls_g[0][7] == "MIS")
 row_g = store_g.positions[0]
 check("(g) row cover_target_order_id == COVERTGT-G", row_g.get("cover_target_order_id") == "COVERTGT-G")
 check("(g) row stop_order_id == STOPLOSS-G", row_g.get("stop_order_id") == "STOPLOSS-G")
 check("(g) row stop_trigger_price == 218.9", row_g.get("stop_trigger_price") == 218.9)
+check("(g) row stop_limit_price == 220.0", row_g.get("stop_limit_price") == 220.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

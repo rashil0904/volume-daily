@@ -462,6 +462,27 @@ def _shorting_skipped_today() -> bool:
         return False
 
 
+def _fetch_upper_circuit(symbol: str) -> float:
+    """On-demand fetch of a single symbol's upper circuit limit via POST
+    /marketfeed/quote, for the UC-based short stop-loss (see _open_short
+    below). Same endpoint/response shape as dhan/live_monitor.py's own
+    _fetch_circuit_limits() -- re-derived here as a single-symbol call since
+    only one symbol's circuit is needed per short, rather than importing
+    live_monitor's batch-chunking machinery. Circuit limits are an
+    exchange-set daily price band, not a live tick value, so a mid-session
+    ad-hoc call returns the same current value a batch call would. Raises if
+    the fetch fails or no circuit data comes back for this symbol."""
+    session, _ = _dhan_session()
+    sid = security_id(symbol)
+    resp = session.post(f"{_DHAN_BASE}/marketfeed/quote",
+                        json={"NSE_EQ": [sid]}, timeout=15)
+    resp.raise_for_status()
+    row = resp.json().get("data", {}).get("NSE_EQ", {}).get(str(sid))
+    if not row or row.get("upper_circuit_limit") is None:
+        raise ValueError(f"[dhan] No circuit data found for {symbol}.")
+    return float(row["upper_circuit_limit"])
+
+
 def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
     exit that just filled at either the 9:25am or 11:59am stage -- see run_trades.py's
@@ -515,13 +536,43 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
         print(f"[dhan]   !! SHORT OPENED but cover target placement failed for {sym}: {exc} "
               f"— manual review required (short is live, unprotected until square-off).")
 
-    # Stop-loss removed for now -- the short runs with only the cover target
-    # until square_off_239's unconditional 2:39pm close. stop_order_id stays
-    # None, which square_off_239's OCO logic already treats correctly (same
-    # state as a circuit-fetch failure used to produce, before this was
-    # removed -- that code path is what this was tested against).
+    # UC-based stop-loss: buy-to-cover if price rises to within 0.5% of the
+    # day's upper circuit. Limit price pinned AT the UC itself (the highest
+    # price legally tradeable that day) rather than a market/SL-M order, so
+    # it sits at the front of the book instead of risking a worse fill once
+    # the stock is already ripping toward the circuit. Same
+    # never-unwind-a-completed-action rule as the cover target above -- a
+    # failed circuit fetch or failed order placement here never touches the
+    # already-live short or cover target.
+    upper_circuit = None
+    try:
+        upper_circuit = _fetch_upper_circuit(sym)
+    except Exception as exc:
+        print(f"[dhan]   !! circuit fetch failed for {sym}: {exc} — skipping stop-loss "
+              f"(short + cover target remain live, unprotected by a stop-loss "
+              f"until manual review).")
+        try:
+            notify.send_circuit_fetch_failed(broker=_BROKER, symbol=sym, error_msg=str(exc),
+                                             dry_run=dry_run)
+        except Exception as exc2:
+            print(f"  [notify] circuit_fetch_failed failed: {exc2}", file=sys.stderr)
+
     stop_order_id      = None
     stop_trigger_price = None
+    stop_limit_price   = None
+    if upper_circuit is not None:
+        try:
+            stop_limit_price   = _tick_round(sym, upper_circuit)
+            stop_trigger_price = _tick_round(sym, upper_circuit * 0.995)
+            stop_order_id = buy(sym, "NSE_EQ", eq, order_type="STOP_LOSS",
+                               price=stop_limit_price, trigger_price=stop_trigger_price,
+                               product="INTRADAY", dry_run=dry_run)
+            print(f"[dhan]   stop-loss placed @ trigger ₹{stop_trigger_price:,.2f} "
+                  f"limit ₹{stop_limit_price:,.2f} (0.5% below UC ₹{upper_circuit:,.2f}) "
+                  f"— order {stop_order_id}")
+        except Exception as exc:
+            print(f"[dhan]   !! SHORT OPENED (cover target live) but stop-loss placement "
+                  f"failed for {sym}: {exc} — manual review required.")
 
     positions = _load_pos()
     positions.append({
@@ -538,6 +589,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) ->
         "cover_target_price":    cover_target_price,
         "stop_order_id":         stop_order_id,
         "stop_trigger_price":    stop_trigger_price,
+        "stop_limit_price":      stop_limit_price,
         "status":                "short_open",
         "entry_timestamp":       _ts(),
     })

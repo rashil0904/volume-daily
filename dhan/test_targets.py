@@ -435,16 +435,15 @@ def fake_available_balance_g():
 
 sell_calls_g = []
 buy_calls_g = []
-place_order_calls_g = []
 def fake_sell_g(symbol, exch, qty, **kw):
     sell_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("trigger_price")))
     return "SHORTOPEN-1"
 def fake_buy_g(symbol, exch, qty, **kw):
-    buy_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
-    return "COVERTGT-1"
-def fake_place_order_g(*a, **kw):
-    place_order_calls_g.append((a, kw))
-    return "SHOULD-NOT-HAPPEN"
+    buy_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"),
+                        kw.get("trigger_price"), kw.get("product")))
+    return "STOPLOSS-1" if kw.get("order_type") == "STOP_LOSS" else "COVERTGT-1"
+def fake_fetch_upper_circuit_g(sym):
+    return 220.0
 
 def fake_poll_fill_safe_g(oid, fallback_price, fallback_qty):
     return 200.0, fallback_qty  # short fills exactly at ltp
@@ -459,23 +458,63 @@ with patch.object(rt, "_load_pos", store_g.load), \
      patch.object(rt, "_available_balance", fake_available_balance_g), \
      patch.object(rt, "sell", fake_sell_g), \
      patch.object(rt, "buy", fake_buy_g), \
-     patch.object(rt, "place_order", fake_place_order_g), \
+     patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_g), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
     rt._open_short("IOTA", 10, "925", dry_run=False)
 
 check("(g) short-open SELL was placed as plain LIMIT, tick-rounded 0.5% below LTP",
       sell_calls_g == [("IOTA", "NSE_EQ", 10, "LIMIT", 199.0, None)], str(sell_calls_g))
-check("(g) cover-target BUY was placed", len(buy_calls_g) == 1, str(buy_calls_g))
+check("(g) cover-target AND stop-loss BUYs were placed", len(buy_calls_g) == 2, str(buy_calls_g))
 check("(g) cover-target order_type is LIMIT", buy_calls_g[0][3] == "LIMIT")
 check("(g) cover-target price == 190.0 (200 * 0.95)", buy_calls_g[0][4] == 190.0)
-check("(g) cover-target product is INTRADAY", buy_calls_g[0][5] == "INTRADAY")
-check("(g) stop-loss removed for now -- place_order() never called", place_order_calls_g == [])
+check("(g) cover-target product is INTRADAY", buy_calls_g[0][6] == "INTRADAY")
+check("(g) stop-loss order_type is STOP_LOSS", buy_calls_g[1][3] == "STOP_LOSS")
+check("(g) stop-loss limit price == 220.0 (== UC)", buy_calls_g[1][4] == 220.0)
+check("(g) stop-loss trigger == 218.9 (UC * 0.995, tick-rounded)", buy_calls_g[1][5] == 218.9)
+check("(g) stop-loss product is INTRADAY", buy_calls_g[1][6] == "INTRADAY")
 check("(g) exactly one position row saved", len(store_g.positions) == 1)
 row_g = store_g.positions[0]
 check("(g) row cover_target_order_id == COVERTGT-1", row_g.get("cover_target_order_id") == "COVERTGT-1")
 check("(g) row cover_target_price == 190.0", row_g.get("cover_target_price") == 190.0)
-check("(g) row stop_order_id is None (stop-loss removed)", row_g.get("stop_order_id") is None)
+check("(g) row stop_order_id == STOPLOSS-1", row_g.get("stop_order_id") == "STOPLOSS-1")
+check("(g) row stop_trigger_price == 218.9", row_g.get("stop_trigger_price") == 218.9)
+check("(g) row stop_limit_price == 220.0", row_g.get("stop_limit_price") == 220.0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (g3) — _open_short: circuit fetch fails -> stop-loss skipped, short+cover still placed\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+buy_calls_g3 = []
+def fake_buy_g3(symbol, exch, qty, **kw):
+    buy_calls_g3.append((symbol, exch, qty, kw.get("order_type")))
+    return "COVERTGT-1"
+def fake_fetch_upper_circuit_g3(sym):
+    raise ValueError("no circuit data")
+
+store_g3 = FakeStore([])
+
+with patch.object(rt, "_load_pos", store_g3.load), \
+     patch.object(rt, "_save_pos", store_g3.save), \
+     patch.object(rt, "_shorting_skipped_today", lambda: False), \
+     patch.object(rt, "get_ltp", fake_get_ltp_g), \
+     patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check_g), \
+     patch.object(rt, "_available_balance", fake_available_balance_g), \
+     patch.object(rt, "sell", fake_sell_g), \
+     patch.object(rt, "buy", fake_buy_g3), \
+     patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_g3), \
+     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_g), \
+     patch.object(rt.notify, "send_short_open", MagicMock()), \
+     patch.object(rt.notify, "send_circuit_fetch_failed", MagicMock()):
+    rt._open_short("KAPPA", 10, "925", dry_run=False)
+
+check("(g3) only the cover-target BUY fired -- no stop-loss attempt",
+      buy_calls_g3 == [("KAPPA", "NSE_EQ", 10, "LIMIT")], str(buy_calls_g3))
+row_g3 = store_g3.positions[0]
+check("(g3) row stop_order_id is None (circuit fetch failed)", row_g3.get("stop_order_id") is None)
+check("(g3) row stop_trigger_price is None", row_g3.get("stop_trigger_price") is None)
+check("(g3) row cover_target_order_id still recorded", row_g3.get("cover_target_order_id") == "COVERTGT-1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
