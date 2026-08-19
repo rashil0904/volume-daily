@@ -8,10 +8,17 @@
     "actual_fill_price": 463.7134,
     "actual_fill_quantity": 539,
     "entry_order_id": "321260818763709",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-18T15:21:05.918127+05:30",
     "product": "MTF",
-    "pushed_open_to_sheets": true
+    "pushed_open_to_sheets": true,
+    "shares_exited_925": 539,
+    "exit_price_925": 466.7763,
+    "exit_order_id_925": "34126081913009",
+    "exit_timestamp_925": "2026-08-19T10:06:50.623472+05:30",
+    "realized_return_pct": 0.6605,
+    "realized_pnl": 1650.92,
+    "exit_note": "9:25 no-data fallback sold 269 @ ₹466.2611; remainder 270 manually sold @ ₹467.2896 (order 221260819155809)"
   },
   {
     "broker": "dhan",
@@ -22,10 +29,17 @@
     "actual_fill_price": 611.9806,
     "actual_fill_quantity": 204,
     "entry_order_id": "221260818755709",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-18T15:21:09.534551+05:30",
     "product": "CNC",
-    "pushed_open_to_sheets": true
+    "pushed_open_to_sheets": true,
+    "shares_exited_925": 204,
+    "exit_price_925": 625.0213,
+    "exit_order_id_925": "23126081915409",
+    "exit_timestamp_925": "2026-08-19T10:06:50.623514+05:30",
+    "realized_return_pct": 2.1309,
+    "realized_pnl": 2660.3,
+    "exit_note": "9:25 no-data fallback sold 102 @ ₹624.6000; remainder 102 manually sold @ ₹625.4426 (order 241260819164809)"
   },
   {
     "broker": "dhan",
@@ -36,10 +50,17 @@
     "actual_fill_price": 650.9999,
     "actual_fill_quantity": 384,
     "entry_order_id": "321260818763909",
-    "status": "open",
+    "status": "partial_exit_925_nodata",
     "entry_timestamp": "2026-08-18T15:21:12.760649+05:30",
     "product": "MTF",
-    "pushed_open_to_sheets": true
+    "pushed_open_to_sheets": true,
+    "target_order_id": "32126081998909",
+    "target_price": 761.65,
+    "shares_exited_925": 192,
+    "shares_remaining": 192,
+    "exit_price_925": 656.5651,
+    "exit_order_id_925": "32126081998409",
+    "exit_timestamp_925": "2026-08-19T09:25:11.408462+05:30"
   },
   {
     "broker": "dhan",
@@ -64,10 +85,17 @@
     "actual_fill_price": 193.9,
     "actual_fill_quantity": 1287,
     "entry_order_id": "221260818756009",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-18T15:21:19.163061+05:30",
     "product": "MTF",
-    "pushed_open_to_sheets": true
+    "pushed_open_to_sheets": true,
+    "shares_exited_925": 1287,
+    "exit_price_925": 195.9547,
+    "exit_order_id_925": "34126081913309",
+    "exit_timestamp_925": "2026-08-19T10:06:50.623531+05:30",
+    "realized_return_pct": 1.0596,
+    "realized_pnl": 2644.35,
+    "exit_note": "9:25 no-data fallback sold 643 @ ₹195.2740; remainder 644 manually sold @ ₹196.6343 (order 33126081991909)"
   },
   {
     "broker": "dhan",

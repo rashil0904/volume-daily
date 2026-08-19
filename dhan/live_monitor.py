@@ -283,6 +283,8 @@ class LiveMonitor:
         self._lock    = threading.Lock()
         self._connect_count = 0   # 0 -> first connect fires send_monitor_started;
                                   # every call after that is a reconnect
+        self._last_connect_at = None  # for _throttle_reconnect_ below
+        self._reconnect_backoff = 2   # seconds; doubles on rapid reconnects, resets on a stable one
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -348,16 +350,45 @@ class LiveMonitor:
             if "qualified"    in fired: self._fire_qualified(state)
             if "near_circuit" in fired: self._fire_near_circuit(state)
 
+    # dhanhq's own internal reconnect loop (MarketFeed._run_async) retries on
+    # a flat 1-second sleep with NO backoff -- fine for a single transient
+    # blip, but if Dhan's WS server keeps killing the connection right back
+    # (seen live 2026-08-19: ~1-second-apart reconnects for several minutes
+    # straight), that hammers Dhan hard enough that THEY start rejecting new
+    # connections outright with HTTP 429, which then just keeps the same
+    # 1-second retry loop failing forever. There's no reconnect-delay knob on
+    # MarketFeed itself, and patching the installed package isn't an option
+    # -- so this blocks synchronously (time.sleep, safe here since dhanhq
+    # calls on_connect as a plain sync function from inside its own asyncio
+    # loop) with escalating backoff whenever reconnects arrive suspiciously
+    # fast, which is the only lever this script has over the library's retry
+    # cadence. Backoff resets once a connection has actually held for a
+    # while, so a single blip still recovers in ~2s like before.
+    def _throttle_reconnect_(self) -> None:
+        now = time.monotonic()
+        if self._last_connect_at is not None:
+            held_for = now - self._last_connect_at
+            if held_for < 30:
+                print(f"[WebSocket] Previous connection lasted only {held_for:.1f}s — "
+                      f"backing off {self._reconnect_backoff}s before letting dhanhq retry again.")
+                time.sleep(self._reconnect_backoff)
+                self._reconnect_backoff = min(self._reconnect_backoff * 2, 60)
+            else:
+                self._reconnect_backoff = 2
+        self._last_connect_at = time.monotonic()
+
     def _on_connect(self, feed) -> None:
         n = len(self._all_sids)
         self._connect_count += 1
         if self._connect_count == 1:
             print(f"[WebSocket] Connected — subscribed {n} securityIds in Quote mode…")
+            self._last_connect_at = time.monotonic()
             try:
                 notify.send_monitor_started(n)
             except Exception:
                 pass
         else:
+            self._throttle_reconnect_()
             print(f"[WebSocket] Reconnected (attempt {self._connect_count})…")
             try:
                 notify.send_monitor_reconnect(attempt=self._connect_count)

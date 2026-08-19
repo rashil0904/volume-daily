@@ -426,12 +426,32 @@ def _broker_short_qty(symbol: str) -> int:
     return 0
 
 
+_SKIP_SHORTING_FILE = _RESULTS_DIR / ".skip_shorting.txt"
+
+
+def _shorting_skipped_today() -> bool:
+    """Self-expiring kill switch for the mirrored-short add-on -- the file
+    holds a single date, and only skips shorting on THAT date, so there's
+    nothing to remember to clean up before tomorrow. See _open_short."""
+    if not _SKIP_SHORTING_FILE.exists():
+        return False
+    try:
+        return _SKIP_SHORTING_FILE.read_text().strip() == date.today().isoformat()
+    except Exception:
+        return False
+
+
 def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
     exit that just filled at either the 9:25am or 11:59am stage -- see run_trades.py's
     module docstring for the shorting add-on. Skips (never raises) on any
     margin-check/balance/fill failure: the long exit that triggered this has already
     happened and is never reversed by a failed short."""
+    if _shorting_skipped_today():
+        print(f"[dhan]   SHORT SKIP — {sym}: shorting disabled for today "
+              f"(see {_SKIP_SHORTING_FILE.name}).")
+        return
+
     try:
         ltp = get_ltp(sym)
     except Exception:
@@ -748,7 +768,6 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
-    _push_to_sheets(dry_run)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -816,24 +835,6 @@ def place_targets_915(dry_run: bool = False) -> None:
 # EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_925_mtf / force_exit_1159_mtf
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _push_to_sheets(dry_run: bool) -> None:
-    """Fires the Google Sheets dashboard push at the end of every checkpoint that
-    can close a position (check_exit_925, force_exit_1159, square_off_239). Local
-    import avoids a circular import -- sheets/push_to_sheets.py itself imports
-    _load_pos/_save_pos from this module. Never runs under --dry-run: positions_dhan.json
-    isn't actually mutated in dry-run mode, so push_to_sheets.py's own _save_pos call
-    would otherwise write real "pushed_to_sheets" state despite --dry-run. A failure
-    here must never propagate -- this is a pure side-effect, not a dependency of the
-    trading run."""
-    if dry_run:
-        return
-    try:
-        import sheets.push_to_sheets as _sheets
-        _sheets.main()
-    except Exception as exc:
-        print(f"  [sheets] push_to_sheets failed: {exc}", file=sys.stderr)
-
-
 def check_exit_925(dry_run: bool = False) -> None:
     positions = _load_pos()
     open_ps   = _open_pos(positions)
@@ -845,7 +846,6 @@ def check_exit_925(dry_run: bool = False) -> None:
 
     if not open_ps:
         print("[dhan] No open positions — nothing to check.")
-        _push_to_sheets(dry_run)
         return
 
     # Collected here and opened in one pass AFTER every exit below has been
@@ -1030,7 +1030,6 @@ def check_exit_925(dry_run: bool = False) -> None:
             _open_short(sym, eq, "925", dry_run=dry_run)
 
     print(f"\n[dhan] Exit check 9:25am complete.")
-    _push_to_sheets(dry_run)
 
 
 def force_exit_1159(dry_run: bool = False) -> None:
@@ -1049,7 +1048,6 @@ def force_exit_1159(dry_run: bool = False) -> None:
         except Exception as exc:
             print(f"  [notify] nothing_open_at_1159 failed: {exc}", file=sys.stderr)
         _daily_summary(positions, 0, dry_run)
-        _push_to_sheets(dry_run)
         return
 
     n_force = 0
@@ -1180,7 +1178,6 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")
-    _push_to_sheets(dry_run)
 
 
 def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
@@ -1222,7 +1219,6 @@ def square_off_239(dry_run: bool = False) -> None:
 
     if not open_shorts:
         print("[dhan] No open shorts — nothing to square off.")
-        _push_to_sheets(dry_run)
         return
 
     n_closed = 0
@@ -1396,7 +1392,6 @@ def square_off_239(dry_run: bool = False) -> None:
         n_closed += 1
 
     print(f"\n[dhan] Short square-off complete. Closed: {n_closed}.")
-    _push_to_sheets(dry_run)
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, generates a trade list, and executes a full 3-stage live trading cycle via Zerodha (CNC delivery) — entry, next-morning exit check, and a forced late-morning exit. A separate, standalone script supports MTF (leveraged) entries. Alongside the trading flow, a live `KiteTicker` monitor watches the whole tracked universe intraday and pushes Telegram alerts on qualifying volume/VWAP breakouts and near-circuit moves. Upstox is used for market data only — no trading happens through Upstox.
 
-A second, **completely independent** live trading pipeline runs the same signals through **Dhan** (`dhan/`) — its own capital pool, its own positions file, its own broker-specific quirks (LIMIT entries, 17% profit targets, mirrored intraday shorts with a UC-based stop-loss) — plus a live Google Sheets dashboard fed from its closed trades. See [Dhan Pipeline](#dhan-pipeline-independent-parallel-broker) and [Google Sheets Dashboard](#google-sheets-dashboard-dhan) below.
+A second, **completely independent** live trading pipeline runs the same signals through **Dhan** (`dhan/`) — its own capital pool, its own positions file, its own broker-specific quirks (LIMIT entries, 17% profit targets, mirrored intraday shorts with a UC-based stop-loss). See [Dhan Pipeline](#dhan-pipeline-independent-parallel-broker) below.
 
 ---
 
@@ -20,7 +20,6 @@ A second, **completely independent** live trading pipeline runs the same signals
 - [MTF (Leveraged) Entries — Standalone Script](#mtf-leveraged-entries--standalone-script)
 - [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts)
 - [Dhan Pipeline (Independent, Parallel Broker)](#dhan-pipeline-independent-parallel-broker)
-- [Google Sheets Dashboard (Dhan)](#google-sheets-dashboard-dhan)
 - [Repository Structure](#repository-structure)
 - [First-Time VM Setup](#first-time-vm-setup)
 - [Configuration](#configuration)
@@ -423,45 +422,6 @@ Standalone, fully mocked (no pytest, no real network/file I/O) — covers the pr
 
 ---
 
-## Google Sheets Dashboard (Dhan)
-
-A live Google Sheets dashboard fed from `results/positions_dhan.json`'s **closed** Dhan trades — deliberately built without any Cloud Console project, service account, or OAuth client. It's a Google Apps Script **Web App** bound directly to the target Sheet: `sheets/apps_script/Code.gs` is pasted once into the Sheet's own Extensions → Apps Script editor and deployed from there.
-
-First day of data is **2026-08-18** — nothing before that date is ever pushed, even if `positions_dhan.json` has earlier rows.
-
-### `sheets/push_to_sheets.py`
-
-Filters `positions_dhan.json` for newly-closed trades (`entry_date >= 2026-08-18`, status `exited_925`/`exited_1159`/`short_closed`, not yet flagged `pushed_to_sheets: true`), derives a human-readable **Exit Reason** per trade by comparing the row's own recorded order IDs against its target/cover/stop order IDs (target hit / profit exit / no-data partial / force exit / cover target hit / stop-loss hit / square-off — never inferred from timing), and POSTs the batch (one call per run, not one per row) to the Apps Script webhook. On success, marks each pushed row `pushed_to_sheets: true` so re-runs never duplicate a row.
-
-Fired **inline**, not via cron — at the end of every return path in `check_exit_925`, `force_exit_1159`, and `square_off_239` in `dhan/run_trades.py` (skipped entirely under `--dry-run`). Wrapped in its own `try/except`: a Sheets/webhook failure is logged and never affects the trading run itself, and re-fires the next checkpoint if a previous push failed.
-
-### `sheets/apps_script/Code.gs`
-
-- **`doPost(e)`** — the live webhook. Verifies a shared secret, appends batched rows to the **Trade Log** tab.
-- **`setupDashboard()`** — one-time, run manually from the Apps Script editor. Builds all 5 tabs off Trade Log:
-  - **Trade Log** — 3-color scale (red/white/green) on Return %/P&L, a distinct background tag color + emoji per Exit Reason.
-  - **Daily Summary** — one row per trading day, every column a self-updating `SUMIFS`/`COUNTIFS` formula off Trade Log; native charts for the equity curve, daily P&L (green/red by sign), and rolling 20-trade win rate.
-  - **Exit-Reason Breakdown** — win rate / avg return / P&L contribution per exit reason, donut + bar charts.
-  - **Symbol Stats** — per-symbol win rate, avg return, best/worst trade, sortable.
-  - **Today** — a dark "command center" tab: KPI tiles (today's P&L, win rates, target/stop-loss hit rates, current streak), a sparkline of the last 20 days' P&L, text-based progress bars, a "best trade this week" trophy card, a hot/cold win-rate regime badge, and a monthly calendar heatmap.
-
-### Setup (One-Time)
-
-1. Paste `sheets/apps_script/Code.gs` into the target Sheet's Apps Script editor, set `SHARED_SECRET` to a random string, deploy as a **Web App** (Execute as: Me, Who has access: Anyone).
-2. Add the deployed `/exec` URL and the same secret to `pipeline/.env` as `SHEETS_WEBHOOK_URL` / `SHEETS_WEBHOOK_SECRET` (see [Configuration](#configuration)).
-3. Run `setupDashboard()` once from the Apps Script editor (Run menu) — approves the one-time authorization prompt, builds every tab.
-4. Optional: run `installMonthlyCalendarTrigger()` once so the Today tab's calendar heatmap reshapes itself automatically on the 1st of each month.
-
-### Testing
-
-```bash
-python sheets/test_push_to_sheets.py
-```
-
-Mocked (no real network calls) — covers Exit Reason derivation for every branch, the `pushed_to_sheets` idempotency flag, the 2026-08-18 cutoff, single-batch posting, and a clean non-raising failure on a simulated webhook/network error.
-
----
-
 ## Repository Structure
 
 ```
@@ -496,12 +456,6 @@ volume-daily/
 │   ├── run_trades.py           # Entry / 17% targets / 925 & 1159 exits / mirrored shorts / 239 square-off
 │   ├── live_monitor.py         # MarketFeed WebSocket monitor, 9:13 AM–3:40 PM — Telegram-only
 │   └── test_targets.py         # Self-test — profit targets, OCO short stop-loss, all exit-reason branches
-│
-├── sheets/
-│   ├── push_to_sheets.py       # Pushes newly-closed Dhan trades to the Sheets webhook (fired inline, not cron)
-│   ├── test_push_to_sheets.py  # Self-test — exit-reason derivation, idempotency, batching, failure handling
-│   └── apps_script/
-│       └── Code.gs             # Pasted into the Sheet's own Apps Script editor — webhook + setupDashboard()
 │
 ├── scripts/
 │   ├── run_pipeline.sh         # Cron entry point — calls pipeline/main.py
@@ -590,8 +544,6 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 | `ZERODHA_API_SECRET` | Zerodha Kite API secret |
 | `ZERODHA_REDIRECT_URI` | `https://kite.trade/` |
 | `DHAN_CLIENT_ID` | Dhan client ID (from web.dhan.co) — the access token itself is *not* stored here, see [Dhan Pipeline auth](#auth-manual-daily-token) |
-| `SHEETS_WEBHOOK_URL` | The deployed Apps Script Web App `/exec` URL — see [Google Sheets Dashboard](#google-sheets-dashboard-dhan) |
-| `SHEETS_WEBHOOK_SECRET` | Shared secret matching `SHARED_SECRET` in `sheets/apps_script/Code.gs` |
 
 > **Security**: `pipeline/.env` is in `.gitignore`. Never commit credentials. Use `.env.example` as the key-name reference only.
 
@@ -727,10 +679,6 @@ python dhan/run_trades.py --square-off-239
 
 # Self-test (mocked, no real orders)
 python dhan/test_targets.py
-
-# Push newly-closed trades to the Sheets dashboard manually (normally fires inline, see above)
-python sheets/push_to_sheets.py
-python sheets/test_push_to_sheets.py
 ```
 
 ### Trade Book
@@ -833,8 +781,6 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 | 3:21 PM | `21 15 * * 1-5` | `dhan/run_trades.py --entry` |
 | 3:40 PM | `40 15 * * 1-5` | `pkill -f 'dhan\.live_monitor'` |
 
-`sheets/push_to_sheets.py` is **not** its own cron line — it fires inline at the end of the 9:25/11:59/2:39 Dhan checkpoints above (see [Google Sheets Dashboard](#google-sheets-dashboard-dhan)), so Sheets-push timing can never affect the trading script's own execution.
-
 ---
 
-*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution, CNC + standalone MTF, live monitoring) · Dhan (independent parallel execution, live monitoring, Google Sheets dashboard) · Telegram alerts throughout · Dashboard published as a Claude Artifact*
+*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Zerodha Kite Connect (execution, CNC + standalone MTF, live monitoring) · Dhan (independent parallel execution, live monitoring) · Telegram alerts throughout · Dashboard published as a Claude Artifact*

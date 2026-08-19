@@ -33,12 +33,6 @@ for _m in ("data_loader",):
 
 import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 
-# check_exit_925/force_exit_1159/square_off_239 each fire a real Google Sheets
-# push at the end (see dhan/run_trades.py's _push_to_sheets). Neutralized globally
-# for the whole test run -- no scenario here asserts on it, and leaving it live
-# would make this "mocked, zero real I/O" suite reach out to the actual webhook.
-patch.object(rt, "_push_to_sheets", lambda dry_run: None).start()
-
 # _tick_round() now looks up each symbol's REAL tick size via dhan.instruments
 # .tick_size() (see run_trades.py -- tick size varies per symbol, e.g. ₹0.10 for
 # TVSSRICHAK vs ₹0.01 for CAMLINFINE, confirmed live 2026-08-18). None of this
@@ -459,6 +453,7 @@ store_g = FakeStore([])
 
 with patch.object(rt, "_load_pos", store_g.load), \
      patch.object(rt, "_save_pos", store_g.save), \
+     patch.object(rt, "_shorting_skipped_today", lambda: False), \
      patch.object(rt, "get_ltp", fake_get_ltp_g), \
      patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check_g), \
      patch.object(rt, "_available_balance", fake_available_balance_g), \
@@ -481,6 +476,28 @@ row_g = store_g.positions[0]
 check("(g) row cover_target_order_id == COVERTGT-1", row_g.get("cover_target_order_id") == "COVERTGT-1")
 check("(g) row cover_target_price == 190.0", row_g.get("cover_target_price") == 190.0)
 check("(g) row stop_order_id is None (stop-loss removed)", row_g.get("stop_order_id") is None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (g2) — _open_short skips entirely when _shorting_skipped_today() is True\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+store_g2 = FakeStore([])
+
+def fail_if_called_g2(*a, **kw):
+    raise AssertionError("should never be called -- shorting is skipped for today")
+
+with patch.object(rt, "_load_pos", store_g2.load), \
+     patch.object(rt, "_save_pos", store_g2.save), \
+     patch.object(rt, "_shorting_skipped_today", lambda: True), \
+     patch.object(rt, "get_ltp", fail_if_called_g2), \
+     patch.object(rt, "_intraday_margin_check", fail_if_called_g2), \
+     patch.object(rt, "sell", fail_if_called_g2), \
+     patch.object(rt, "buy", fail_if_called_g2):
+    rt._open_short("IOTA", 10, "925", dry_run=False)
+
+check("(g2) no position row saved -- _open_short returned immediately",
+      store_g2.positions == [], str(store_g2.positions))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
