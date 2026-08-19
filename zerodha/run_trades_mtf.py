@@ -833,7 +833,11 @@ def check_exit_925_mtf(dry_run: bool = False) -> None:
                                            exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
-                to_short.append((sym, eq))
+                # No mirrored short here -- a stock that just ran +17% to hit its
+                # resting target is exactly the one most likely to keep running
+                # into an upper circuit, where a short can't be covered (no
+                # sellers at UC). Only the no-data-fallback and forced/live-P&L
+                # sell branches below still open a mirrored short.
                 continue
             # Not traded -- falls through into the branches below, each of which
             # cancels this resting target before it does anything of its own.
@@ -1037,7 +1041,7 @@ def force_exit_1159_mtf(dry_run: bool = False) -> None:
                                            exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
-                to_short.append((sym, eq))
+                # No mirrored short here -- see the matching comment in check_exit_925_mtf.
                 n_force += 1
                 continue
             try:

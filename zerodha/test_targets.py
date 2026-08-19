@@ -164,8 +164,8 @@ row = store.positions[0]
 check("(b) position marked exited_925", row["status"] == "exited_925")
 check("(b) exit_price_925 == target's average_price", row["exit_price_925"] == 117.0)
 check("(b) realized_pnl == (117-100)*10 == 170.0", row["realized_pnl"] == 170.0)
-check("(b) mirrored short opened via to_short batching",
-      open_short_calls == [("GAMMA", 10, "925")], str(open_short_calls))
+check("(b) NO mirrored short on a target-hit exit (UC risk)",
+      open_short_calls == [], str(open_short_calls))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ with patch.object(rt, "_load_pos", store1.load), \
 check("(f1) sell() never called when target already COMPLETE", sell_calls_f1 == [])
 row1 = store1.positions[0]
 check("(f1) status exited_1159", row1["status"] == "exited_1159")
-check("(f1) mirrored short opened", open_short_calls_f1 == [("ETA", 10, "1159")])
+check("(f1) NO mirrored short on a target-hit exit (UC risk)", open_short_calls_f1 == [])
 
 pos2 = make_long(symbol="THETA", actual_fill_price=100.0, actual_fill_quantity=10,
                   target_order_id="TGT-THETA", target_price=117.0, status="open")
