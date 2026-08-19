@@ -29,6 +29,19 @@ from zerodha.auth import BASE_URL, get_session
 
 # ── Core order functions ───────────────────────────────────────────────────────
 
+def _disclosed_qty(quantity: int, order_type: str, disclosed_pct: float) -> int:
+    """NSE/BSE's Disclosed Quantity (DQ) feature -- only the returned amount
+    shows on the public order book, the rest fills silently as it's matched.
+    Kite only accepts DQ for regular-variety equity LIMIT orders, and it must
+    be strictly less than the order quantity (0 disables it, which is also
+    what a MARKET/SL/SL-M order type or disclosed_pct<=0 falls back to
+    here)."""
+    if order_type != "LIMIT" or disclosed_pct <= 0 or quantity <= 1:
+        return 0
+    dq = int(round(quantity * disclosed_pct))
+    return max(0, min(dq, quantity - 1))
+
+
 def place_order(
     symbol: str,
     exchange: str,
@@ -51,6 +64,7 @@ def place_order(
                                      # Fixed at 0.75% instead so the collar stays predictable and tighter
                                      # than what just failed.
     tag: str         = "",          # optional identifier (max 20 chars)
+    disclosed_pct: float = 0.20,    # fraction of quantity shown on the book (LIMIT only); rest hidden
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
     """
@@ -72,6 +86,8 @@ def place_order(
     if order_type in ("SL", "SL-M") and not trigger_price:
         raise ValueError("trigger_price is required for SL/SL-M orders")
 
+    dq = _disclosed_qty(quantity, order_type, disclosed_pct)
+
     payload = {
         "tradingsymbol":    symbol.upper(),
         "exchange":         exchange,
@@ -85,6 +101,8 @@ def place_order(
     }
     if order_type in ("MARKET", "SL-M"):
         payload["market_protection"] = market_protection
+    if dq:
+        payload["disclosed_quantity"] = dq
     if tag:
         payload["tag"] = tag[:20]
 
@@ -101,7 +119,8 @@ def place_order(
 
     print(f"[trade] Placing {transaction_type} {quantity}× {symbol} @ {order_type}"
           + (f" ₹{price}" if price else "")
-          + f"  [{exchange} · {product} · {variety}]")
+          + f"  [{exchange} · {product} · {variety}]"
+          + (f"  (disclosed {dq}/{quantity})" if dq else ""))
 
     resp = session.post(f"{BASE_URL}/orders/{variety}", data=payload, timeout=15)
 

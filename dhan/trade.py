@@ -34,6 +34,19 @@ from dhan.instruments import security_id
 
 # ── Core order functions ───────────────────────────────────────────────────────
 
+def _disclosed_qty(quantity: int, order_type: str, disclosed_pct: float) -> int:
+    """NSE's Disclosed Quantity (DQ) feature -- only the returned amount shows
+    on the public order book, the rest fills silently as it's matched.
+    Exchange-side rules (both NSE and BSE cash segment): only valid for LIMIT
+    orders, and DQ must be strictly less than the order quantity (0 disables
+    it, which is also what a MARKET/STOP_LOSS* order type or disclosed_pct<=0
+    falls back to here)."""
+    if order_type != "LIMIT" or disclosed_pct <= 0 or quantity <= 1:
+        return 0
+    dq = int(round(quantity * disclosed_pct))
+    return max(0, min(dq, quantity - 1))
+
+
 def place_order(
     symbol: str,
     exchange_segment: str,
@@ -45,6 +58,7 @@ def place_order(
     product: str     = "CNC",       # CNC | MTF | INTRADAY
     validity: str    = "DAY",
     tag: str         = "",          # correlationId, max 30 chars
+    disclosed_pct: float = 0.20,    # fraction of quantity shown on the book (LIMIT only); rest hidden
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
     """
@@ -67,6 +81,7 @@ def place_order(
         raise ValueError("trigger_price is required for STOP_LOSS/STOP_LOSS_MARKET orders")
 
     sid = security_id(symbol)
+    dq  = _disclosed_qty(quantity, order_type, disclosed_pct)
 
     session, client_id = get_session()
 
@@ -79,6 +94,7 @@ def place_order(
         "validity":         validity,
         "securityId":       sid,
         "quantity":         quantity,
+        "disclosedQuantity": dq,
         "price":            price,
         "triggerPrice":     trigger_price,
     }
@@ -96,7 +112,8 @@ def place_order(
 
     print(f"[trade] Placing {transaction_type} {quantity}× {symbol} (securityId {sid}) @ {order_type}"
           + (f" ₹{price}" if price else "")
-          + f"  [{exchange_segment} · {product}]")
+          + f"  [{exchange_segment} · {product}]"
+          + (f"  (disclosed {dq}/{quantity})" if dq else ""))
 
     resp = session.post(f"{BASE_URL}/orders", json=payload, timeout=15)
 
