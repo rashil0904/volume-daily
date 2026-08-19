@@ -441,12 +441,16 @@ def fake_available_balance_g():
 
 sell_calls_g = []
 buy_calls_g = []
+place_order_calls_g = []
 def fake_sell_g(symbol, exch, qty, **kw):
-    sell_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price")))
+    sell_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("trigger_price")))
     return "SHORTOPEN-1"
 def fake_buy_g(symbol, exch, qty, **kw):
     buy_calls_g.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
     return "COVERTGT-1"
+def fake_place_order_g(*a, **kw):
+    place_order_calls_g.append((a, kw))
+    return "SHOULD-NOT-HAPPEN"
 
 def fake_poll_fill_safe_g(oid, fallback_price, fallback_qty):
     return 200.0, fallback_qty  # short fills exactly at ltp
@@ -460,20 +464,23 @@ with patch.object(rt, "_load_pos", store_g.load), \
      patch.object(rt, "_available_balance", fake_available_balance_g), \
      patch.object(rt, "sell", fake_sell_g), \
      patch.object(rt, "buy", fake_buy_g), \
+     patch.object(rt, "place_order", fake_place_order_g), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
     rt._open_short("IOTA", 10, "925", dry_run=False)
 
-check("(g) short SELL was placed as LIMIT, tick-rounded 0.5% below LTP",
-      sell_calls_g == [("IOTA", "NSE_EQ", 10, "LIMIT", 199.0)], str(sell_calls_g))
+check("(g) short-open SELL was placed as plain LIMIT, tick-rounded 0.5% below LTP",
+      sell_calls_g == [("IOTA", "NSE_EQ", 10, "LIMIT", 199.0, None)], str(sell_calls_g))
 check("(g) cover-target BUY was placed", len(buy_calls_g) == 1, str(buy_calls_g))
 check("(g) cover-target order_type is LIMIT", buy_calls_g[0][3] == "LIMIT")
 check("(g) cover-target price == 190.0 (200 * 0.95)", buy_calls_g[0][4] == 190.0)
 check("(g) cover-target product is INTRADAY", buy_calls_g[0][5] == "INTRADAY")
+check("(g) stop-loss removed for now -- place_order() never called", place_order_calls_g == [])
 check("(g) exactly one position row saved", len(store_g.positions) == 1)
 row_g = store_g.positions[0]
 check("(g) row cover_target_order_id == COVERTGT-1", row_g.get("cover_target_order_id") == "COVERTGT-1")
 check("(g) row cover_target_price == 190.0", row_g.get("cover_target_price") == 190.0)
+check("(g) row stop_order_id is None (stop-loss removed)", row_g.get("stop_order_id") is None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,100 +616,7 @@ check("(i-239) order_status raise -> buy() never called, position skipped", buy_
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss a) — _open_short places BOTH cover_target and stop-loss\n")
-# ─────────────────────────────────────────────────────────────────────────────
-
-def fake_fetch_upper_circuit_sla(sym):
-    return 220.0
-
-sell_calls_sla = []
-buy_calls_sla = []
-place_order_calls_sla = []
-def fake_sell_sla(symbol, exch, qty, **kw):
-    sell_calls_sla.append((symbol, exch, qty, kw.get("order_type")))
-    return "SHORTOPEN-SLA"
-def fake_buy_sla(symbol, exch, qty, **kw):
-    buy_calls_sla.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
-    return "COVERTGT-SLA"
-def fake_place_order_sla(symbol, exch, txn, qty, **kw):
-    place_order_calls_sla.append((symbol, exch, txn, qty, kw.get("order_type"),
-                                  kw.get("trigger_price"), kw.get("product")))
-    return "STOPLOSS-SLA"
-def fake_poll_fill_safe_sla(oid, fallback_price, fallback_qty):
-    return 200.0, fallback_qty
-
-store_sla = FakeStore([])
-
-with patch.object(rt, "_load_pos", store_sla.load), \
-     patch.object(rt, "_save_pos", store_sla.save), \
-     patch.object(rt, "get_ltp", lambda sym: 200.0), \
-     patch.object(rt, "_intraday_margin_check", lambda sym, qty, price: {"leverage": 5.0, "margin_required": 100.0}), \
-     patch.object(rt, "_available_balance", lambda: 100000.0), \
-     patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_sla), \
-     patch.object(rt, "sell", fake_sell_sla), \
-     patch.object(rt, "buy", fake_buy_sla), \
-     patch.object(rt, "place_order", fake_place_order_sla), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sla), \
-     patch.object(rt.notify, "send_short_open", MagicMock()):
-    rt._open_short("OMEGA", 10, "925", dry_run=False)
-
-check("(sl-a) cover-target BUY was placed", len(buy_calls_sla) == 1)
-check("(sl-a) stop-loss STOP_LOSS_MARKET order was placed",
-      len(place_order_calls_sla) == 1, str(place_order_calls_sla))
-check("(sl-a) stop-loss order_type is STOP_LOSS_MARKET", place_order_calls_sla[0][4] == "STOP_LOSS_MARKET")
-check("(sl-a) stop-loss trigger_price == 218.9 (220 * 0.995)",
-      place_order_calls_sla[0][5] == 218.9, str(place_order_calls_sla))
-check("(sl-a) stop-loss product is INTRADAY", place_order_calls_sla[0][6] == "INTRADAY")
-row_sla = store_sla.positions[0]
-check("(sl-a) row cover_target_order_id saved", row_sla.get("cover_target_order_id") == "COVERTGT-SLA")
-check("(sl-a) row stop_order_id saved", row_sla.get("stop_order_id") == "STOPLOSS-SLA")
-check("(sl-a) row stop_trigger_price saved", row_sla.get("stop_trigger_price") == 218.9)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss b) — circuit fetch fails -> stop-loss skipped, short+cover still placed\n")
-# ─────────────────────────────────────────────────────────────────────────────
-
-def fake_fetch_upper_circuit_slb(sym):
-    raise ConnectionError("circuit fetch blip")
-
-place_order_calls_slb = []
-def fake_place_order_slb(*a, **kw):
-    place_order_calls_slb.append((a, kw))
-    return "SHOULD-NOT-HAPPEN"
-
-buy_calls_slb = []
-def fake_buy_slb(symbol, exch, qty, **kw):
-    buy_calls_slb.append((symbol, exch, qty, kw.get("order_type")))
-    return "COVERTGT-SLB"
-
-store_slb = FakeStore([])
-
-with patch.object(rt, "_load_pos", store_slb.load), \
-     patch.object(rt, "_save_pos", store_slb.save), \
-     patch.object(rt, "get_ltp", lambda sym: 200.0), \
-     patch.object(rt, "_intraday_margin_check", lambda sym, qty, price: {"leverage": 5.0, "margin_required": 100.0}), \
-     patch.object(rt, "_available_balance", lambda: 100000.0), \
-     patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_slb), \
-     patch.object(rt, "sell", lambda symbol, exch, qty, **kw: "SHORTOPEN-SLB"), \
-     patch.object(rt, "buy", fake_buy_slb), \
-     patch.object(rt, "place_order", fake_place_order_slb), \
-     patch.object(rt, "_poll_fill_safe", lambda oid, fp, fq: (200.0, fq)), \
-     patch.object(rt.notify, "send_short_open", MagicMock()), \
-     patch.object(rt.notify, "send_circuit_fetch_failed", MagicMock()) as mock_cff:
-    rt._open_short("PSI", 10, "925", dry_run=False)
-
-check("(sl-b) cover-target still placed despite circuit fetch failure", len(buy_calls_slb) == 1)
-check("(sl-b) stop-loss place_order NEVER called", place_order_calls_slb == [])
-check("(sl-b) circuit_fetch_failed notify was called", mock_cff.called)
-row_slb = store_slb.positions[0]
-check("(sl-b) row status short_open (short itself succeeded)", row_slb["status"] == "short_open")
-check("(sl-b) row cover_target_order_id saved", row_slb.get("cover_target_order_id") == "COVERTGT-SLB")
-check("(sl-b) row stop_order_id is None (skipped)", row_slb.get("stop_order_id") is None)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss c) — square-off: cover_target filled -> stop-loss cancelled\n")
+print("\nScenario (stop-loss a) — square-off: cover_target filled -> stop-loss cancelled\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 short_c = make_short(symbol="RHO", entry_price=200.0, quantity=10,
@@ -737,16 +651,16 @@ with patch.object(rt, "_load_pos", store_slc.load), \
      patch.object(rt.notify, "send_cover_target_hit", MagicMock()):
     rt.square_off_239(dry_run=False)
 
-check("(sl-c) stop-loss order was cancelled", cancel_calls_slc == ["STOPLOSS-RHO"])
-check("(sl-c) force-cover buy() never called", buy_calls_slc == [])
+check("(sl-a) stop-loss order was cancelled", cancel_calls_slc == ["STOPLOSS-RHO"])
+check("(sl-a) force-cover buy() never called", buy_calls_slc == [])
 row_slc = store_slc.positions[0]
-check("(sl-c) status short_closed", row_slc["status"] == "short_closed")
-check("(sl-c) exit_order_id_239 == cover_target_order_id", row_slc["exit_order_id_239"] == "COVERTGT-RHO")
-check("(sl-c) exit_price_239 == cover's fill (190.0)", row_slc["exit_price_239"] == 190.0)
+check("(sl-a) status short_closed", row_slc["status"] == "short_closed")
+check("(sl-a) exit_order_id_239 == cover_target_order_id", row_slc["exit_order_id_239"] == "COVERTGT-RHO")
+check("(sl-a) exit_price_239 == cover's fill (190.0)", row_slc["exit_price_239"] == 190.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss d) — square-off: stop-loss filled -> cover_target cancelled\n")
+print("\nScenario (stop-loss b) — square-off: stop-loss filled -> cover_target cancelled\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 short_d = make_short(symbol="SIGMA", entry_price=200.0, quantity=10,
@@ -781,20 +695,20 @@ with patch.object(rt, "_load_pos", store_sld.load), \
      patch.object(rt.notify, "send_short_stoploss_hit", MagicMock()):
     rt.square_off_239(dry_run=False)
 
-check("(sl-d) cover-target order was cancelled", cancel_calls_sld == ["COVERTGT-SIG"])
-check("(sl-d) force-cover buy() never called", buy_calls_sld == [])
+check("(sl-b) cover-target order was cancelled", cancel_calls_sld == ["COVERTGT-SIG"])
+check("(sl-b) force-cover buy() never called", buy_calls_sld == [])
 row_sld = store_sld.positions[0]
-check("(sl-d) status short_closed", row_sld["status"] == "short_closed")
-check("(sl-d) exit_order_id_239 == stop_order_id (NOT the target)",
+check("(sl-b) status short_closed", row_sld["status"] == "short_closed")
+check("(sl-b) exit_order_id_239 == stop_order_id (NOT the target)",
       row_sld["exit_order_id_239"] == "STOPLOSS-SIG")
-check("(sl-d) exit_price_239 == stop-loss's fill (219.5), NOT target's (190.0)",
+check("(sl-b) exit_price_239 == stop-loss's fill (219.5), NOT target's (190.0)",
       row_sld["exit_price_239"] == 219.5, str(row_sld["exit_price_239"]))
-check("(sl-d) realized_pnl uses stop-loss fill: (200-219.5)*10 == -195.0",
+check("(sl-b) realized_pnl uses stop-loss fill: (200-219.5)*10 == -195.0",
       row_sld["realized_pnl"] == -195.0, str(row_sld["realized_pnl"]))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss e) — square-off: neither filled -> BOTH cancelled, force-cover proceeds\n")
+print("\nScenario (stop-loss c) — square-off: neither filled -> BOTH cancelled, force-cover proceeds\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 short_e = make_short(symbol="TAU", entry_price=200.0, quantity=10,
@@ -827,16 +741,16 @@ with patch.object(rt, "_load_pos", store_sle.load), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
     rt.square_off_239(dry_run=False)
 
-check("(sl-e) BOTH orders cancelled",
+check("(sl-c) BOTH orders cancelled",
       set(cancel_calls_sle) == {"COVERTGT-TAU", "STOPLOSS-TAU"}, str(cancel_calls_sle))
 row_sle = store_sle.positions[0]
-check("(sl-e) status short_closed via the existing force-cover path", row_sle["status"] == "short_closed")
-check("(sl-e) exit_order_id_239 == the force-cover order (not target/stop)",
+check("(sl-c) status short_closed via the existing force-cover path", row_sle["status"] == "short_closed")
+check("(sl-c) exit_order_id_239 == the force-cover order (not target/stop)",
       row_sle["exit_order_id_239"] == "FORCECOVER-TAU")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (stop-loss f) — square-off: BOTH show TRADED -> manual review, no silent pick\n")
+print("\nScenario (stop-loss d) — square-off: BOTH show TRADED -> manual review, no silent pick\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 short_f = make_short(symbol="UPSILON", entry_price=200.0, quantity=10,
@@ -869,11 +783,11 @@ with patch.object(rt, "_load_pos", store_slf.load), \
      patch.object(rt, "buy", fake_buy_slf):
     rt.square_off_239(dry_run=False)
 
-check("(sl-f) NEITHER order cancelled (no automatic pick)", cancel_calls_slf == [])
-check("(sl-f) force-cover buy() never called", buy_calls_slf == [])
+check("(sl-d) NEITHER order cancelled (no automatic pick)", cancel_calls_slf == [])
+check("(sl-d) force-cover buy() never called", buy_calls_slf == [])
 row_slf = store_slf.positions[0]
-check("(sl-f) position row completely unchanged (still short_open)", row_slf["status"] == "short_open")
-check("(sl-f) row unchanged entirely", row_slf == short_f)
+check("(sl-d) position row completely unchanged (still short_open)", row_slf["status"] == "short_open")
+check("(sl-d) row unchanged entirely", row_slf == short_f)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
