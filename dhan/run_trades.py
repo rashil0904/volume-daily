@@ -357,51 +357,72 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
     /holdings fallback below honors Dhan's reported exchange when it's
     exchange-specific, rather than always assuming NSE_EQ.
 
-    STILL UNVERIFIED: whether totalQty already includes MTF-financed shares
-    too, or whether an MTF position needs "totalQty + mtf_qty" instead. This
-    function checks /positions first (which DOES have an explicit productType
-    field, so MTF vs CNC is unambiguous there) and only falls back to
-    /holdings' totalQty if nothing is found in /positions -- but /holdings'
-    MTF fields (mtf_qty, mtf_t1_qty) have never been checked against a real
-    Dhan MTF fill. Re-verify against /holdings right after the first real MTF
-    entry (e.g. tomorrow's run) before trusting this fallback path for an MTF
-    position."""
+    /positions and /holdings answer different questions and are COMBINED, not
+    used as alternates. /holdings.totalQty is frozen as of the last
+    settlement -- it does NOT decrement intraday after a sell. /positions
+    .netQty is only today's net buy/sell delta -- it does NOT reflect
+    anything carried over from before today, and for a same-day SELL with no
+    matching same-day BUY, Dhan reports that delta as NEGATIVE (day-ledger
+    accounting treats a sell-only day the same as opening a fresh short,
+    tagging it positionType "SHORT" even though nothing was actually
+    shorted). Confirmed live 2026-08-19: JINDRILL had 384 in /holdings
+    (unchanged all day) and -192 in /positions (the 192 sold at the 9:25
+    no-data fallback) -- the old code required /positions' netQty > 0 to
+    trust it, so it discarded the -192 and fell back to /holdings' stale 384,
+    false-mismatching against a local shares_remaining of 192 and blocking
+    force_exit_1159 from selling the rest. Fixed to add the two together
+    (384 + -192 = 192, matching reality) whenever a /holdings row exists,
+    only falling back to /positions alone (requiring a positive netQty) when
+    /holdings has no row yet -- e.g. a same-day buy that hasn't settled to
+    /holdings."""
     session, _ = _dhan_session()
     product = product.upper()
+
+    pos_delta = None
+    pos_exch = None
     try:
         resp = session.get(f"{_DHAN_BASE}/positions", timeout=15)
         if resp.ok:
             for p in (resp.json() or []):
                 if ((p.get("tradingSymbol") or "").upper() == symbol.upper()
                         and (p.get("productType") or "").upper() == product):
-                    qty = int(p.get("netQty") or 0)
-                    if qty > 0:
-                        return qty, (p.get("exchangeSegment") or "NSE_EQ").upper()
+                    pos_delta = int(p.get("netQty") or 0)
+                    pos_exch = (p.get("exchangeSegment") or "").upper() or None
+                    break
     except Exception:
         pass
+
+    hold_qty = None
+    hold_exch = None
     try:
         resp = session.get(f"{_DHAN_BASE}/holdings", timeout=15)
         if resp.ok:
             for h in (resp.json() or []):
                 if (h.get("tradingSymbol") or "").upper() != symbol.upper():
                     continue
-                qty = int(h.get("totalQty") or 0)
-                if qty > 0:
-                    # /holdings' own "exchange" field is usually the literal
-                    # string "ALL" (dual-listed/fungible, confirmed live
-                    # 2026-08-17 for every current holding) -- not itself a
-                    # placeable exchangeSegment, so it can't be passed straight
-                    # through as-is. But honor it when it IS exchange-specific
-                    # (see HISTORICAL NOTE above) -- only "ALL"/unrecognized
-                    # falls back to NSE_EQ (where this pipeline always places
-                    # its buys); a real "NSE" or "BSE" from Dhan is mapped to
-                    # its _EQ segment instead of being overridden.
-                    exch_raw = (h.get("exchange") or "").strip().upper()
-                    if exch_raw in ("NSE", "BSE"):
-                        return qty, f"{exch_raw}_EQ"
-                    return qty, "NSE_EQ"
+                hold_qty = int(h.get("totalQty") or 0)
+                # /holdings' own "exchange" field is usually the literal
+                # string "ALL" (dual-listed/fungible, confirmed live
+                # 2026-08-17 for every current holding) -- not itself a
+                # placeable exchangeSegment, so it can't be passed straight
+                # through as-is. But honor it when it IS exchange-specific
+                # (see HISTORICAL NOTE above) -- only "ALL"/unrecognized falls
+                # back to NSE_EQ (where this pipeline always places its
+                # buys); a real "NSE" or "BSE" from Dhan is mapped to its
+                # _EQ segment instead of being overridden.
+                exch_raw = (h.get("exchange") or "").strip().upper()
+                hold_exch = f"{exch_raw}_EQ" if exch_raw in ("NSE", "BSE") else "NSE_EQ"
+                break
     except Exception:
         pass
+
+    if hold_qty is not None:
+        total = hold_qty + (pos_delta or 0)
+        if total > 0:
+            return total, (pos_exch or hold_exch or "NSE_EQ")
+    elif pos_delta is not None and pos_delta > 0:
+        return pos_delta, (pos_exch or "NSE_EQ")
+
     return 0, "NSE_EQ"
 
 
