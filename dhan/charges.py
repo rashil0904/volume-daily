@@ -28,12 +28,13 @@ re-added on leg #2 (matching SELL close) nor on legs #3/#4 (the shorting
 add-on's INTRADAY legs never touch the demat account or MTF collateral at
 all, even though leg #4 is also a BUY). See is_delivery_buy() -- it gates on
 both transactionType=="BUY" AND the order's product (from
-positions_dhan.json) being CNC/MTF specifically, which is what correctly
-excludes leg #4 despite also being a BUY. Every leg's own 6 API charge
-fields (brokerage/STT/exchange/SEBI/stamp/GST) are always read as-is
-regardless of which of the 4 legs it is -- those numbers are already
-genuinely different per leg/product, nothing to fix there.
-MTF-ness is read from results/positions_dhan.json's "product" field (keyed
+positions_dhan_long.json/positions_dhan_short.json) being CNC/MTF
+specifically, which is what correctly excludes leg #4 despite also being a
+BUY. Every leg's own 6 API charge fields (brokerage/STT/exchange/SEBI/
+stamp/GST) are always read as-is regardless of which of the 4 legs it is --
+those numbers are already genuinely different per leg/product, nothing to
+fix there.
+MTF-ness is read from the "product" field on the long-position record (keyed
 by entry_order_id) since the trade record's own productType is usually null
 for MTF fills (only reliably populated for CNC, confirmed 2026-08-19). Trades
 with no matching position record (not placed by this pipeline, or an
@@ -61,9 +62,9 @@ Quick CLI usage:
     python -m dhan.charges 2026-08-18 2026-08-19 --symbol "TVS Srichakra"
     python -m dhan.charges --mtf-interest [AS_OF_DATE, default today]
 
---tracked-only restricts the report to orderIds found in
-results/positions_dhan.json (i.e. trades this pipeline itself placed),
-filtering out any other activity on the account in the same date range.
+--tracked-only restricts the report to orderIds found in either position
+file (i.e. trades this pipeline itself placed), filtering out any other
+activity on the account in the same date range.
 """
 
 import sys
@@ -99,15 +100,30 @@ _MTF_INTEREST_SLABS = [
     (50_000_000, 0.0425),
 ]
 
-_IST      = ZoneInfo("Asia/Kolkata")
-_POS_FILE = Path(__file__).resolve().parent.parent / "results" / "positions_dhan.json"
+_IST = ZoneInfo("Asia/Kolkata")
+_RESULTS_DIR    = Path(__file__).resolve().parent.parent / "results"
+_POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
+_POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
+
+
+def _load_all_positions() -> list[dict]:
+    """Long + short positions merged into one list -- long and short live in
+    separate files (see dhan/run_trades.py's "Positions JSON" section for
+    why), but the functions below (product_map, tracked_order_ids,
+    print_mtf_interest_report) all need to see both sides."""
+    positions = []
+    for path in (_POS_FILE_LONG, _POS_FILE_SHORT):
+        if path.exists():
+            try:
+                positions.extend(json.loads(path.read_text()))
+            except (json.JSONDecodeError, OSError):
+                pass
+    return positions
 
 
 def product_map() -> dict[str, str]:
-    """entry_order_id -> product ("MTF"/"CNC"/...) from positions_dhan.json."""
-    if not _POS_FILE.exists():
-        return {}
-    positions = json.loads(_POS_FILE.read_text())
+    """entry_order_id -> product ("MTF"/"CNC"/...) from both position files."""
+    positions = _load_all_positions()
     return {p["entry_order_id"]: p["product"] for p in positions
             if p.get("entry_order_id") and p.get("product")}
 
@@ -283,7 +299,7 @@ def trade_by_order_id_since(order_id: str, since_date_str: str) -> dict | None:
 
 
 def tracked_order_ids() -> set[str]:
-    """Every order ID this pipeline placed, per results/positions_dhan.json --
+    """Every order ID this pipeline placed, per both position files --
     not just entry_order_id. A position can carry up to 7 different
     order-id fields across its lifecycle (entry_order_id, target_order_id,
     exit_order_id_925, exit_order_id_1159, cover_target_order_id,
@@ -294,9 +310,7 @@ def tracked_order_ids() -> set[str]:
     again -- and it's what makes --tracked-only actually show the shorting
     leg's 925/1159 short-open SELL and 2:39 cover BUY, not just the original
     3:21 entry BUY."""
-    if not _POS_FILE.exists():
-        return set()
-    positions = json.loads(_POS_FILE.read_text())
+    positions = _load_all_positions()
     ids = set()
     for p in positions:
         for key, val in p.items():
@@ -450,15 +464,12 @@ def position_charge_summary(pos: dict) -> dict:
 
 def print_mtf_interest_report(as_of: date | None = None) -> float:
     """Prints MTF interest accrued so far on every currently-open MTF
-    position in positions_dhan.json, and returns the total. as_of defaults
-    to today (IST)."""
+    position (always long -- shorts are always INTRADAY, never MTF), and
+    returns the total. as_of defaults to today (IST)."""
     if as_of is None:
         as_of = datetime.now(_IST).date()
 
-    if not _POS_FILE.exists():
-        print("[dhan] No positions_dhan.json found.")
-        return 0.0
-    positions = json.loads(_POS_FILE.read_text())
+    positions = _load_all_positions()
     mtf_positions = [p for p in positions
                      if p.get("product") == "MTF" and p.get("status") == "open"]
 

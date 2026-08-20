@@ -9,7 +9,11 @@ Exit check  : Our own recorded entry fill price vs. current LTP from Dhan's
               unrealizedProfit field (same lesson learned on the Zerodha side:
               broker-side P&L fields can go stale same-day).
 Orders      : Dhan API v2 (dhan/trade.py)
-Positions   : results/positions_dhan.json  (independent from positions_zerodha.json)
+Positions   : results/positions_dhan_long.json + results/positions_dhan_short.json
+              -- separate files (not one combined file with a "direction" field) so
+              a same-day mirrored short can never block a fresh same-day long entry
+              on the same symbol; see the "Positions JSON" section below for why.
+              Independent from positions_zerodha_long.json/positions_zerodha_short.json.
 
 Mirrors zerodha/run_trades_mtf.py's shape exactly: live per-symbol leverage
 check before every entry -> product="MTF" when leverage is actually available
@@ -53,7 +57,8 @@ import notify
 _IST          = ZoneInfo("Asia/Kolkata")
 _BROKER       = "dhan"
 _RESULTS_DIR  = _ROOT / "results"
-_POS_FILE     = _RESULTS_DIR / "positions_dhan.json"
+_POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
+_POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
 _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 _LOG_DIR      = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 1_500_000
@@ -157,8 +162,9 @@ def _poll_fill_strict(order_id: str) -> tuple[float, int]:
     """Like _poll_fill_safe, but never guesses on an unconfirmed timeout --
     only a genuine broker-confirmed TRADED status counts as filled. Used for
     ENTRIES only: a MARKET order stuck PENDING with no matching liquidity
-    (e.g. a circuit-locked stock) must never get written to positions_dhan.json
-    as a phantom fill just because the poll gave up waiting (see STYLEBAAZA,
+    (e.g. a circuit-locked stock) must never get written to
+    positions_dhan_long.json as a phantom fill just because the poll gave up
+    waiting (see STYLEBAAZA,
     2026-08-14 -- an order that sat PENDING for the full 12s poll window on a
     circuit-locked stock got recorded as filled at the reference price/qty,
     when nothing had actually traded). Returns (0.0, 0) for BOTH a genuine
@@ -356,34 +362,63 @@ def _tick_round(symbol: str, price: float) -> float:
 
 
 # ── Positions JSON ─────────────────────────────────────────────────────────────
+# Long and short positions live in SEPARATE files (positions_dhan_long.json /
+# positions_dhan_short.json), not one combined file keyed by a "direction"
+# field. This is deliberate, not just a naming split: with one shared file,
+# a fresh long entry's "already entered today" check (see run_entry_321) has
+# to scan for any same-day row regardless of direction -- which means a
+# mirrored short opened THIS MORNING from a 9:25/11:59 exit silently blocks
+# a legitimate fresh long re-entry on that same symbol later the same day.
+# Confirmed live 2026-08-20: BAJAJHIND and ZAGGLE both had fresh long signals
+# today, and both got skipped ("already entered today") purely because their
+# mirrored shorts from this morning's exits carried today's entry_date --
+# nothing to do with today's actual long signal. Separate files make that
+# structurally impossible: run_entry_321 only ever looks at the long file.
 
-def _load_pos() -> list:
-    if not _POS_FILE.exists():
+def _load_json_positions(path: Path) -> list:
+    if not path.exists():
         return []
     try:
-        return json.loads(_POS_FILE.read_text())
+        return json.loads(path.read_text())
     except Exception:
         return []
 
 
-def _save_pos(positions: list) -> None:
+def _save_json_positions(path: Path, positions: list) -> None:
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    _POS_FILE.write_text(json.dumps(positions, indent=2, ensure_ascii=False))
+    path.write_text(json.dumps(positions, indent=2, ensure_ascii=False))
+
+
+def _load_long_pos() -> list:
+    return _load_json_positions(_POS_FILE_LONG)
+
+
+def _save_long_pos(positions: list) -> None:
+    _save_json_positions(_POS_FILE_LONG, positions)
+
+
+def _load_short_pos() -> list:
+    return _load_json_positions(_POS_FILE_SHORT)
+
+
+def _save_short_pos(positions: list) -> None:
+    _save_json_positions(_POS_FILE_SHORT, positions)
 
 
 def _open_pos(positions: list) -> list:
+    """positions must already be from _load_long_pos() -- the long file never
+    contains a short-direction row, so no direction filter is needed here."""
     return [p for p in positions
             if p.get("broker") == _BROKER
-            and p.get("direction") != "short"
             and p.get("status") in ("open", "partial_exit_925_nodata")]
 
 
 def _open_short_pos(positions: list) -> list:
     """Short positions opened by _open_short() (mirroring a 925/1159 long exit) that
-    still need squaring off at 2:39pm."""
+    still need squaring off at 2:39pm. positions must already be from
+    _load_short_pos() -- the short file only ever contains direction="short" rows."""
     return [p for p in positions
             if p.get("broker") == _BROKER
-            and p.get("direction") == "short"
             and p.get("status") == "short_open"]
 
 
@@ -681,7 +716,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
             print(f"[dhan]   !! SHORT OPENED (cover target live) but stop-loss placement "
                   f"failed for {sym}: {exc} — manual review required.")
 
-    positions = _load_pos()
+    positions = _load_short_pos()
     positions.append({
         "broker":                _BROKER,
         "symbol":                sym,
@@ -701,7 +736,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
         "entry_timestamp":       _ts(),
     })
     if not dry_run:
-        _save_pos(positions)
+        _save_short_pos(positions)
     print(f"[dhan]   SHORT OPENED — {sym}  ₹{ep:,.2f} × {eq}  (from {source_stage} exit)")
     try:
         notify.send_short_open(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]", entry_price=ep,
@@ -711,7 +746,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
         print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
 
 
-# ── Entries log (separate from positions_dhan.json, mirrors mtf_entries_*.csv) ─
+# ── Entries log (separate from positions_dhan_long.json, mirrors mtf_entries_*.csv) ─
 
 def _log_path(trade_date: date) -> Path:
     return _LOG_DIR / f"dhan_entries_{trade_date.isoformat()}.csv"
@@ -733,10 +768,11 @@ def _append_log(trade_date: date, row: dict) -> None:
 
 def _sync_pnl_workbook() -> None:
     """Regenerates results/strategy_pnl_simple.xlsx from the latest
-    positions_dhan.json -- called after every pipeline stage (321/925/1159/
-    239) so the workbook stays current. Best-effort: loaded by file path
-    (not a package import, results/ isn't one) and wrapped so a sync
-    failure never blocks the actual trading stage that just ran."""
+    positions_dhan_long.json + positions_dhan_short.json -- called after
+    every pipeline stage (321/925/1159/239) so the workbook stays current.
+    Best-effort: loaded by file path (not a package import, results/ isn't
+    one) and wrapped so a sync failure never blocks the actual trading
+    stage that just ran."""
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -787,7 +823,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     n_entered = 0
     n_skipped = 0
 
-    positions     = _load_pos()
+    positions     = _load_long_pos()
     entered_today = {
         p["symbol"] for p in positions
         if p.get("broker") == _BROKER and p.get("entry_date") == trade_date.isoformat()
@@ -960,7 +996,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             "product":              product,
         })
         if not dry_run:
-            _save_pos(positions)
+            _save_long_pos(positions)
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", ref_price=ref,
                               shares=fill_qty, order_id=order_id, dry_run=dry_run)
@@ -983,7 +1019,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def place_targets_915(dry_run: bool = False) -> None:
-    positions = _load_pos()
+    positions = _load_long_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
@@ -1044,7 +1080,7 @@ def place_targets_915(dry_run: bool = False) -> None:
             pos["target_order_id"] = order_id
             pos["target_price"]    = target_price
             if not dry_run:
-                _save_pos(positions)
+                _save_long_pos(positions)
             print(f"[dhan]   target placed — order {order_id}")
             try:
                 notify.send_target_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
@@ -1065,7 +1101,7 @@ def place_targets_915(dry_run: bool = False) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def check_exit_925(dry_run: bool = False) -> None:
-    positions = _load_pos()
+    positions = _load_long_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
@@ -1126,7 +1162,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                     "realized_pnl":        round(pnl, 2),
                 })
                 if not dry_run:
-                    _save_pos(positions)
+                    _save_long_pos(positions)
                 print(f"[dhan]   TARGET HIT — exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="925",
@@ -1196,7 +1232,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                 "exit_timestamp_925": _ts(),
             })
             if not dry_run:
-                _save_pos(positions)
+                _save_long_pos(positions)
             if remain > 0 and target_oid:
                 # Fresh target for the still-open remainder, at the SAME
                 # target_price (not recomputed) -- carries target protection
@@ -1206,7 +1242,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                                           price=pos["target_price"], product=product, dry_run=dry_run)
                     pos["target_order_id"] = new_target_oid
                     if not dry_run:
-                        _save_pos(positions)
+                        _save_long_pos(positions)
                     print(f"[dhan]   fresh target placed for remaining {remain} "
                           f"@ ₹{pos['target_price']:,.2f} — order {new_target_oid}")
                 except Exception as exc:
@@ -1256,7 +1292,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                 "realized_pnl":        round(pnl, 2),
             })
             if not dry_run:
-                _save_pos(positions)
+                _save_long_pos(positions)
             print(f"[dhan]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
                 notify.send_exit_925(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
@@ -1278,7 +1314,7 @@ def check_exit_925(dry_run: bool = False) -> None:
 
 
 def force_exit_1159(dry_run: bool = False) -> None:
-    positions = _load_pos()
+    positions = _load_long_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
@@ -1348,7 +1384,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
                     "realized_pnl":         round(pnl, 2),
                 })
                 if not dry_run:
-                    _save_pos(positions)
+                    _save_long_pos(positions)
                 print(f"[dhan]   TARGET HIT — closed ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="1159",
@@ -1411,7 +1447,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
             "realized_pnl":         round(pnl, 2),
         })
         if not dry_run:
-            _save_pos(positions)
+            _save_long_pos(positions)
         print(f"[dhan]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         try:
             notify.send_force_exit_1159(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
@@ -1433,10 +1469,10 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
 
 def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
+    """positions must already be from _load_long_pos() -- see _open_pos()."""
     today    = date.today().isoformat()
     today_ps = [p for p in positions
-                if p.get("broker") == _BROKER and p.get("direction") != "short"
-                and p.get("entry_date") == today]
+                if p.get("broker") == _BROKER and p.get("entry_date") == today]
     n_opened  = len(today_ps)
     n_925     = sum(1 for p in today_ps if p.get("status") == "exited_925")
     n_partial = sum(1 for p in today_ps
@@ -1461,7 +1497,7 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def square_off_239(dry_run: bool = False) -> None:
-    positions   = _load_pos()
+    positions   = _load_short_pos()
     open_shorts = _open_short_pos(positions)
 
     print(f"\n{'='*60}")
@@ -1546,7 +1582,7 @@ def square_off_239(dry_run: bool = False) -> None:
                 "realized_pnl":        round(pnl, 2),
             })
             if not dry_run:
-                _save_pos(positions)
+                _save_short_pos(positions)
             print(f"[dhan]   COVER TARGET HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
                 notify.send_cover_target_hit(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
@@ -1576,7 +1612,7 @@ def square_off_239(dry_run: bool = False) -> None:
                 "realized_pnl":        round(pnl, 2),
             })
             if not dry_run:
-                _save_pos(positions)
+                _save_short_pos(positions)
             print(f"[dhan]   STOP-LOSS HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
                 notify.send_short_stoploss_hit(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
@@ -1640,7 +1676,7 @@ def square_off_239(dry_run: bool = False) -> None:
             "realized_pnl":        round(pnl, 2),
         })
         if not dry_run:
-            _save_pos(positions)
+            _save_short_pos(positions)
         print(f"[dhan]   SQUARED OFF ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         try:
             notify.send_square_off_239(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",

@@ -39,7 +39,11 @@ from openpyxl.drawing.line import LineProperties
 
 RESULTS_DIR = Path(__file__).resolve().parent
 OUT_PATH    = RESULTS_DIR / "strategy_pnl_simple.xlsx"
-DHAN_POSITIONS_PATH = RESULTS_DIR / "positions_dhan.json"
+# Long and short positions live in separate files (see dhan/run_trades.py's
+# "Positions JSON" section for why) -- merged back together here since the
+# Trade Log sheet shows both long and short trades in one list.
+DHAN_POSITIONS_LONG_PATH  = RESULTS_DIR / "positions_dhan_long.json"
+DHAN_POSITIONS_SHORT_PATH = RESULTS_DIR / "positions_dhan_short.json"
 
 # Trade Log is auto-synced from Dhan's real fills starting this date -- entries
 # before it (from before this workbook existed) are out of scope, not missing data.
@@ -195,21 +199,25 @@ def _live_cost(position: dict) -> float | None:
         return None
 
 
-def load_trades_from_positions() -> list[dict]:
-    """Reads results/positions_dhan.json and returns one Trade Log row dict
-    per position dated PNL_START_DATE or later (long or short) -- open
-    positions come back with exit_date/exit_price=None, matching Trade
-    Log's own Open/Closed status formula. Each row also carries a live
-    "cost" (see _live_cost) so Costs auto-updates every sync instead of
-    staying purely manual. Returns [] if the file is missing/unreadable/
-    empty, in which case build_trade_log falls back to the two worked
-    examples."""
-    if not DHAN_POSITIONS_PATH.exists():
+def _load_json_list(path: Path) -> list:
+    if not path.exists():
         return []
     try:
-        positions = json.loads(DHAN_POSITIONS_PATH.read_text())
+        return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return []
+
+
+def load_trades_from_positions() -> list[dict]:
+    """Reads positions_dhan_long.json + positions_dhan_short.json and
+    returns one Trade Log row dict per position dated PNL_START_DATE or
+    later (long or short) -- open positions come back with
+    exit_date/exit_price=None, matching Trade Log's own Open/Closed status
+    formula. Each row also carries a live "cost" (see _live_cost) so Costs
+    auto-updates every sync instead of staying purely manual. A missing/
+    unreadable/empty file on either side just contributes no rows from that
+    side, rather than failing the whole sync."""
+    positions = _load_json_list(DHAN_POSITIONS_LONG_PATH) + _load_json_list(DHAN_POSITIONS_SHORT_PATH)
 
     trades = []
     for pos in positions:
