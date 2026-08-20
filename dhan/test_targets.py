@@ -119,6 +119,7 @@ def fake_sell_a(symbol, exch, qty, **kw):
 with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_save_pos", store.save), \
      patch.object(rt, "sell", fake_sell_a), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
     rt.place_targets_915(dry_run=False)
 
@@ -134,6 +135,56 @@ check("(a) ALPHA row now has target_order_id saved", alpha_row.get("target_order
 check("(a) ALPHA row now has target_price saved", alpha_row.get("target_price") == 117.0)
 beta_row = next(p for p in store.positions if p["symbol"] == "BETA")
 check("(a) BETA row target_order_id unchanged", beta_row.get("target_order_id") == "EXISTING1")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (a2) — 9:15 target capped at 0.5% below UC when 17% would exceed it\n")
+# ─────────────────────────────────────────────────────────────────────────────
+# Mirrors what actually happened live 2026-08-20: GOPAL filled at 289.40, whose
+# 17% target (338.60) sat ABOVE its real UC (317.25) -- Dhan rejected that
+# order outright. fill=100 here means the plain 17% target would be 117.0,
+# same as scenario (a)'s ALPHA -- but this position's UC is 110.0, so 0.5%
+# below UC (109.45) is the lower of the two and should win.
+
+pos_capped = make_long(symbol="OMICRON", actual_fill_price=100.0, actual_fill_quantity=10)
+store_a2 = FakeStore([pos_capped])
+
+sell_calls_a2 = []
+def fake_sell_a2(symbol, exch, qty, **kw):
+    sell_calls_a2.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
+    return f"TGT-{symbol}"
+
+with patch.object(rt, "_load_pos", store_a2.load), \
+     patch.object(rt, "_save_pos", store_a2.save), \
+     patch.object(rt, "sell", fake_sell_a2), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {"OMICRON": 110.0}), \
+     patch.object(rt.notify, "send_target_placed", MagicMock()):
+    rt.place_targets_915(dry_run=False)
+
+check("(a2) target capped to 109.45 (110 * 0.995), NOT the uncapped 117.0",
+      sell_calls_a2 == [("OMICRON", "NSE_EQ", 10, "LIMIT", 109.45, "MTF")], str(sell_calls_a2))
+row_a2 = store_a2.positions[0]
+check("(a2) row target_price reflects the capped value", row_a2.get("target_price") == 109.45)
+
+# a3: UC unavailable for this symbol -> falls back to the plain uncapped 17%
+# target, same as today's behavior before this feature existed.
+pos_nouc = make_long(symbol="PI", actual_fill_price=100.0, actual_fill_quantity=10)
+store_a3 = FakeStore([pos_nouc])
+
+sell_calls_a3 = []
+def fake_sell_a3(symbol, exch, qty, **kw):
+    sell_calls_a3.append((symbol, exch, qty, kw.get("order_type"), kw.get("price")))
+    return f"TGT-{symbol}"
+
+with patch.object(rt, "_load_pos", store_a3.load), \
+     patch.object(rt, "_save_pos", store_a3.save), \
+     patch.object(rt, "sell", fake_sell_a3), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
+     patch.object(rt.notify, "send_target_placed", MagicMock()):
+    rt.place_targets_915(dry_run=False)
+
+check("(a3) UC unavailable -> falls back to uncapped 17% target (117.0)",
+      sell_calls_a3 == [("PI", "NSE_EQ", 10, "LIMIT", 117.0)], str(sell_calls_a3))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

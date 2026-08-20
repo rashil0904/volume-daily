@@ -538,6 +538,49 @@ def _fetch_upper_circuit(symbol: str) -> float:
     return float(row["upper_circuit_limit"])
 
 
+def _fetch_upper_circuit_batch(symbols: list[str]) -> dict[str, float]:
+    """Batch-fetch upper circuit limits for every symbol in ONE call (chunked
+    at 900 securityIds, Dhan's documented cap is 1000) via POST
+    /marketfeed/quote -- same reasoning as get_ltp_batch(): Quote APIs are
+    1 req/sec, so a caller looping over multiple symbols with one
+    _fetch_upper_circuit() call each would 429 from the 2nd symbol on (see
+    get_ltp's docstring for the confirmed-live version of this same bug).
+    Missing/failed symbols are simply absent from the returned dict."""
+    result: dict[str, float] = {}
+    if not symbols:
+        return result
+
+    session, _ = _dhan_session()
+    sym_to_sid: dict[str, int] = {}
+    for sym in symbols:
+        try:
+            sym_to_sid[sym] = int(security_id(sym))
+        except Exception as exc:
+            print(f"[dhan]   UC batch: could not resolve securityId for {sym}: {exc}")
+    sid_to_sym = {sid: sym for sym, sid in sym_to_sid.items()}
+    sids = list(sym_to_sid.values())
+
+    for i in range(0, len(sids), _LTP_CHUNK):
+        chunk = sids[i : i + _LTP_CHUNK]
+        try:
+            resp = session.post(f"{_DHAN_BASE}/marketfeed/quote",
+                                json={"NSE_EQ": chunk}, timeout=15)
+            resp.raise_for_status()
+            data = resp.json().get("data", {}).get("NSE_EQ", {})
+        except Exception as exc:
+            print(f"[dhan]   UC batch chunk {i}-{i+len(chunk)-1} failed: {exc}")
+            continue
+        for sid_str, row in data.items():
+            sym = sid_to_sym.get(int(sid_str))
+            if sym is None or row.get("upper_circuit_limit") is None:
+                continue
+            result[sym] = float(row["upper_circuit_limit"])
+        if i + _LTP_CHUNK < len(sids):
+            time.sleep(1.0)
+
+    return result
+
+
 def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
                 ltp: float | None = None) -> None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
@@ -955,6 +998,11 @@ def place_targets_915(dry_run: bool = False) -> None:
     n_placed  = 0
     n_skipped = 0
 
+    # One batched call for every open position's upper circuit -- needed to
+    # cap the 17% target below the day's UC (see below); batched for the same
+    # reason get_ltp_batch() exists (Quote APIs are 1 req/sec).
+    uc_cache = _fetch_upper_circuit_batch([p["symbol"] for p in open_ps])
+
     for pos in open_ps:
         sym = pos["symbol"]
         if pos.get("target_order_id"):
@@ -967,7 +1015,27 @@ def place_targets_915(dry_run: bool = False) -> None:
             qty          = (int(pos["shares_remaining"]) if is_partial
                             else int(pos["actual_fill_quantity"]))
             fill_price   = float(pos["actual_fill_price"] or 0)
-            target_price = _tick_round(sym, fill_price * 1.17)
+
+            # Target is 17% above fill, OR 0.5% below the day's upper circuit,
+            # WHICHEVER IS LOWER -- a plain 17% target can sit above the UC on
+            # a stock that's already run hard (confirmed live 2026-08-20:
+            # GOPAL's UC was Rs 317.25 but its 17% target computed to
+            # Rs 338.60, and Dhan rejected the order outright since a LIMIT
+            # sell can never legally trade above the circuit). Same 0.995
+            # safety margin already used for the mirrored-short stop-loss
+            # elsewhere in this file, not a new convention.
+            seventeen_pct_target = _tick_round(sym, fill_price * 1.17)
+            uc = uc_cache.get(sym)
+            if uc is not None:
+                uc_capped_target = _tick_round(sym, uc * 0.995)
+                target_price = min(seventeen_pct_target, uc_capped_target)
+                if target_price < seventeen_pct_target:
+                    print(f"[dhan]   17% target ₹{seventeen_pct_target:,.2f} exceeds UC ₹{uc:,.2f} "
+                          f"— capped to ₹{target_price:,.2f} (0.5% below UC) instead.")
+            else:
+                target_price = seventeen_pct_target
+                print(f"[dhan]   !! UC unavailable for {sym} — using uncapped 17% target "
+                      f"₹{target_price:,.2f}; may be rejected if it's above the real UC.")
 
             print(f"\n[dhan] {sym}  [{product}]  qty={qty}  target=₹{target_price:,.2f}")
             order_id = sell(sym, "NSE_EQ", qty, order_type="LIMIT",
