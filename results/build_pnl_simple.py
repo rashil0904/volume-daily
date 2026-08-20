@@ -4,7 +4,7 @@ build_pnl_simple.py -- generates strategy_pnl_simple.xlsx, a minimal 4-sheet
 P&L tracker for a live NSE intraday strategy that trades both long and short
 positions.
 
-Sheet order: Total PnL, Trade Log, Day Wise PnL, Position Type Stats.
+Sheet order: Total PnL, Trade Log, Day Wise PnL, Position Type Stats, Company Stats.
 Every computed cell is a formula string -- openpyxl never pre-computes a
 value in Python. Formulas avoid XLOOKUP/XMATCH/SORT/FILTER/UNIQUE/SEQUENCE
 for LibreOffice/Google Sheets compatibility; MAXIFS/MINIFS are written as
@@ -459,6 +459,86 @@ def build_position_stats(ws) -> None:
         cell.number_format = col_fmt[col_letter]
 
 
+# ── Sheet 5: Company Stats ───────────────────────────────────────────────────
+# Unlike Position Type Stats' fixed LONG/SHORT rows, the set of symbols isn't
+# knowable in advance -- and UNIQUE()/FILTER() aren't allowed (LibreOffice/
+# Google Sheets compatibility). So the distinct symbol list is computed here
+# in Python from the same `trades` already loaded for Trade Log, and written
+# as literal row labels -- same pattern as Position Type Stats' "LONG"/
+# "SHORT", just a dynamically-sized list instead of a fixed pair. Purely a
+# derived report (no manual-entry rows below the real data, unlike Trade
+# Log): a symbol only belongs here once it's actually appeared in a trade.
+
+CS_HEADERS = ["Symbol", "Trades", "Wins", "Losses", "Win Rate", "Gross P&L",
+              "Net P&L", "Avg Net P&L / Trade", "Best Trade", "Worst Trade"]
+
+
+def build_company_stats(ws, trades: list[dict]) -> None:
+    set_title_subtitle(
+        ws, "Company Stats",
+        "Per-symbol performance across every logged trade, computed straight from Trade Log.",
+        len(CS_HEADERS),
+    )
+
+    for col, header in enumerate(CS_HEADERS, start=1):
+        ws.cell(row=3, column=col, value=header)
+    style_header_row(ws, 3, len(CS_HEADERS))
+
+    widths = [14, 10, 9, 10, 11, 14, 14, 16, 14, 14]
+    for col, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    tl = "'Trade Log'"
+    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT1, "F": INR, "G": INR,
+               "H": INR, "I": INR, "J": INR}
+
+    symbols = sorted({t["symbol"] for t in (trades or [])})
+    first_row = 4
+
+    for offset, symbol in enumerate(symbols):
+        r = first_row + offset
+        cell_a = ws[f"A{r}"]; cell_a.value = symbol; style_formula(cell_a)
+
+        formulas = {
+            "B": f"=COUNTIF({tl}!$B$4:$B$503,$A{r})",
+            "C": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503,">0")',
+            "D": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503,"<0")',
+            "E": f'=IFERROR($C{r}/$B{r},"")',
+            "F": f"=SUMIF({tl}!$B$4:$B$503,$A{r},{tl}!$I$4:$I$503)",
+            "G": f"=SUMIF({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503)",
+            "H": f'=IFERROR($G{r}/$B{r},"")',
+            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$K$4:$K$503,{tl}!$B$4:$B$503,$A{r}),"")',
+            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$K$4:$K$503,{tl}!$B$4:$B$503,$A{r}),"")',
+        }
+        for col_letter, formula in formulas.items():
+            cell = ws[f"{col_letter}{r}"]
+            cell.value = formula
+            style_formula(cell, col_fmt[col_letter])
+
+    if symbols:
+        total_row = first_row + len(symbols)
+        last_data_row = total_row - 1
+        ws[f"A{total_row}"] = "TOTAL"
+        ws[f"A{total_row}"].font = TOTAL_FONT
+
+        total_formulas = {
+            "B": f"=SUM(B{first_row}:B{last_data_row})",
+            "C": f"=SUM(C{first_row}:C{last_data_row})",
+            "D": f"=SUM(D{first_row}:D{last_data_row})",
+            "E": f'=IFERROR(C{total_row}/B{total_row},"")',
+            "F": f"=SUM(F{first_row}:F{last_data_row})",
+            "G": f"=SUM(G{first_row}:G{last_data_row})",
+            "H": f'=IFERROR(G{total_row}/B{total_row},"")',
+        }
+        for col_letter, formula in total_formulas.items():
+            cell = ws[f"{col_letter}{total_row}"]
+            cell.value = formula
+            cell.font = TOTAL_FONT
+            cell.number_format = col_fmt[col_letter]
+
+    ws.freeze_panes = "A4"
+
+
 # ── Sheet 1: Total PnL (dashboard) ──────────────────────────────────────────
 # Layout map (all formulas identical in substance to the original plain-list
 # version -- only cell *addresses* moved, to fit the card/table/chart grid):
@@ -698,14 +778,16 @@ def main() -> None:
 
     ws_total = wb.active
     ws_total.title = "Total PnL"
-    ws_log   = wb.create_sheet("Trade Log")
-    ws_day   = wb.create_sheet("Day Wise PnL")
-    ws_stats = wb.create_sheet("Position Type Stats")
+    ws_log      = wb.create_sheet("Trade Log")
+    ws_day      = wb.create_sheet("Day Wise PnL")
+    ws_stats    = wb.create_sheet("Position Type Stats")
+    ws_company  = wb.create_sheet("Company Stats")
 
     build_trade_log(ws_log, trades)
     build_day_wise(ws_day)
     build_total_pnl_dashboard(ws_total, ws_day)
     build_position_stats(ws_stats)
+    build_company_stats(ws_company, trades)
 
     wb.save(OUT_PATH)
     print(f"Wrote {OUT_PATH} ({len(trades)} synced trade(s) from Dhan positions, "
