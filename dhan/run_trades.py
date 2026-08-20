@@ -624,6 +624,23 @@ def _append_log(trade_date: date, row: dict) -> None:
         writer.writerow(row)
 
 
+def _sync_pnl_workbook() -> None:
+    """Regenerates results/strategy_pnl_simple.xlsx from the latest
+    positions_dhan.json -- called after every pipeline stage (321/925/1159/
+    239) so the workbook stays current. Best-effort: loaded by file path
+    (not a package import, results/ isn't one) and wrapped so a sync
+    failure never blocks the actual trading stage that just ran."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_build_pnl_simple", _RESULTS_DIR / "build_pnl_simple.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.main()
+    except Exception as exc:
+        print(f"[dhan]   !! P&L workbook sync failed: {exc}", file=sys.stderr)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ENTRY — mirrors zerodha/run_trades_mtf.py's run_entry_321_mtf()
 # ══════════════════════════════════════════════════════════════════════════════
@@ -841,6 +858,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
+    _sync_pnl_workbook()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -919,6 +937,7 @@ def check_exit_925(dry_run: bool = False) -> None:
 
     if not open_ps:
         print("[dhan] No open positions — nothing to check.")
+        _sync_pnl_workbook()
         return
 
     # Collected here and opened in one pass AFTER every exit below has been
@@ -1107,6 +1126,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             _open_short(sym, eq, "925", dry_run=dry_run)
 
     print(f"\n[dhan] Exit check 9:25am complete.")
+    _sync_pnl_workbook()
 
 
 def force_exit_1159(dry_run: bool = False) -> None:
@@ -1125,6 +1145,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
         except Exception as exc:
             print(f"  [notify] nothing_open_at_1159 failed: {exc}", file=sys.stderr)
         _daily_summary(positions, 0, dry_run)
+        _sync_pnl_workbook()
         return
 
     n_force = 0
@@ -1255,6 +1276,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")
+    _sync_pnl_workbook()
 
 
 def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
@@ -1296,6 +1318,7 @@ def square_off_239(dry_run: bool = False) -> None:
 
     if not open_shorts:
         print("[dhan] No open shorts — nothing to square off.")
+        _sync_pnl_workbook()
         return
 
     n_closed = 0
@@ -1469,6 +1492,7 @@ def square_off_239(dry_run: bool = False) -> None:
         n_closed += 1
 
     print(f"\n[dhan] Short square-off complete. Closed: {n_closed}.")
+    _sync_pnl_workbook()
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────

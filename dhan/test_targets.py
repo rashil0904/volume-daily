@@ -42,6 +42,14 @@ import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 # throughout this file.
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 
+# _sync_pnl_workbook() (called at the end of every 925/1159/239 stage) loads
+# results/build_pnl_simple.py by file path and regenerates the REAL
+# results/strategy_pnl_simple.xlsx from the REAL results/positions_dhan.json
+# on disk -- neither goes through this suite's FakeStore/_load_pos mocking,
+# so left unpatched it would silently overwrite a real file on every test
+# run. Stubbed out globally, same as tick_size above.
+patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 failures = 0
