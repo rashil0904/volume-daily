@@ -789,6 +789,9 @@ def main() -> None:
     build_position_stats(ws_stats)
     build_company_stats(ws_company, trades)
 
+    for ws in wb.worksheets:
+        ws.sheet_view.showGridLines = False
+
     wb.save(OUT_PATH)
     print(f"Wrote {OUT_PATH} ({len(trades)} synced trade(s) from Dhan positions, "
           f"from {PNL_START_DATE} onward)" if trades else f"Wrote {OUT_PATH} (no synced trades yet -- examples shown)")
