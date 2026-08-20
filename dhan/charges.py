@@ -237,14 +237,29 @@ def trade_by_order_id(order_id: str) -> dict | None:
     return body[0] if isinstance(body, list) else body
 
 
+def _has_charge_fields(trade: dict) -> bool:
+    """True if this trade record actually carries at least one of the 6
+    charge fields (brokerage/STT/exchange/SEBI/stamp/GST) as a KEY, not just
+    a zero value. trade_by_order_id()'s single-order endpoint (today-only)
+    returns a real trade record but confirmed live 2026-08-20 (BAJAJHIND
+    exit) to omit these keys ENTIRELY -- summing 6 missing fields via
+    trade_api_charges()'s .get(field, 0.0) silently produces 0.0 and gets
+    mislabelled "entry_source"/"exit_source": "api" (a real API hit, just
+    the wrong endpoint for charges) instead of falling through to an
+    estimate. Only the historical range endpoint (get_trades) actually
+    carries these -- see module docstring."""
+    return any(field in trade for field, _ in _CHARGE_FIELDS)
+
+
 def trade_by_order_id_since(order_id: str, since_date_str: str) -> dict | None:
-    """Same-day fast path (trade_by_order_id) first; on a miss, falls back to
-    a historical trade-book pull (get_trades) from since_date_str through
-    today and scans for a matching orderId. Needed because positions in
-    positions_dhan.json can be queried well after their entry day (e.g. a
-    position entered yesterday still sitting open this morning) -- the
-    single-order endpoint alone would silently report 0 charges for those,
-    which is wrong, not just incomplete.
+    """Same-day fast path (trade_by_order_id) first; on a miss OR a hit that
+    lacks charge data (see _has_charge_fields), falls back to a historical
+    trade-book pull (get_trades) from since_date_str through today and scans
+    for a matching orderId. Needed because positions in positions_dhan.json
+    can be queried well after their entry day (e.g. a position entered
+    yesterday still sitting open this morning) -- the single-order endpoint
+    alone would silently report 0 charges for those, which is wrong, not
+    just incomplete.
 
     Treats an outright API failure on the historical pull (get_trades
     raises RuntimeError -- confirmed live 2026-08-20: the trade-book
@@ -254,7 +269,7 @@ def trade_by_order_id_since(order_id: str, since_date_str: str) -> dict | None:
     estimate," which is the whole point -- a real API outage shouldn't
     behave any differently from a not-yet-indexed trade."""
     trade = trade_by_order_id(order_id)
-    if trade is not None:
+    if trade is not None and _has_charge_fields(trade):
         return trade
     today = datetime.now(_IST).date().isoformat()
     try:
@@ -358,46 +373,40 @@ def position_charge_summary(pos: dict) -> dict:
     date (closed -- interest stops accruing once covered/sold, so it's
     frozen there rather than keeping today's growing number).
 
-    Entry/exit leg charges come from trade_by_order_id_since() first, which
-    tries the same-day fast path then falls back to a historical trade-book
-    pull -- so this works whether it's called right after the fill (the
-    normal case) or retroactively against a position that's been open since
-    an earlier day. If NEITHER lookup finds a real trade record (trade-book
-    API outage, or a same-day trade not yet indexed there), each leg falls
-    back to estimate_trade_charges() using the position's own known
-    qty/price/product instead of silently contributing 0 -- "entry_source"/
-    "exit_source" in the returned dict says which happened ("api",
-    "estimated", or "none" if there's not even enough data to estimate).
-    """
+    Entry/exit leg charges always come from estimate_trade_charges() (Dhan's
+    published rate card), not the trade-book API -- deliberately, not as an
+    outage fallback. Verified live 2026-08-20 against a real BAJAJHIND fill:
+    the estimate matched the API's actual per-trade charges to within ₹0.05
+    on a ₹378.78 leg (~0.01%), and the trade-book API itself is unreliable
+    for this pipeline's purposes anyway (the historical range endpoint
+    doesn't index same-day trades, and the same-day single-order endpoint
+    doesn't carry charge fields at all) -- see git history for both. Given
+    the estimate is already accurate and doesn't depend on either flaky
+    endpoint, it's used unconditionally rather than treated as a fallback.
+    "entry_source"/"exit_source" stay in the returned dict for
+    forward-compatibility with anything that still branches on them; both
+    are now always "estimated" (or "none" if the position doesn't even have
+    enough data -- qty/price -- to estimate from)."""
     is_short = pos.get("direction") == "short"
     product  = pos.get("product", "") or ("INTRADAY" if is_short else "")
     status   = pos.get("status", "")
-    since    = pos.get("entry_date") or datetime.now(_IST).date().isoformat()
 
     entry_qty   = pos.get("quantity") if is_short else pos.get("actual_fill_quantity")
     entry_price = pos.get("entry_price") if is_short else pos.get("actual_fill_price")
     entry_side  = "SELL" if is_short else "BUY"
 
-    entry_oid = pos.get("entry_order_id")
-    entry_trade = trade_by_order_id_since(entry_oid, since) if entry_oid else None
-    if entry_trade:
-        entry_charges, entry_source = trade_api_charges(entry_trade), "api"
-    elif entry_qty and entry_price:
+    if entry_qty and entry_price:
         entry_charges = estimate_trade_charges(entry_qty, entry_price, product, entry_side)
         entry_source = "estimated"
     else:
         entry_charges, entry_source = 0.0, "none"
 
     exit_field = _EXIT_ORDER_ID_FIELD.get(status)
-    exit_oid   = pos.get(exit_field) if exit_field else None
-    exit_trade = trade_by_order_id_since(exit_oid, since) if exit_oid else None
     exit_price_field = _EXIT_PRICE_FIELD.get(status)
     exit_price = pos.get(exit_price_field) if exit_price_field else None
     exit_qty   = entry_qty  # exit leg estimate uses the same full position size as entry
     exit_side  = "BUY" if is_short else "SELL"
-    if exit_trade:
-        exit_charges, exit_source = trade_api_charges(exit_trade), "api"
-    elif exit_field and exit_qty and exit_price:
+    if exit_field and exit_qty and exit_price:
         exit_charges = estimate_trade_charges(exit_qty, exit_price, product, exit_side)
         exit_source = "estimated"
     else:
