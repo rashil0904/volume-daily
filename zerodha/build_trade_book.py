@@ -1,7 +1,9 @@
 """
-zerodha/build_trade_book.py — Flatten positions_zerodha.json into a P&L-ready trade book
+zerodha/build_trade_book.py — Flatten positions_zerodha_long.json into a P&L-ready trade book
 ==========================================================================================
-Reads   : results/positions_zerodha.json  (live trade state, written by run_trades.py)
+Reads   : results/positions_zerodha_long.json  (live trade state, written by run_trades.py
+          and run_trades_mtf.py's long side -- shorts live in a separate file this
+          script doesn't read; it predates the mirrored-short add-on)
 Writes  : results/trade_book.csv          (one row per position, git-diffable source of truth)
           results/trade_book.xlsx         (same data, day-boxed visual view)
 
@@ -13,7 +15,7 @@ Capital Deployed is the full position value (shares x entry price) -- the same
 for every trade regardless of product. Margin Used is the actual cash/margin
 locked up: for MTF trades this is less than Capital Deployed (leverage reduces
 what you actually put up), read from results/trades/mtf_entries_<date>.csv's
-margin_required column (matched by entry_order_id, since positions_zerodha.json
+margin_required column (matched by entry_order_id, since positions_zerodha_long.json
 itself doesn't store margin/leverage). For CNC and legacy positions with no
 matching MTF log entry, Margin Used equals Capital Deployed (no leverage).
 
@@ -50,7 +52,7 @@ sys.path.insert(0, str(_ROOT))
 
 from zerodha.auth import get_session, BASE_URL
 
-_POS_FILE  = _ROOT / "results" / "positions_zerodha.json"
+_POS_FILE  = _ROOT / "results" / "positions_zerodha_long.json"
 _CSV_FILE  = _ROOT / "results" / "trade_book.csv"
 _XLSX_FILE = _ROOT / "results" / "trade_book.xlsx"
 
@@ -113,8 +115,8 @@ def _fetch_charge(leg: dict) -> float:
 def _load_mtf_margin_lookup(positions: list) -> dict:
     """entry_order_id -> margin_required, read from results/trades/mtf_entries_<date>.csv
     for every entry_date present among the given positions. That log is the only
-    place actual margin/leverage is recorded -- positions_zerodha.json doesn't
-    store it. Missing/unreadable log files are skipped silently (older, pre-MTF
+    place actual margin/leverage is recorded -- positions_zerodha_long.json
+    doesn't store it. Missing/unreadable log files are skipped silently (older, pre-MTF
     positions never had one)."""
     lookup = {}
     entry_dates = {p.get("entry_date") for p in positions if p.get("entry_date")}

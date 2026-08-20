@@ -7,7 +7,10 @@ Exit check  : Our own recorded entry fill price vs. current LTP from Kite's /quo
               (Stage 2) — pnl = (ltp - fill_price) * qty, computed directly rather than
               trusting Kite's positions/holdings pnl field, which can go stale same-day.
 Orders      : Zerodha Kite API  (zerodha/trade.py)
-Positions   : results/positions_zerodha.json  (full persistent trade book)
+Positions   : results/positions_zerodha_long.json  (full persistent trade book --
+              this script only ever creates long positions, so it uses the long
+              file; the short file, written only by run_trades_mtf.py's mirrored-
+              short add-on, is never touched here)
 
 Usage:
     python zerodha/run_trades.py --entry          [--dry-run] [--date YYYY-MM-DD]
@@ -42,7 +45,7 @@ import notify
 _IST          = ZoneInfo("Asia/Kolkata")
 _BROKER       = "zerodha"
 _RESULTS_DIR  = _ROOT / "results"
-_POS_FILE     = _RESULTS_DIR / "positions_zerodha.json"
+_POS_FILE     = _RESULTS_DIR / "positions_zerodha_long.json"
 _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 TOTAL_CAPITAL = 500_000
 

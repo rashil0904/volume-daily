@@ -10,10 +10,11 @@ exchange "NSE" not "NSE_EQ", product "MIS" not "INTRADAY").
 
 Mocks every broker-facing call this touches (buy/sell/place_order/order_status/
 cancel_order/_broker_qty/_broker_short_qty/_available_margin/_mis_margin_check/
-get_ltp/_poll_fill_safe/_fetch_upper_circuit) and the positions_zerodha.json
-read/write (_load_pos/_save_pos) with an in-memory store -- zero network calls,
-zero real file writes. Mirrors zerodha/test_state_machine.py's standalone
-script style (no pytest in this repo).
+get_ltp/_poll_fill_safe/_fetch_upper_circuit) and the position-file read/write
+(_load_long_pos/_save_long_pos for long positions, _load_short_pos/
+_save_short_pos for the mirrored-short file) with an in-memory store -- zero
+network calls, zero real file writes. Mirrors zerodha/test_state_machine.py's
+standalone script style (no pytest in this repo).
 
 Usage:
     python zerodha/test_targets.py
@@ -52,7 +53,9 @@ def check(label: str, condition: bool, detail: str = "") -> None:
 
 
 class FakeStore:
-    """Backs _load_pos/_save_pos with an in-memory list -- no real file I/O."""
+    """Backs a long-file or short-file load/save pair with an in-memory list
+    -- no real file I/O. One FakeStore per scenario represents whichever
+    single file (long or short) that scenario's function actually touches."""
     def __init__(self, positions):
         self.positions = copy.deepcopy(positions)
         self.save_count = 0
@@ -103,8 +106,8 @@ def fake_sell_a(symbol, exch, qty, **kw):
     sell_calls.append((symbol, exch, qty, kw.get("order_type"), kw.get("price"), kw.get("product")))
     return f"TGT-{symbol}"
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "sell", fake_sell_a), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
     rt.place_targets_915_mtf(dry_run=False)
@@ -148,8 +151,8 @@ open_short_calls = []
 def fake_open_short_b(sym, qty, stage, dry_run=False):
     open_short_calls.append((sym, qty, stage))
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_b), \
      patch.object(rt, "get_ltp", fake_get_ltp_b), \
      patch.object(rt, "sell", fake_sell_b), \
@@ -204,8 +207,8 @@ open_short_calls_c = []
 def fake_open_short_c(sym, qty, stage, dry_run=False):
     open_short_calls_c.append((sym, qty, stage))
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_c), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_c), \
      patch.object(rt, "get_ltp", fake_get_ltp_c), \
@@ -265,8 +268,8 @@ open_short_calls_d = []
 def fake_open_short_d(sym, qty, stage, dry_run=False):
     open_short_calls_d.append((sym, qty, stage))
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_d), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_d), \
      patch.object(rt, "get_ltp", fake_get_ltp_d), \
@@ -307,8 +310,8 @@ def fake_sell_e(*a, **kw):
     sell_calls_e.append((a, kw))
     return "SHOULD-NOT-HAPPEN"
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_e), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_e), \
      patch.object(rt, "get_ltp", fake_get_ltp_e), \
@@ -342,8 +345,8 @@ open_short_calls_f1 = []
 def fake_open_short_f1(sym, qty, stage, dry_run=False):
     open_short_calls_f1.append((sym, qty, stage))
 
-with patch.object(rt, "_load_pos", store1.load), \
-     patch.object(rt, "_save_pos", store1.save), \
+with patch.object(rt, "_load_long_pos", store1.load), \
+     patch.object(rt, "_save_long_pos", store1.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_f1), \
      patch.object(rt, "sell", fake_sell_f1), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE")), \
@@ -378,8 +381,8 @@ open_short_calls_f2 = []
 def fake_open_short_f2(sym, qty, stage, dry_run=False):
     open_short_calls_f2.append((sym, qty, stage))
 
-with patch.object(rt, "_load_pos", store2.load), \
-     patch.object(rt, "_save_pos", store2.save), \
+with patch.object(rt, "_load_long_pos", store2.load), \
+     patch.object(rt, "_save_long_pos", store2.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_f2), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_f2), \
      patch.object(rt, "sell", fake_sell_f2), \
@@ -421,8 +424,8 @@ def fake_poll_fill_safe_g(oid, fallback_price, fallback_qty):
 
 store_g = FakeStore([])
 
-with patch.object(rt, "_load_pos", store_g.load), \
-     patch.object(rt, "_save_pos", store_g.save), \
+with patch.object(rt, "_load_short_pos", store_g.load), \
+     patch.object(rt, "_save_short_pos", store_g.save), \
      patch.object(rt, "get_ltp", lambda sym: 200.0), \
      patch.object(rt, "_mis_margin_check", lambda sym, qty: {"leverage": 5.0, "margin_required": 100.0}), \
      patch.object(rt, "_available_margin", lambda: 100000.0), \
@@ -470,8 +473,8 @@ def fake_buy_h(symbol, exch, qty, **kw):
 
 store_h = FakeStore([])
 
-with patch.object(rt, "_load_pos", store_h.load), \
-     patch.object(rt, "_save_pos", store_h.save), \
+with patch.object(rt, "_load_short_pos", store_h.load), \
+     patch.object(rt, "_save_short_pos", store_h.save), \
      patch.object(rt, "get_ltp", lambda sym: 200.0), \
      patch.object(rt, "_mis_margin_check", lambda sym, qty: {"leverage": 5.0, "margin_required": 100.0}), \
      patch.object(rt, "_available_margin", lambda: 100000.0), \
@@ -519,8 +522,8 @@ def fake_buy_i(*a, **kw):
     buy_calls_i.append((a, kw))
     return "SHOULD-NOT-HAPPEN"
 
-with patch.object(rt, "_load_pos", store_i.load), \
-     patch.object(rt, "_save_pos", store_i.save), \
+with patch.object(rt, "_load_short_pos", store_i.load), \
+     patch.object(rt, "_save_short_pos", store_i.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_i), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_i), \
      patch.object(rt, "buy", fake_buy_i), \
@@ -563,8 +566,8 @@ def fake_buy_j(*a, **kw):
     buy_calls_j.append((a, kw))
     return "SHOULD-NOT-HAPPEN"
 
-with patch.object(rt, "_load_pos", store_j.load), \
-     patch.object(rt, "_save_pos", store_j.save), \
+with patch.object(rt, "_load_short_pos", store_j.load), \
+     patch.object(rt, "_save_short_pos", store_j.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_j), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_j), \
      patch.object(rt, "buy", fake_buy_j), \
@@ -608,8 +611,8 @@ def fake_buy_k(symbol, exch, qty, **kw):
 def fake_poll_fill_safe_k(oid, fallback_price, fallback_qty):
     return 205.0, fallback_qty
 
-with patch.object(rt, "_load_pos", store_k.load), \
-     patch.object(rt, "_save_pos", store_k.save), \
+with patch.object(rt, "_load_short_pos", store_k.load), \
+     patch.object(rt, "_save_short_pos", store_k.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_k), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_k), \
      patch.object(rt, "buy", fake_buy_k), \
@@ -653,8 +656,8 @@ def fake_buy_l(*a, **kw):
     buy_calls_l.append((a, kw))
     return "SHOULD-NOT-HAPPEN"
 
-with patch.object(rt, "_load_pos", store_l.load), \
-     patch.object(rt, "_save_pos", store_l.save), \
+with patch.object(rt, "_load_short_pos", store_l.load), \
+     patch.object(rt, "_save_short_pos", store_l.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_l), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_l), \
      patch.object(rt, "buy", fake_buy_l):
@@ -692,8 +695,8 @@ def fake_get_ltp_m(sym):
     get_ltp_calls_m.append(sym)
     return 999.0
 
-with patch.object(rt, "_load_pos", store.load), \
-     patch.object(rt, "_save_pos", store.save), \
+with patch.object(rt, "_load_long_pos", store.load), \
+     patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_raises), \
      patch.object(rt, "_kite_cancel_order", fake_cancel_m), \
      patch.object(rt, "sell", fake_sell_m), \
@@ -709,8 +712,8 @@ check("(m) status still open", row["status"] == "open")
 short_m = make_short(symbol="XI", cover_target_order_id="COVERTGT-XI", cover_target_price=190.0)
 store_m = FakeStore([short_m])
 buy_calls_m239 = []
-with patch.object(rt, "_load_pos", store_m.load), \
-     patch.object(rt, "_save_pos", store_m.save), \
+with patch.object(rt, "_load_short_pos", store_m.load), \
+     patch.object(rt, "_save_short_pos", store_m.save), \
      patch.object(rt, "_kite_order_status", fake_order_status_raises), \
      patch.object(rt, "_kite_cancel_order", lambda oid: (_ for _ in ()).throw(AssertionError("must not cancel"))), \
      patch.object(rt, "buy", lambda *a, **kw: buy_calls_m239.append(1) or "X"):
