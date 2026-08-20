@@ -130,9 +130,16 @@
     "actual_fill_price": 20.2933,
     "actual_fill_quantity": 14742,
     "entry_order_id": "221260819775809",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-19T15:21:06.741886+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "32126082038709",
+    "target_price": 23.74,
+    "exit_price_925": 20.9689,
+    "exit_order_id_925": "34126082015109",
+    "exit_timestamp_925": "2026-08-20T09:25:05.334352+05:30",
+    "realized_return_pct": 3.329,
+    "realized_pnl": 9959.06
   },
   {
     "broker": "dhan",
@@ -145,7 +152,9 @@
     "entry_order_id": "221260819775909",
     "status": "open",
     "entry_timestamp": "2026-08-19T15:21:10.289085+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "22126082012509",
+    "target_price": 338.6
   },
   {
     "broker": "dhan",
@@ -158,7 +167,9 @@
     "entry_order_id": "321260819763709",
     "status": "open",
     "entry_timestamp": "2026-08-19T15:21:13.452138+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "34126082011909",
+    "target_price": 2377.3
   },
   {
     "broker": "dhan",
@@ -171,7 +182,9 @@
     "entry_order_id": "321260819763909",
     "status": "open",
     "entry_timestamp": "2026-08-19T15:21:16.651437+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "22126082012809",
+    "target_price": 163.34
   },
   {
     "broker": "dhan",
@@ -184,6 +197,26 @@
     "entry_order_id": "321260819764209",
     "status": "open",
     "entry_timestamp": "2026-08-19T15:21:19.947311+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "32126082058309",
+    "target_price": 218.4
+  },
+  {
+    "broker": "dhan",
+    "symbol": "BAJAJHIND",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-08-20",
+    "entry_price": 20.9605,
+    "quantity": 14742,
+    "entry_order_id": "23126082016509",
+    "cover_target_order_id": "34126082015209",
+    "cover_target_price": 19.91,
+    "stop_order_id": "23126082018009",
+    "stop_trigger_price": 24.33,
+    "stop_limit_price": 24.45,
+    "status": "short_open",
+    "entry_timestamp": "2026-08-20T09:25:09.568885+05:30"
   }
 ]
