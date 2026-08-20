@@ -17,8 +17,13 @@ Usage:
 
 import json
 import re
+import sys
 from datetime import date
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))
+import dhan.charges as dhan_charges  # noqa: E402  (import after sys.path setup)
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -176,13 +181,30 @@ def _position_to_trade_row(position: dict) -> dict | None:
     }
 
 
+def _live_cost(position: dict) -> float | None:
+    """Real per-position charges -- brokerage/STT/exchange/SEBI/stamp/GST on
+    the entry (and exit, once closed) leg, plus DP/pledge and MTF interest
+    where applicable -- fetched live via dhan.charges.position_charge_
+    summary(), which itself calls Dhan's trade-book API. Returns None on
+    ANY failure (expired token, Dhan API outage, no matching trade record
+    yet) rather than raising -- a None here means build_trade_log falls
+    back to whatever Costs was already in the workbook (see
+    _load_existing_costs) instead of overwriting it with 0."""
+    try:
+        return dhan_charges.position_charge_summary(position)["total_charges"]
+    except Exception:
+        return None
+
+
 def load_trades_from_positions() -> list[dict]:
     """Reads results/positions_dhan.json and returns one Trade Log row dict
     per position dated PNL_START_DATE or later (long or short) -- open
     positions come back with exit_date/exit_price=None, matching Trade
-    Log's own Open/Closed status formula. Returns [] if the file is
-    missing/unreadable/empty, in which case build_trade_log falls back to
-    the two worked examples."""
+    Log's own Open/Closed status formula. Each row also carries a live
+    "cost" (see _live_cost) so Costs auto-updates every sync instead of
+    staying purely manual. Returns [] if the file is missing/unreadable/
+    empty, in which case build_trade_log falls back to the two worked
+    examples."""
     if not DHAN_POSITIONS_PATH.exists():
         return []
     try:
@@ -190,7 +212,14 @@ def load_trades_from_positions() -> list[dict]:
     except (json.JSONDecodeError, OSError):
         return []
 
-    trades = [row for pos in positions if (row := _position_to_trade_row(pos))]
+    trades = []
+    for pos in positions:
+        row = _position_to_trade_row(pos)
+        if row is None:
+            continue
+        row["cost"] = _live_cost(pos)
+        trades.append(row)
+
     trades.sort(key=lambda t: (t["entry_date"], t["symbol"]))
     return trades
 
@@ -255,7 +284,10 @@ def build_trade_log(ws, trades: list[dict] | None = None,
                 "A": trade["id"], "B": trade["symbol"], "C": trade["position"],
                 "D": trade["entry_date"], "E": trade["entry_price"], "F": trade["qty"],
                 "G": trade["exit_date"] or "", "H": trade["exit_price"] if trade["exit_price"] is not None else "",
-                "J": existing_costs.get(trade["id"], 0),
+                # Live-fetched cost wins when available; otherwise carry
+                # forward whatever was last in the workbook (see
+                # load_trades_from_positions/_live_cost) rather than 0.
+                "J": trade["cost"] if trade.get("cost") is not None else existing_costs.get(trade["id"], 0),
             }
             for col_letter, val in row_vals.items():
                 cell = ws[f"{col_letter}{r}"]
