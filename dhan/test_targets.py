@@ -160,13 +160,14 @@ def fake_sell_b(*a, **kw):
     return "SHOULD-NOT-HAPPEN"
 
 open_short_calls = []
-def fake_open_short_b(sym, qty, stage, dry_run=False):
+def fake_open_short_b(sym, qty, stage, dry_run=False, ltp=None):
     open_short_calls.append((sym, qty, stage))
 
 with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_save_pos", store.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_b), \
      patch.object(rt, "get_ltp", fake_get_ltp_b), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "sell", fake_sell_b), \
      patch.object(rt, "_open_short", fake_open_short_b), \
      patch.object(rt.notify, "send_target_hit", MagicMock()):
@@ -221,7 +222,7 @@ def fake_broker_qty_c(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_c = []
-def fake_open_short_c(sym, qty, stage, dry_run=False):
+def fake_open_short_c(sym, qty, stage, dry_run=False, ltp=None):
     open_short_calls_c.append((sym, qty, stage))
 
 with patch.object(rt, "_load_pos", store.load), \
@@ -229,6 +230,7 @@ with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_c), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_c), \
      patch.object(rt, "get_ltp", fake_get_ltp_c), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "sell", fake_sell_c), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_c), \
      patch.object(rt, "_broker_qty", fake_broker_qty_c), \
@@ -286,7 +288,7 @@ def fake_broker_qty_d(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_d = []
-def fake_open_short_d(sym, qty, stage, dry_run=False):
+def fake_open_short_d(sym, qty, stage, dry_run=False, ltp=None):
     open_short_calls_d.append((sym, qty, stage))
 
 with patch.object(rt, "_load_pos", store.load), \
@@ -294,6 +296,7 @@ with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_d), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_d), \
      patch.object(rt, "get_ltp", fake_get_ltp_d), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {"EPSILON": 105.0}), \
      patch.object(rt, "sell", fake_sell_d), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_d), \
      patch.object(rt, "_broker_qty", fake_broker_qty_d), \
@@ -337,6 +340,7 @@ with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_e), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_e), \
      patch.object(rt, "get_ltp", fake_get_ltp_e), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {"ZETA": 98.0}), \
      patch.object(rt, "sell", fake_sell_e):
     rt.check_exit_925(dry_run=False)
 
@@ -366,12 +370,13 @@ def fake_sell_f1(*a, **kw):
     return "SHOULD-NOT-HAPPEN"
 
 open_short_calls_f1 = []
-def fake_open_short_f1(sym, qty, stage, dry_run=False):
+def fake_open_short_f1(sym, qty, stage, dry_run=False, ltp=None):
     open_short_calls_f1.append((sym, qty, stage))
 
 with patch.object(rt, "_load_pos", store1.load), \
      patch.object(rt, "_save_pos", store1.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_f1), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "sell", fake_sell_f1), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
      patch.object(rt, "_open_short", fake_open_short_f1), \
@@ -405,13 +410,14 @@ def fake_poll_fill_safe_f2(oid, fallback_price, fallback_qty):
     return 90.0, fallback_qty  # a LOSS -- 11:59 has no P&L gate, must still force-sell
 
 open_short_calls_f2 = []
-def fake_open_short_f2(sym, qty, stage, dry_run=False):
+def fake_open_short_f2(sym, qty, stage, dry_run=False, ltp=None):
     open_short_calls_f2.append((sym, qty, stage))
 
 with patch.object(rt, "_load_pos", store2.load), \
      patch.object(rt, "_save_pos", store2.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_f2), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_f2), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "sell", fake_sell_f2), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_f2), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
@@ -570,6 +576,7 @@ with patch.object(rt, "_load_pos", store_h1.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_h1), \
      patch.object(rt, "buy", fake_buy_h1), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_cover_target_hit", MagicMock()):
     rt.square_off_239(dry_run=False)
 
@@ -605,6 +612,7 @@ with patch.object(rt, "_load_pos", store_h2.load), \
      patch.object(rt, "buy", fake_buy_h2), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_h2), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
     rt.square_off_239(dry_run=False)
 
@@ -645,7 +653,8 @@ with patch.object(rt, "_load_pos", store.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_raises), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_i), \
      patch.object(rt, "sell", fake_sell_i), \
-     patch.object(rt, "get_ltp", fake_get_ltp_i):
+     patch.object(rt, "get_ltp", fake_get_ltp_i), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}):
     rt.check_exit_925(dry_run=False)
 
 check("(i) cancel_order never called", cancel_calls_i == [])
@@ -664,6 +673,7 @@ with patch.object(rt, "_load_pos", store_nu.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_raises), \
      patch.object(rt, "_dhan_cancel_order", lambda oid: (_ for _ in ()).throw(AssertionError("must not cancel"))), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_nu.append(1) or "X"), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
     rt.force_exit_1159(dry_run=False)
 check("(i-1159) order_status raise -> sell() never called, position skipped", sell_calls_nu == [])
@@ -674,7 +684,8 @@ with patch.object(rt, "_load_pos", store_xi.load), \
      patch.object(rt, "_save_pos", store_xi.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_raises), \
      patch.object(rt, "_dhan_cancel_order", lambda oid: (_ for _ in ()).throw(AssertionError("must not cancel"))), \
-     patch.object(rt, "buy", lambda *a, **kw: buy_calls_nu.append(1) or "X"):
+     patch.object(rt, "buy", lambda *a, **kw: buy_calls_nu.append(1) or "X"), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}):
     rt.square_off_239(dry_run=False)
 check("(i-239) order_status raise -> buy() never called, position skipped", buy_calls_nu == [])
 
@@ -712,6 +723,7 @@ with patch.object(rt, "_load_pos", store_slc.load), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_slc), \
      patch.object(rt, "buy", fake_buy_slc), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_cover_target_hit", MagicMock()):
     rt.square_off_239(dry_run=False)
 
@@ -756,6 +768,7 @@ with patch.object(rt, "_load_pos", store_sld.load), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_sld), \
      patch.object(rt, "buy", fake_buy_sld), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_short_stoploss_hit", MagicMock()):
     rt.square_off_239(dry_run=False)
 
@@ -802,6 +815,7 @@ with patch.object(rt, "_load_pos", store_sle.load), \
      patch.object(rt, "buy", fake_buy_sle), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sle), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
     rt.square_off_239(dry_run=False)
 
@@ -844,7 +858,8 @@ with patch.object(rt, "_load_pos", store_slf.load), \
      patch.object(rt, "_save_pos", store_slf.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_slf), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_slf), \
-     patch.object(rt, "buy", fake_buy_slf):
+     patch.object(rt, "buy", fake_buy_slf), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {}):
     rt.square_off_239(dry_run=False)
 
 check("(sl-d) NEITHER order cancelled (no automatic pick)", cancel_calls_slf == [])

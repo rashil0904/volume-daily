@@ -274,7 +274,15 @@ def _available_balance() -> float | None:
 def get_ltp(symbol: str) -> float:
     """Current LTP via Dhan's /marketfeed/ltp, used to compute Stage 2 exit P&L
     directly rather than trusting Dhan's own positions P&L field. Raises
-    ValueError if no LTP is returned."""
+    ValueError if no LTP is returned.
+
+    Single-symbol ad-hoc use only (e.g. a lone manual check). Any call site
+    that needs LTP for more than one symbol in the same run MUST use
+    get_ltp_batch() instead -- Dhan's Quote APIs (which /marketfeed/ltp falls
+    under) are rate-limited to 1 request/second, so N sequential single-symbol
+    calls in the same run reliably 429 on the 2nd+ call (confirmed live
+    2026-08-20 with 5 open positions: 4 of 5 calls back-to-back failed).
+    get_ltp_batch() avoids this by fetching every symbol in ONE call."""
     session, _ = _dhan_session()
     sid = security_id(symbol)
     resp = session.post(f"{_DHAN_BASE}/marketfeed/ltp", json={"NSE_EQ": [int(sid)]}, timeout=15)
@@ -283,6 +291,53 @@ def get_ltp(symbol: str) -> float:
     if not entry or entry.get("last_price") is None:
         raise ValueError(f"[dhan] No LTP found for {symbol}.")
     return float(entry["last_price"])
+
+
+_LTP_CHUNK = 900  # Dhan docs: up to 1000 securityIds per /marketfeed/ltp call
+
+
+def get_ltp_batch(symbols: list[str]) -> dict[str, float]:
+    """Batch-fetch current LTP for every symbol in ONE call (chunked at 900
+    securityIds per call, Dhan's documented cap is 1000) via POST
+    /marketfeed/ltp -- same chunking pattern as live_monitor.py's
+    _fetch_circuit_limits(). Use this instead of calling get_ltp() once per
+    symbol in a loop (see get_ltp's docstring for why). Missing/failed
+    symbols are simply absent from the returned dict rather than raising --
+    callers should treat a missing key the same as get_ltp() raising (i.e.
+    fall into their existing no-LTP-available branch)."""
+    result: dict[str, float] = {}
+    if not symbols:
+        return result
+
+    session, _ = _dhan_session()
+    sym_to_sid: dict[str, int] = {}
+    for sym in symbols:
+        try:
+            sym_to_sid[sym] = int(security_id(sym))
+        except Exception as exc:
+            print(f"[dhan]   LTP batch: could not resolve securityId for {sym}: {exc}")
+    sid_to_sym = {sid: sym for sym, sid in sym_to_sid.items()}
+    sids = list(sym_to_sid.values())
+
+    for i in range(0, len(sids), _LTP_CHUNK):
+        chunk = sids[i : i + _LTP_CHUNK]
+        try:
+            resp = session.post(f"{_DHAN_BASE}/marketfeed/ltp",
+                                json={"NSE_EQ": chunk}, timeout=15)
+            resp.raise_for_status()
+            data = resp.json().get("data", {}).get("NSE_EQ", {})
+        except Exception as exc:
+            print(f"[dhan]   LTP batch chunk {i}-{i+len(chunk)-1} failed: {exc}")
+            continue
+        for sid_str, row in data.items():
+            sym = sid_to_sym.get(int(sid_str))
+            if sym is None or row.get("last_price") is None:
+                continue
+            result[sym] = float(row["last_price"])
+        if i + _LTP_CHUNK < len(sids):
+            time.sleep(1.0)
+
+    return result
 
 
 def _tick_round(symbol: str, price: float) -> float:
@@ -475,7 +530,7 @@ def _fetch_upper_circuit(symbol: str) -> float:
     session, _ = _dhan_session()
     sid = security_id(symbol)
     resp = session.post(f"{_DHAN_BASE}/marketfeed/quote",
-                        json={"NSE_EQ": [sid]}, timeout=15)
+                        json={"NSE_EQ": [int(sid)]}, timeout=15)
     resp.raise_for_status()
     row = resp.json().get("data", {}).get("NSE_EQ", {}).get(str(sid))
     if not row or row.get("upper_circuit_limit") is None:
@@ -483,21 +538,30 @@ def _fetch_upper_circuit(symbol: str) -> float:
     return float(row["upper_circuit_limit"])
 
 
-def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> None:
+def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
+                ltp: float | None = None) -> None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
     exit that just filled at either the 9:25am or 11:59am stage -- see run_trades.py's
     module docstring for the shorting add-on. Skips (never raises) on any
     margin-check/balance/fill failure: the long exit that triggered this has already
-    happened and is never reversed by a failed short."""
+    happened and is never reversed by a failed short.
+
+    ltp: pre-fetched via get_ltp_batch() by the caller when opening multiple
+    shorts in the same pass (see check_exit_925/force_exit_1159) -- avoids a
+    separate single-symbol get_ltp() call per short, which would re-introduce
+    the same Quote-API rate-limit risk get_ltp_batch() exists to avoid. Falls
+    back to a live single-symbol fetch only when called standalone (ltp not
+    supplied)."""
     if _shorting_skipped_today():
         print(f"[dhan]   SHORT SKIP — {sym}: shorting disabled for today "
               f"(see {_SKIP_SHORTING_FILE.name}).")
         return
 
-    try:
-        ltp = get_ltp(sym)
-    except Exception:
-        ltp = 0.0
+    if ltp is None:
+        try:
+            ltp = get_ltp(sym)
+        except Exception:
+            ltp = 0.0
 
     margin_info = _intraday_margin_check(sym, qty, ltp) if ltp else None
     if margin_info is None:
@@ -686,6 +750,12 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         if p.get("broker") == _BROKER and p.get("entry_date") == trade_date.isoformat()
     }
 
+    # One batched call for every candidate symbol's LTP, not one call per
+    # symbol inside the loop below -- see get_ltp's docstring for why (Quote
+    # APIs are 1 req/sec; with N signals today, N sequential single-symbol
+    # calls would 429 from the 2nd symbol on).
+    ltp_cache = get_ltp_batch(list(symbols))
+
     for sym in symbols:
         if sym in entered_today:
             print(f"[dhan] {sym} — already entered today, skipping.")
@@ -780,11 +850,11 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         # got 0-filled on ordinary same-second price movement, no circuit lock
         # involved. Placing our own LIMIT 0.5% above live LTP gives explicit,
         # wider headroom to fill instead of relying on Dhan's undocumented band.
-        try:
-            entry_ltp = get_ltp(sym)
-        except Exception as exc:
+        if sym in ltp_cache:
+            entry_ltp = ltp_cache[sym]
+        else:
             entry_ltp = ref
-            print(f"[dhan]   live LTP unavailable ({exc}) — using ref price ₹{ref:,.2f} "
+            print(f"[dhan]   live LTP unavailable — using ref price ₹{ref:,.2f} "
                   f"as the limit-price anchor instead.")
         limit_price = _tick_round(sym, entry_ltp * 1.005)
         print(f"[dhan]   LIMIT buy @ ₹{limit_price:,.2f}  (0.5% above LTP ₹{entry_ltp:,.2f})")
@@ -945,6 +1015,13 @@ def check_exit_925(dry_run: bool = False) -> None:
     # rather than interleaving short(A) between exit(A) and exit(B).
     to_short: list[tuple[str, int]] = []
 
+    # One batched call for every open position's LTP, not one call per symbol
+    # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
+    # single-symbol calls reliably 429 on the 2nd+ symbol (see get_ltp's
+    # docstring). A symbol missing from this dict is treated identically to
+    # get_ltp() raising -- falls into the existing no-data fallback branch.
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
+
     for pos in open_ps:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
@@ -1000,7 +1077,9 @@ def check_exit_925(dry_run: bool = False) -> None:
         no_data  = False
         pnl_live = 0.0
         try:
-            ltp      = get_ltp(sym)
+            if sym not in ltp_cache:
+                raise ValueError(f"[dhan] No LTP found for {sym}.")
+            ltp      = ltp_cache[sym]
             pnl_live = (ltp - fill_price) * qty
             print(f"[dhan]   LTP: ₹{ltp:,.2f}  live P&L: ₹{pnl_live:+,.2f}")
         except Exception as exc:
@@ -1122,8 +1201,9 @@ def check_exit_925(dry_run: bool = False) -> None:
 
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
+        short_ltp_cache = get_ltp_batch([sym for sym, _ in to_short])
         for sym, eq in to_short:
-            _open_short(sym, eq, "925", dry_run=dry_run)
+            _open_short(sym, eq, "925", dry_run=dry_run, ltp=short_ltp_cache.get(sym, 0.0))
 
     print(f"\n[dhan] Exit check 9:25am complete.")
     _sync_pnl_workbook()
@@ -1152,6 +1232,10 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # Collected here and opened in one pass AFTER every forced exit below has
     # been attempted -- see the matching comment in check_exit_925.
     to_short: list[tuple[str, int]] = []
+
+    # One batched call for every still-open position's LTP -- see the matching
+    # comment in check_exit_925.
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     for pos in open_ps:
         sym        = pos["symbol"]
@@ -1220,11 +1304,11 @@ def force_exit_1159(dry_run: bool = False) -> None:
                 continue
             print(f"[dhan]   broker confirmed: {bqty} shares [{exch}]")
 
-        try:
-            exit_ltp = get_ltp(sym)
-        except Exception as exc:
+        if sym in ltp_cache:
+            exit_ltp = ltp_cache[sym]
+        else:
             exit_ltp = fill_price
-            print(f"[dhan]   live LTP unavailable ({exc}) — using fill price ₹{fill_price:,.2f} "
+            print(f"[dhan]   live LTP unavailable — using fill price ₹{fill_price:,.2f} "
                   f"as the limit-price anchor instead.")
         sell_limit = _tick_round(sym, exit_ltp * 0.995)
         try:
@@ -1271,8 +1355,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
+        short_ltp_cache = get_ltp_batch([sym for sym, _ in to_short])
         for sym, eq in to_short:
-            _open_short(sym, eq, "1159", dry_run=dry_run)
+            _open_short(sym, eq, "1159", dry_run=dry_run, ltp=short_ltp_cache.get(sym, 0.0))
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")
@@ -1322,6 +1407,12 @@ def square_off_239(dry_run: bool = False) -> None:
         return
 
     n_closed = 0
+
+    # One batched call for every open short's cover LTP -- see the matching
+    # comment in check_exit_925. Not every short necessarily needs this (only
+    # the neither-order-filled fallback path below does), but fetching once
+    # up front for all of them is still a single call either way.
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_shorts])
 
     for pos in open_shorts:
         sym         = pos["symbol"]
@@ -1449,11 +1540,11 @@ def square_off_239(dry_run: bool = False) -> None:
                 continue
             print(f"[dhan]   broker confirmed: {bqty} shares short")
 
-        try:
-            cover_ltp = get_ltp(sym)
-        except Exception as exc:
+        if sym in ltp_cache:
+            cover_ltp = ltp_cache[sym]
+        else:
             cover_ltp = entry_price
-            print(f"[dhan]   live LTP unavailable ({exc}) — using short entry price "
+            print(f"[dhan]   live LTP unavailable — using short entry price "
                   f"₹{entry_price:,.2f} as the limit-price anchor instead.")
         buy_limit = _tick_round(sym, cover_ltp * 1.005)
         try:
