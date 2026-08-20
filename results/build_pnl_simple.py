@@ -347,9 +347,10 @@ def build_day_wise(ws) -> None:
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
-    # First date is a manual anchor -- matches the two example trades' exit date.
+    # First date is a manual anchor -- matches PNL_START_DATE (Trade Log's own
+    # sync cutoff), so the calendar doesn't run rows before real data exists.
     a4 = ws["A4"]
-    a4.value = date(2026, 8, 1)
+    a4.value = date.fromisoformat(PNL_START_DATE)
     style_input(a4, DATE)
 
     tl = "'Trade Log'"
