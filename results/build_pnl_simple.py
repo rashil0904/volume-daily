@@ -25,7 +25,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 import dhan.charges as dhan_charges  # noqa: E402  (import after sys.path setup)
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -152,9 +152,8 @@ def _extract_exit(position: dict) -> tuple[str | None, float | None]:
 
 def _position_to_trade_row(position: dict) -> dict | None:
     """Maps one positions_dhan.json record (long or mirrored short) to a
-    Trade Log row dict. Costs has no source in position JSON -- it's never
-    populated here, only ever carried forward from a prior workbook (see
-    _load_existing_costs) or left for the user to fill in by hand."""
+    Trade Log row dict. Costs isn't set here -- see _live_cost, attached by
+    the caller (load_trades_from_positions)."""
     symbol = position.get("symbol")
     if not symbol:
         return None
@@ -187,9 +186,9 @@ def _live_cost(position: dict) -> float | None:
     where applicable -- fetched live via dhan.charges.position_charge_
     summary(), which itself calls Dhan's trade-book API. Returns None on
     ANY failure (expired token, Dhan API outage, no matching trade record
-    yet) rather than raising -- a None here means build_trade_log falls
-    back to whatever Costs was already in the workbook (see
-    _load_existing_costs) instead of overwriting it with 0."""
+    yet) rather than raising -- a None here means build_trade_log writes 0,
+    not a guessed/stale number, so a blank Costs cell always means "no live
+    charge data yet," never "possibly out of date"."""
     try:
         return dhan_charges.position_charge_summary(position)["total_charges"]
     except Exception:
@@ -224,37 +223,12 @@ def load_trades_from_positions() -> list[dict]:
     return trades
 
 
-def _load_existing_costs(path: Path) -> dict[str, float]:
-    """Reads a previously-generated workbook's Trade Log Costs column, keyed
-    by Trade ID, so re-running the auto-sync doesn't wipe out Costs the user
-    has already typed in by hand -- everything else in a synced row comes
-    fresh from position JSON on every run, but Costs has no JSON source, it
-    only ever lives inside the workbook itself."""
-    if not path.exists():
-        return {}
-    try:
-        wb = load_workbook(path, data_only=True)
-        ws = wb["Trade Log"]
-    except Exception:
-        return {}
-    costs = {}
-    for r in range(TL_FIRST_ROW, TL_LAST_ROW + 1):
-        trade_id = ws[f"A{r}"].value
-        cost_val = ws[f"J{r}"].value
-        if trade_id and isinstance(cost_val, (int, float)):
-            costs[str(trade_id)] = cost_val
-    return costs
-
-
-def build_trade_log(ws, trades: list[dict] | None = None,
-                     existing_costs: dict[str, float] | None = None) -> None:
+def build_trade_log(ws, trades: list[dict] | None = None) -> None:
     """trades=None (or empty) falls back to the two worked examples -- same
     as the original standalone builder. trades=[...] (from
     load_trades_from_positions) auto-syncs real Dhan fills into rows 4+
-    instead; existing_costs (from _load_existing_costs) carries forward any
-    Costs the user already typed in for a Trade ID that's still present."""
-    existing_costs = existing_costs or {}
-
+    instead, Costs included -- see _live_cost for what happens when a
+    live charge fetch fails (0, not a stale carried-over number)."""
     set_title_subtitle(
         ws, "Trade Log",
         "One row per position -- long and short trades are logged separately. "
@@ -284,10 +258,7 @@ def build_trade_log(ws, trades: list[dict] | None = None,
                 "A": trade["id"], "B": trade["symbol"], "C": trade["position"],
                 "D": trade["entry_date"], "E": trade["entry_price"], "F": trade["qty"],
                 "G": trade["exit_date"] or "", "H": trade["exit_price"] if trade["exit_price"] is not None else "",
-                # Live-fetched cost wins when available; otherwise carry
-                # forward whatever was last in the workbook (see
-                # load_trades_from_positions/_live_cost) rather than 0.
-                "J": trade["cost"] if trade.get("cost") is not None else existing_costs.get(trade["id"], 0),
+                "J": trade["cost"] if trade.get("cost") is not None else 0,
             }
             for col_letter, val in row_vals.items():
                 cell = ws[f"{col_letter}{r}"]
@@ -721,8 +692,6 @@ def build_total_pnl_dashboard(ws, ws_day) -> None:
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Read state from the OLD file (if any) before it gets overwritten below.
-    existing_costs = _load_existing_costs(OUT_PATH)
     trades = load_trades_from_positions()
 
     wb = Workbook()
@@ -733,7 +702,7 @@ def main() -> None:
     ws_day   = wb.create_sheet("Day Wise PnL")
     ws_stats = wb.create_sheet("Position Type Stats")
 
-    build_trade_log(ws_log, trades, existing_costs)
+    build_trade_log(ws_log, trades)
     build_day_wise(ws_day)
     build_total_pnl_dashboard(ws_total, ws_day)
     build_position_stats(ws_stats)
