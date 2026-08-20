@@ -147,6 +147,50 @@ def trade_api_charges(trade: dict) -> float:
     return sum(trade.get(field, 0.0) or 0.0 for field, _ in _CHARGE_FIELDS)
 
 
+def estimate_trade_charges(quantity: int, price: float, product: str,
+                           transaction_type: str) -> float:
+    """Estimates the same 6 API charge fields (brokerage/STT/exchange/SEBI/
+    stamp/GST) for one trade leg from Dhan's PUBLISHED rate card, for use
+    ONLY when the real per-trade figures can't be pulled from the trade-book
+    API (outage, or a same-day trade not yet indexed there) -- see
+    position_charge_summary's api-then-estimate fallback. NSE only (this
+    pipeline never trades BSE). Rates verified live against
+    https://dhan.co/pricing/ on 2026-08-20:
+
+        CNC       brokerage 0; STT 0.1% both sides; stamp 0.015% buy-side only
+        INTRADAY  brokerage min(Rs20, 0.03% of turnover); STT 0.025%
+                  sell-side only; stamp 0.003% buy-side only
+        MTF       brokerage same formula as INTRADAY; STT/stamp same as CNC
+
+    Exchange transaction charges (0.0030699%) and SEBI turnover fees
+    (0.0001%) are identical across all three products. GST is 18% on
+    (brokerage + exchange charges + SEBI charges) only -- STT and stamp
+    duty are government taxes, not GST-able fees, same convention Dhan's
+    own charge sheet uses."""
+    product          = product.upper()
+    transaction_type = transaction_type.upper()
+    turnover         = quantity * price
+
+    if product == "CNC":
+        brokerage = 0.0
+        stt = turnover * 0.001                                    # 0.1%, both sides
+        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only
+    elif product == "MTF":
+        brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
+        stt = turnover * 0.001                                    # 0.1%, both sides (same as CNC)
+        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only (same as CNC)
+    else:  # INTRADAY
+        brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
+        stt = turnover * 0.00025 if transaction_type == "SELL" else 0.0    # 0.025%, sell-side only
+        stamp = turnover * 0.00003 if transaction_type == "BUY" else 0.0   # 0.003%, buy-side only
+
+    exchange_txn = turnover * 0.000030699   # NSE 0.0030699%
+    sebi         = turnover * 0.000001      # 0.0001%
+    gst          = (brokerage + exchange_txn + sebi) * 0.18
+
+    return brokerage + stt + exchange_txn + sebi + stamp + gst
+
+
 def fixed_charges(trade: dict, products: dict[str, str]) -> tuple[float, float]:
     """(dp_charge, pledge_unpledge_charge) for this trade -- both non-zero
     only on the genuine delivery entry BUY leg (see is_delivery_buy)."""
@@ -200,12 +244,24 @@ def trade_by_order_id_since(order_id: str, since_date_str: str) -> dict | None:
     positions_dhan.json can be queried well after their entry day (e.g. a
     position entered yesterday still sitting open this morning) -- the
     single-order endpoint alone would silently report 0 charges for those,
-    which is wrong, not just incomplete."""
+    which is wrong, not just incomplete.
+
+    Treats an outright API failure on the historical pull (get_trades
+    raises RuntimeError -- confirmed live 2026-08-20: the trade-book
+    endpoint was returning a 500 TRADE_RESOURCE_ERROR for every date range)
+    the same as "not found": returns None rather than propagating. Callers
+    like position_charge_summary() already treat None as "fall back to an
+    estimate," which is the whole point -- a real API outage shouldn't
+    behave any differently from a not-yet-indexed trade."""
     trade = trade_by_order_id(order_id)
     if trade is not None:
         return trade
     today = datetime.now(_IST).date().isoformat()
-    for t in get_trades(since_date_str, today):
+    try:
+        trades = get_trades(since_date_str, today)
+    except RuntimeError:
+        return None
+    for t in trades:
         if t.get("orderId") == order_id:
             return t
     return None
@@ -286,6 +342,11 @@ _EXIT_TIMESTAMP_FIELD = {
     "exited_1159":  "exit_timestamp_1159",
     "short_closed": "exit_timestamp_239",
 }
+_EXIT_PRICE_FIELD = {
+    "exited_925":   "exit_price_925",
+    "exited_1159":  "exit_price_1159",
+    "short_closed": "exit_price_239",
+}
 
 
 def position_charge_summary(pos: dict) -> dict:
@@ -297,26 +358,50 @@ def position_charge_summary(pos: dict) -> dict:
     date (closed -- interest stops accruing once covered/sold, so it's
     frozen there rather than keeping today's growing number).
 
-    Entry/exit leg charges come from trade_by_order_id_since(), which tries
-    the same-day fast path first and falls back to a historical trade-book
-    pull (from entry_date through today) on a miss -- so this works whether
-    it's called right after the fill (the normal case) or retroactively
-    against a position that's been open since an earlier day. A leg whose
-    trade record still isn't found either way contributes 0, not an error.
+    Entry/exit leg charges come from trade_by_order_id_since() first, which
+    tries the same-day fast path then falls back to a historical trade-book
+    pull -- so this works whether it's called right after the fill (the
+    normal case) or retroactively against a position that's been open since
+    an earlier day. If NEITHER lookup finds a real trade record (trade-book
+    API outage, or a same-day trade not yet indexed there), each leg falls
+    back to estimate_trade_charges() using the position's own known
+    qty/price/product instead of silently contributing 0 -- "entry_source"/
+    "exit_source" in the returned dict says which happened ("api",
+    "estimated", or "none" if there's not even enough data to estimate).
     """
     is_short = pos.get("direction") == "short"
-    product  = pos.get("product", "")
+    product  = pos.get("product", "") or ("INTRADAY" if is_short else "")
     status   = pos.get("status", "")
     since    = pos.get("entry_date") or datetime.now(_IST).date().isoformat()
 
+    entry_qty   = pos.get("quantity") if is_short else pos.get("actual_fill_quantity")
+    entry_price = pos.get("entry_price") if is_short else pos.get("actual_fill_price")
+    entry_side  = "SELL" if is_short else "BUY"
+
     entry_oid = pos.get("entry_order_id")
     entry_trade = trade_by_order_id_since(entry_oid, since) if entry_oid else None
-    entry_charges = trade_api_charges(entry_trade) if entry_trade else 0.0
+    if entry_trade:
+        entry_charges, entry_source = trade_api_charges(entry_trade), "api"
+    elif entry_qty and entry_price:
+        entry_charges = estimate_trade_charges(entry_qty, entry_price, product, entry_side)
+        entry_source = "estimated"
+    else:
+        entry_charges, entry_source = 0.0, "none"
 
     exit_field = _EXIT_ORDER_ID_FIELD.get(status)
     exit_oid   = pos.get(exit_field) if exit_field else None
     exit_trade = trade_by_order_id_since(exit_oid, since) if exit_oid else None
-    exit_charges = trade_api_charges(exit_trade) if exit_trade else 0.0
+    exit_price_field = _EXIT_PRICE_FIELD.get(status)
+    exit_price = pos.get(exit_price_field) if exit_price_field else None
+    exit_qty   = entry_qty  # exit leg estimate uses the same full position size as entry
+    exit_side  = "BUY" if is_short else "SELL"
+    if exit_trade:
+        exit_charges, exit_source = trade_api_charges(exit_trade), "api"
+    elif exit_field and exit_qty and exit_price:
+        exit_charges = estimate_trade_charges(exit_qty, exit_price, product, exit_side)
+        exit_source = "estimated"
+    else:
+        exit_charges, exit_source = 0.0, "none"
 
     dp = pledge = 0.0
     if not is_short and product in ("CNC", "MTF"):
@@ -344,7 +429,9 @@ def position_charge_summary(pos: dict) -> dict:
     total = entry_charges + exit_charges + dp + pledge + interest
     return {
         "entry_charges": round(entry_charges, 2),
+        "entry_source":  entry_source,
         "exit_charges":  round(exit_charges, 2),
+        "exit_source":   exit_source,
         "dp_charge":     round(dp, 2),
         "pledge_charge": round(pledge, 2),
         "mtf_interest":  round(interest, 2),
