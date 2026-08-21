@@ -959,6 +959,43 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             status = "dry_run"
         else:
             fill_price, fill_qty = _poll_fill_strict(order_id)
+
+            # The /margincalculator pre-check above can't detect MTF-ineligible
+            # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
+            # reported 4-5x leverage there, yet the real order came back
+            # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
+            # actual order attempt surfaces this, so retry once as CNC before
+            # giving up on the signal entirely.
+            if fill_qty == 0 and product == "MTF":
+                print(f"[dhan]   NOT FILLED on MTF — retrying as CNC.")
+                if manual_mode:
+                    cnc_capital_base = capital
+                    cnc_shares       = shares
+                else:
+                    cnc_capital_base = capital / 2
+                    cnc_allocation   = compute_allocation(cnc_capital_base, n)
+                    cnc_shares       = compute_shares(cnc_allocation, ref)
+                if cnc_shares == 0:
+                    print(f"[dhan]   SKIP — 0 shares at ₹{ref:,.2f} on "
+                          f"₹{cnc_capital_base:,.0f}-based CNC retry.")
+                else:
+                    try:
+                        cnc_order_id = buy(sym, "NSE_EQ", cnc_shares, order_type="LIMIT",
+                                            price=limit_price, product="CNC", dry_run=dry_run)
+                        cnc_fill_price, cnc_fill_qty = _poll_fill_strict(cnc_order_id)
+                    except Exception as exc:
+                        print(f"[dhan]   CNC retry ORDER FAILED: {exc}")
+                        cnc_fill_qty = 0
+                    if cnc_fill_qty > 0:
+                        product         = "CNC"
+                        leverage        = 0.0
+                        shares          = cnc_shares
+                        capital_base    = cnc_capital_base
+                        margin_required = cnc_shares * ref
+                        order_id        = cnc_order_id
+                        fill_price, fill_qty = cnc_fill_price, cnc_fill_qty
+                        print(f"[dhan]   CNC retry filled ₹{fill_price:,.2f} × {fill_qty}")
+
             if fill_qty == 0:
                 print(f"[dhan]   NOT FILLED — order rejected or unconfirmed "
                       f"(check broker manually, e.g. a circuit-locked stock).")
