@@ -373,5 +373,31 @@
     "status": "open",
     "entry_timestamp": "2026-08-21T15:21:10.985938+05:30",
     "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KLBRENG-B",
+    "entry_date": "2026-08-21",
+    "reference_price": 392.55,
+    "shares_intended": 950,
+    "actual_fill_price": 406.0,
+    "actual_fill_quantity": 950,
+    "entry_order_id": "361260821483209",
+    "status": "open",
+    "entry_timestamp": "2026-08-21T15:26:16+05:30",
+    "product": "MARGIN"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "WELSPLSOL",
+    "entry_date": "2026-08-21",
+    "reference_price": 51.68,
+    "shares_intended": 7230,
+    "actual_fill_price": 51.46937,
+    "actual_fill_quantity": 7230,
+    "entry_order_id": "241260821716609",
+    "status": "open",
+    "entry_timestamp": "2026-08-21T15:25:35+05:30",
+    "product": "MARGIN"
   }
 ]
