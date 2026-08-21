@@ -158,7 +158,7 @@ def _poll_fill_safe(order_id: str,
         return fallback_price, fallback_qty
 
 
-def _poll_fill_strict(order_id: str) -> tuple[float, int]:
+def _poll_fill_strict(order_id: str) -> tuple[float, int, bool]:
     """Like _poll_fill_safe, but never guesses on an unconfirmed timeout --
     only a genuine broker-confirmed TRADED status counts as filled. Used for
     ENTRIES only: a MARKET order stuck PENDING with no matching liquidity
@@ -167,17 +167,23 @@ def _poll_fill_strict(order_id: str) -> tuple[float, int]:
     waiting (see STYLEBAAZA,
     2026-08-14 -- an order that sat PENDING for the full 12s poll window on a
     circuit-locked stock got recorded as filled at the reference price/qty,
-    when nothing had actually traded). Returns (0.0, 0) for BOTH a genuine
-    rejection and an unconfirmed timeout -- either way, nothing gets recorded."""
+    when nothing had actually traded). Returns (0.0, 0, rejected) for BOTH a
+    genuine rejection and an unconfirmed timeout -- either way, nothing gets
+    recorded -- but callers that need to tell the two apart (e.g. an
+    MTF-ineligibility retry, which must NOT fire on a plain no-liquidity
+    timeout) can check the third element: True only for a genuine
+    broker-confirmed REJECTED/CANCELLED/EXPIRED, False for an unconfirmed
+    timeout."""
     try:
-        return _poll_fill(order_id)
+        price, qty = _poll_fill(order_id)
+        return price, qty, False
     except OrderRejected as exc:
         print(f"[dhan]   ORDER REJECTED — {exc}")
-        return 0.0, 0
+        return 0.0, 0, True
     except Exception as exc:
         print(f"[dhan]   fill poll failed: {exc} — NOT recording as filled "
               f"(order may still be pending at the broker; check manually)")
-        return 0.0, 0
+        return 0.0, 0, False
 
 
 # ── Margin / funds checks ──────────────────────────────────────────────────────
@@ -958,16 +964,18 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             print(f"[dhan]   DRY RUN — simulated fill ₹{fill_price:,.2f} × {fill_qty}")
             status = "dry_run"
         else:
-            fill_price, fill_qty = _poll_fill_strict(order_id)
+            fill_price, fill_qty, rejected = _poll_fill_strict(order_id)
 
             # The /margincalculator pre-check above can't detect MTF-ineligible
             # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
             # reported 4-5x leverage there, yet the real order came back
             # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
-            # actual order attempt surfaces this, so retry once as CNC before
-            # giving up on the signal entirely.
-            if fill_qty == 0 and product == "MTF":
-                print(f"[dhan]   NOT FILLED on MTF — retrying as CNC.")
+            # actual order attempt surfaces this, so retry once as CNC -- but
+            # ONLY on a genuine broker rejection, not a plain unfilled/timeout
+            # (that can just mean no seller matched yet, and CNC wouldn't fix
+            # that -- retrying would just burn another order for no reason).
+            if fill_qty == 0 and product == "MTF" and rejected:
+                print(f"[dhan]   MTF ORDER REJECTED — retrying as CNC.")
                 if manual_mode:
                     cnc_capital_base = capital
                     cnc_shares       = shares
@@ -982,7 +990,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                     try:
                         cnc_order_id = buy(sym, "NSE_EQ", cnc_shares, order_type="LIMIT",
                                             price=limit_price, product="CNC", dry_run=dry_run)
-                        cnc_fill_price, cnc_fill_qty = _poll_fill_strict(cnc_order_id)
+                        cnc_fill_price, cnc_fill_qty, _ = _poll_fill_strict(cnc_order_id)
                     except Exception as exc:
                         print(f"[dhan]   CNC retry ORDER FAILED: {exc}")
                         cnc_fill_qty = 0
