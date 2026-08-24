@@ -858,22 +858,47 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     n_skipped = 0
 
     positions     = _load_long_pos()
-    entered_today = {
-        p["symbol"] for p in positions
+    positions_today = {
+        p["symbol"]: p for p in positions
         if p.get("broker") == _BROKER and p.get("entry_date") == trade_date.isoformat()
     }
+
+    # Step 1/2/3 priority ordering (dhan/uc_staged_entry.py's Case A/B may
+    # already have partially or fully filled some of today's symbols, or
+    # even symbols outside today's trade_list.csv entirely -- Case A/B
+    # watches live_monitor.py's broader qualified universe, not the strict
+    # shortlist `symbols` is otherwise drawn from):
+    #   Step 1 (highest priority): entry_status=="partially_filled" -- Case A
+    #     leg 1 fired but leg 2 never retraced by its window close. Completed
+    #     FIRST, buying only the remaining balance of that symbol's own
+    #     capital_base (not the batch allocation below).
+    #   Step 2: any other existing row for today (entry_status=="filled" via
+    #     Case A/B, or an ordinary already-filled entry) -- skip entirely,
+    #     same dedup as always.
+    #   Step 3: no row at all -- completely unchanged today's full-allocation
+    #     entry.
+    step1_syms = [sym for sym, pos in positions_today.items()
+                 if pos.get("entry_status") == "partially_filled"]
+    step2_syms = [sym for sym in positions_today if sym not in step1_syms]
+    step3_syms = [sym for sym in symbols if sym not in positions_today]
+
+    for sym in step2_syms:
+        print(f"[dhan] {sym} — already entered today, skipping.")
+        n_skipped += 1
+
+    ordered_symbols = step1_syms + step3_syms
+    if step1_syms:
+        print(f"[dhan] Step 1 priority completion(s): {step1_syms}")
 
     # One batched call for every candidate symbol's LTP, not one call per
     # symbol inside the loop below -- see get_ltp's docstring for why (Quote
     # APIs are 1 req/sec; with N signals today, N sequential single-symbol
     # calls would 429 from the 2nd symbol on).
-    ltp_cache = get_ltp_batch(list(symbols))
+    ltp_cache = get_ltp_batch(list(ordered_symbols))
 
-    for sym in symbols:
-        if sym in entered_today:
-            print(f"[dhan] {sym} — already entered today, skipping.")
-            n_skipped += 1
-            continue
+    for sym in ordered_symbols:
+        existing_pos = positions_today.get(sym)   # present only for Step 1 symbols
+        is_partial_fill = existing_pos is not None
 
         print(f"\n[dhan] {sym}")
 
@@ -885,7 +910,13 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             n_skipped += 1
             continue
 
-        if manual_mode and shares_override is not None:
+        if is_partial_fill:
+            remaining_capital = existing_pos["capital_base"] - existing_pos["filled_amount"]
+            shares = compute_shares(remaining_capital, ref)
+            print(f"[dhan]   Step 1 priority — Case A left ₹{existing_pos['filled_amount']:,.2f} "
+                  f"of ₹{existing_pos['capital_base']:,.2f} filled — completing remaining "
+                  f"₹{remaining_capital:,.2f} ({shares} shares).")
+        elif manual_mode and shares_override is not None:
             shares = shares_override
         else:
             shares = compute_shares(allocation, ref)
@@ -902,7 +933,21 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             n_skipped += 1
             continue
 
-        if cnc_only:
+        if is_partial_fill:
+            # Reuse leg 1's product as-is rather than running a fresh
+            # leverage decision -- avoids ending up with a mixed-product
+            # position (leg 1 MTF, completion CNC or vice versa) that
+            # dhan/charges.py's single per-position `product` field can't
+            # represent cleanly. If leg 1's product genuinely isn't
+            # available anymore, the existing MTF-ineligibility CNC-retry
+            # further below still catches that the same way it always does.
+            product         = existing_pos["product"]
+            leverage        = 0.0
+            margin_required = shares * ref
+            capital_base    = existing_pos.get("capital_base", capital)
+            print(f"[dhan]   Case A completion — reusing product {product} from leg 1  "
+                  f"·  margin required: ₹{margin_required:,.2f}")
+        elif cnc_only:
             product         = "CNC"
             leverage        = 0.0
             margin_required = shares * ref
@@ -913,7 +958,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             margin_info  = _margin_check(sym, shares, ref)
             has_leverage = margin_info is not None and margin_info["leverage"] >= 2
 
-        if cnc_only:
+        if is_partial_fill or cnc_only:
             pass
         elif has_leverage:
             product         = "MTF"
@@ -1060,19 +1105,44 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             "capital_base": capital_base,
         })
 
-        positions.append({
-            "broker":               _BROKER,
-            "symbol":               sym,
-            "entry_date":           trade_date.isoformat(),
-            "reference_price":      round(ref, 4),
-            "shares_intended":      shares,
-            "actual_fill_price":    round(fill_price, 4),
-            "actual_fill_quantity": fill_qty,
-            "entry_order_id":       order_id,
-            "status":               "open",
-            "entry_timestamp":      _ts(),
-            "product":              product,
-        })
+        if is_partial_fill:
+            # Fold the completion fill into the SAME row leg 1 already wrote
+            # (weighted-average price, summed quantity) rather than a second
+            # row, so exit logic (place_targets_915/check_exit_925/
+            # force_exit_1159) still sees exactly one row per position --
+            # they already only match status in ("open",
+            # "partial_exit_925_nodata"), so flipping this to "open" is all
+            # that's needed for them to pick it up with zero changes.
+            total_qty   = existing_pos["actual_fill_quantity"] + fill_qty
+            avg_price   = ((existing_pos["actual_fill_price"] * existing_pos["actual_fill_quantity"]
+                           + fill_price * fill_qty) / total_qty)
+            fill_amount = fill_price * fill_qty
+            existing_pos.update({
+                "status":                    "open",
+                "entry_status":              "filled",
+                "case_a_leg":                "leg2_filled",
+                "filled_amount":             round(existing_pos["filled_amount"] + fill_amount, 2),
+                "actual_fill_price":         round(avg_price, 4),
+                "actual_fill_quantity":      total_qty,
+                "completion_order_id":       order_id,
+                "completion_fill_price":     round(fill_price, 4),
+                "completion_fill_quantity":  fill_qty,
+                "completion_timestamp":      _ts(),
+            })
+        else:
+            positions.append({
+                "broker":               _BROKER,
+                "symbol":               sym,
+                "entry_date":           trade_date.isoformat(),
+                "reference_price":      round(ref, 4),
+                "shares_intended":      shares,
+                "actual_fill_price":    round(fill_price, 4),
+                "actual_fill_quantity": fill_qty,
+                "entry_order_id":       order_id,
+                "status":               "open",
+                "entry_timestamp":      _ts(),
+                "product":              product,
+            })
         if not dry_run:
             _save_long_pos(positions)
         try:

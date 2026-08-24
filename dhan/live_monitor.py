@@ -2,8 +2,11 @@
 """
 dhan/live_monitor.py — Dhan MarketFeed live signal monitor for NSE mid-cap momentum
 =====================================================================================
-Monitoring and notification only. No orders. No positions. No execution.
-Telegram is the only output -- no CSV event log, no local logs/ directory.
+Monitoring and notification only by default. No orders. No positions. No
+execution -- UNLESS --enable-uc-staged-entry is passed (default off), which
+additionally watches for the UC-based staged entry (Case A/B, see
+dhan/uc_staged_entry.py) and places real orders through it. Telegram is the
+only output otherwise -- no CSV event log, no local logs/ directory.
 Independent of zerodha/live_monitor.py (Zerodha/KiteTicker) -- same strategy math
 (evaluate_tick, thresholds), different data source, kept as a separate file per
 this pipeline's pattern of not cross-wiring broker-specific execution paths.
@@ -44,6 +47,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -82,6 +86,8 @@ import data_loader
 from common.calc_utils import load_clean_candles, compute_36day_avg_volume, compute_prev_day_vwap
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.instruments import security_id
+from dhan.run_trades import TOTAL_CAPITAL
+import dhan.uc_staged_entry as uc_staged_entry
 
 # ── Strategy constants (mirror signal_engine.py / zerodha/live_monitor.py exactly) ─
 _MIN_PERIODS       = 36
@@ -275,7 +281,8 @@ def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
 # ── Monitor ────────────────────────────────────────────────────────────────────
 
 class LiveMonitor:
-    def __init__(self, client_id: str, access_token: str):
+    def __init__(self, client_id: str, access_token: str,
+                enable_uc_staged_entry: bool = False, dry_run: bool = False):
         self._client_id    = client_id
         self._access_token = access_token
         self._states: dict[int, _SymState] = {}          # securityId -> state
@@ -285,6 +292,22 @@ class LiveMonitor:
                                   # every call after that is a reconnect
         self._last_connect_at = None  # for _throttle_reconnect_ below
         self._reconnect_backoff = 2   # seconds; doubles on rapid reconnects, resets on a stable one
+
+        # UC-based staged entry (Case A/B, dhan/uc_staged_entry.py) -- off by
+        # default. When on, ticks also drive a second, independent state
+        # machine per symbol, and firing an order goes through self._executor
+        # so a slow broker call never blocks _on_message.
+        self._enable_uc_staged_entry = enable_uc_staged_entry
+        self._dry_run                = dry_run
+        self._uc_states: dict[int, uc_staged_entry.UCState] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4) if enable_uc_staged_entry else None
+        # per_stock_capital = TOTAL_CAPITAL / qualified_count, snapshotted
+        # EXACTLY ONCE at the first tick observed at/after 14:30 -- not
+        # recomputed as more symbols qualify later in the day (confirmed).
+        # None until that snapshot happens. Independent of this: the Case A
+        # qualification latch (update_case_a_qualification) runs on every
+        # tick from market open, well before this snapshot exists.
+        self._per_stock_capital: float | None = None
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -322,6 +345,18 @@ class LiveMonitor:
         self._all_sids = list(self._states)
         print(f"\nReady — monitoring {len(self._all_sids)} symbols via Dhan MarketFeed (Quote mode).")
 
+        if self._enable_uc_staged_entry:
+            print("UC-based staged entry ENABLED — loading previous-day closes…")
+            n_have_prev_close = 0
+            for sid, state in self._states.items():
+                prev_close = uc_staged_entry.load_prev_close(state.symbol)
+                if prev_close is not None:
+                    n_have_prev_close += 1
+                self._uc_states[sid] = uc_staged_entry.UCState(
+                    symbol=state.symbol, prev_close=prev_close)
+            print(f"  {n_have_prev_close}/{len(self._uc_states)} symbols have a usable "
+                  f"prev_close (rest fall through to the normal 3:21pm entry untouched).")
+
     # ── WebSocket callback ───────────────────────────────────────────────────
     # dhanhq's MarketFeed calls on_message(feed, data) once per parsed message
     # (one instrument per call), unlike KiteTicker's on_ticks(ws, ticks: list)
@@ -349,6 +384,50 @@ class LiveMonitor:
             fired = evaluate_tick(state, ltp, cum_vol)
             if "qualified"    in fired: self._fire_qualified(state)
             if "near_circuit" in fired: self._fire_near_circuit(state)
+
+            if self._enable_uc_staged_entry:
+                now = datetime.now(_IST)
+                uc_state = self._uc_states.get(sid)
+
+                # Case A qualification latch runs on EVERY tick from market
+                # open onward -- "hit UC before 14:30" must be observed long
+                # before the 14:30 window or the capital snapshot exist.
+                if uc_state is not None:
+                    uc_staged_entry.update_case_a_qualification(
+                        uc_state, ltp, state.upper_circuit, now=now)
+
+                # One-time capital snapshot: TOTAL_CAPITAL / qualified_count,
+                # taken at the first tick observed at/after 14:30 -- see
+                # __init__. Every uc_staged_entry call after this reads it
+                # back as a plain parameter, never recomputed later even as
+                # more symbols qualify.
+                if self._per_stock_capital is None and now.time() >= uc_staged_entry._CASE_A_START:
+                    n_qualified = sum(1 for s in self._states.values() if s.qualified)
+                    self._per_stock_capital = TOTAL_CAPITAL / max(n_qualified, 1)
+                    print(f"[uc_staged] per_stock_capital snapshot: "
+                          f"₹{TOTAL_CAPITAL:,.0f} / {n_qualified} qualified "
+                          f"= ₹{self._per_stock_capital:,.2f}")
+
+                if uc_state is not None and self._per_stock_capital is not None:
+                    uc_event = uc_staged_entry.evaluate_tick(
+                        uc_state, ltp, self._per_stock_capital, now=now)
+                    if uc_event is not None:
+                        self._fire_uc_staged(uc_event, uc_state, ltp, state.upper_circuit)
+
+    # ── UC staged entry dispatch (called under self._lock; only submits to
+    #    self._executor, never calls the slow order-placement function
+    #    inline -- see module docstring) ──────────────────────────────────────
+
+    def _fire_uc_staged(self, event: str, uc_state: "uc_staged_entry.UCState",
+                        ltp: float, upper_circuit: float) -> None:
+        fn = {
+            "case_a_leg1": uc_staged_entry.execute_case_a_leg1,
+            "case_a_leg2": uc_staged_entry.execute_case_a_leg2,
+            "case_b_fill": uc_staged_entry.execute_case_b,
+        }.get(event)
+        if fn is None:
+            return
+        self._executor.submit(fn, uc_state.symbol, uc_state, ltp, upper_circuit, self._dry_run)
 
     # dhanhq's own internal reconnect loop (MarketFeed._run_async) retries on
     # a flat 1-second sleep with NO backoff -- fine for a single transient
@@ -517,9 +596,22 @@ class LiveMonitor:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    import argparse
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--enable-uc-staged-entry", action="store_true",
+                         help="Enable Case A/B UC-based staged entry "
+                              "(dhan/uc_staged_entry.py). Default off -- monitoring/"
+                              "notification only, exactly like today, unless passed.")
+    _parser.add_argument("--dry-run", action="store_true",
+                         help="With --enable-uc-staged-entry: simulate staged-entry "
+                              "orders (log, don't place) instead of real ones.")
+    _args = _parser.parse_args()
+
     try:
         client_id, access_token = _get_dhan_credentials()
-        LiveMonitor(client_id, access_token).run()
+        LiveMonitor(client_id, access_token,
+                   enable_uc_staged_entry=_args.enable_uc_staged_entry,
+                   dry_run=_args.dry_run).run()
     except Exception as exc:
         print(f"dhan/live_monitor.py failed to start: {exc}", file=sys.stderr)
         try:
