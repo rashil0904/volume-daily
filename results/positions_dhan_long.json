@@ -390,11 +390,16 @@
     "actual_fill_price": 406.0,
     "actual_fill_quantity": 950,
     "entry_order_id": "361260821483209",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-21T15:26:16+05:30",
     "product": "CNC",
     "target_order_id": "321260824106109",
-    "target_price": 474.45
+    "target_price": 474.45,
+    "exit_price_1159": 389.171,
+    "exit_order_id_1159": "23126082451009",
+    "exit_timestamp_1159": "2026-08-24T11:59:05.859186+05:30",
+    "realized_return_pct": -4.1451,
+    "realized_pnl": -15987.55
   },
   {
     "broker": "dhan",
@@ -415,5 +420,57 @@
     "exit_timestamp_925": "2026-08-24T09:25:10.812769+05:30",
     "realized_return_pct": 1.0639,
     "realized_pnl": 3959.08
+  },
+  {
+    "broker": "dhan",
+    "symbol": "GUJTHEM",
+    "entry_date": "2026-08-24",
+    "reference_price": 410.95,
+    "shares_intended": 405,
+    "actual_fill_price": 412.7273,
+    "actual_fill_quantity": 405,
+    "entry_order_id": "221260824719309",
+    "status": "open",
+    "entry_timestamp": "2026-08-24T15:21:06.803574+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KCP",
+    "entry_date": "2026-08-24",
+    "reference_price": 176.83,
+    "shares_intended": 942,
+    "actual_fill_price": 177.3833,
+    "actual_fill_quantity": 942,
+    "entry_order_id": "321260824740509",
+    "status": "open",
+    "entry_timestamp": "2026-08-24T15:21:10.437802+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "OPTIEMUS",
+    "entry_date": "2026-08-24",
+    "reference_price": 586.85,
+    "shares_intended": 284,
+    "actual_fill_price": 586.0,
+    "actual_fill_quantity": 284,
+    "entry_order_id": "23126082483409",
+    "status": "open",
+    "entry_timestamp": "2026-08-24T15:21:16.062899+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "QUADFUTURE",
+    "entry_date": "2026-08-24",
+    "reference_price": 444.05,
+    "shares_intended": 375,
+    "actual_fill_price": 443.9459,
+    "actual_fill_quantity": 375,
+    "entry_order_id": "23126082483509",
+    "status": "open",
+    "entry_timestamp": "2026-08-24T15:21:19.343157+05:30",
+    "product": "MTF"
   }
 ]

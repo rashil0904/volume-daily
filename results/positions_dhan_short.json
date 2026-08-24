@@ -290,8 +290,13 @@
     "stop_order_id": "221260824111209",
     "stop_trigger_price": 135.12,
     "stop_limit_price": 135.8,
-    "status": "short_open",
-    "entry_timestamp": "2026-08-24T09:25:13.599348+05:30"
+    "status": "short_closed",
+    "entry_timestamp": "2026-08-24T09:25:13.599348+05:30",
+    "exit_price_239": 113.5099,
+    "exit_order_id_239": "34126082476409",
+    "exit_timestamp_239": "2026-08-24T14:39:06.204481+05:30",
+    "realized_return_pct": 1.4688,
+    "realized_pnl": 5585.56
   },
   {
     "broker": "dhan",
@@ -308,7 +313,35 @@
     "stop_order_id": "321260824116809",
     "stop_trigger_price": 61.34,
     "stop_limit_price": 61.65,
-    "status": "short_open",
-    "entry_timestamp": "2026-08-24T09:25:16.321944+05:30"
+    "status": "short_closed",
+    "entry_timestamp": "2026-08-24T09:25:16.321944+05:30",
+    "exit_price_239": 51.2492,
+    "exit_order_id_239": "321260824651209",
+    "exit_timestamp_239": "2026-08-24T14:39:09.244511+05:30",
+    "realized_return_pct": 1.1222,
+    "realized_pnl": 4205.37
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KLBRENG-B",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "1159",
+    "entry_date": "2026-08-24",
+    "entry_price": 389.0013,
+    "quantity": 950,
+    "entry_order_id": "23126082451109",
+    "cover_target_order_id": "34126082451509",
+    "cover_target_price": 369.55,
+    "stop_order_id": "321260824477209",
+    "stop_trigger_price": 474.45,
+    "stop_limit_price": 476.85,
+    "status": "short_closed",
+    "entry_timestamp": "2026-08-24T11:59:09.127365+05:30",
+    "exit_price_239": 392.9899,
+    "exit_order_id_239": "34126082476509",
+    "exit_timestamp_239": "2026-08-24T14:39:11.962684+05:30",
+    "realized_return_pct": -1.0253,
+    "realized_pnl": -3789.17
   }
 ]
