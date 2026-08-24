@@ -392,7 +392,7 @@
     "entry_order_id": "361260821483209",
     "status": "open",
     "entry_timestamp": "2026-08-21T15:26:16+05:30",
-    "product": "MARGIN",
+    "product": "CNC",
     "target_order_id": "321260824106109",
     "target_price": 474.45
   },
@@ -407,7 +407,7 @@
     "entry_order_id": "241260821716609",
     "status": "exited_925",
     "entry_timestamp": "2026-08-21T15:25:35+05:30",
-    "product": "MARGIN",
+    "product": "CNC",
     "target_order_id": "321260824106809",
     "target_price": 60.22,
     "exit_price_925": 52.017,
