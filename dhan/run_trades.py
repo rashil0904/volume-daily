@@ -130,8 +130,17 @@ class OrderRejected(RuntimeError):
 
 
 def _poll_fill(order_id: str, retries: int = 12, delay: float = 1.0) -> tuple[float, int]:
-    for _ in range(retries):
-        time.sleep(delay)
+    # Check immediately on the first attempt -- only sleep before retries 2+.
+    # By the time an order_id comes back from the broker, the order has
+    # already been sitting there for the round-trip of the placement call
+    # itself, so an immediate first check isn't a wasted no-op; sleeping
+    # BEFORE it (the old behavior) just threw away a full second on every
+    # single order, entry or exit, for no benefit. retries stays at 12 --
+    # only the pointless first sleep is removed (worst-case wait drops from
+    # ~12s to ~11s of actual sleeping, same number of status checks).
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(delay)
         try:
             o      = _dhan_order_status(order_id)
             status = (o.get("orderStatus") or "").upper()
@@ -651,7 +660,8 @@ def _fetch_upper_circuit_batch(symbols: list[str]) -> dict[str, float]:
 
 
 def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
-                ltp: float | None = None) -> None:
+                ltp: float | None = None,
+                available_balance: float | None = None) -> float | None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
     exit that just filled at either the 9:25am or 11:59am stage -- see run_trades.py's
     module docstring for the shorting add-on. Skips (never raises) on any
@@ -663,11 +673,22 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
     separate single-symbol get_ltp() call per short, which would re-introduce
     the same Quote-API rate-limit risk get_ltp_batch() exists to avoid. Falls
     back to a live single-symbol fetch only when called standalone (ltp not
-    supplied)."""
+    supplied).
+
+    available_balance: same idea, for /fundlimit -- pre-fetched once by the
+    caller's batch loop (check_exit_925/force_exit_1159) rather than a fresh
+    REST call per short. None means "fetch it fresh" (fine for a standalone
+    call). Returns the balance remaining after this short's margin
+    commitment (decremented at ORDER PLACEMENT, not fill confirmation --
+    matches how a broker actually blocks funds -- so a later short in the
+    same batch never oversubscribes capital this one already claimed), or
+    whatever value was passed in, unchanged, on any branch that skips before
+    an order is actually placed. The caller threads this return value into
+    its next _open_short() call to keep tracking across the batch."""
     if _shorting_skipped_today():
         print(f"[dhan]   SHORT SKIP — {sym}: shorting disabled for today "
               f"(see {_SKIP_SHORTING_FILE.name}).")
-        return
+        return available_balance
 
     if ltp is None:
         try:
@@ -678,14 +699,15 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
     margin_info = _intraday_margin_check(sym, qty, ltp) if ltp else None
     if margin_info is None:
         print(f"[dhan]   SHORT SKIP — {sym}: could not verify INTRADAY margin.")
-        return
-    available = _available_balance()
-    if available is None or available < margin_info["margin_required"]:
+        return available_balance
+    if available_balance is None:
+        available_balance = _available_balance()
+    if available_balance is None or available_balance < margin_info["margin_required"]:
         req = margin_info["margin_required"]
         print(f"[dhan]   SHORT SKIP — {sym}: insufficient balance "
-              f"(available {'unknown' if available is None else f'₹{available:,.2f}'} "
+              f"(available {'unknown' if available_balance is None else f'₹{available_balance:,.2f}'} "
               f"< required ₹{req:,.2f}).")
-        return
+        return available_balance
 
     short_limit = _tick_round(sym, ltp * 0.995)
     try:
@@ -693,12 +715,14 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
                   product="INTRADAY", dry_run=dry_run)
     except Exception as exc:
         print(f"[dhan]   SHORT FAILED — {sym}: {exc}")
-        return
+        return available_balance
+
+    available_balance -= margin_info["margin_required"]
 
     ep, eq = (ltp, qty) if dry_run else _poll_fill_safe(oid, ltp, qty)
     if eq == 0:
         print(f"[dhan]   SHORT NOT FILLED — {sym} short order rejected.")
-        return
+        return available_balance
 
     cover_price            = _tick_round(sym, ep * 0.95)
     cover_target_order_id  = None
@@ -778,6 +802,8 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
                                dry_run=dry_run)
     except Exception as exc:
         print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
+
+    return available_balance
 
 
 # ── Entries log (separate from positions_dhan_long.json, mirrors mtf_entries_*.csv) ─
@@ -896,6 +922,13 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     # calls would 429 from the 2nd symbol on).
     ltp_cache = get_ltp_batch(list(ordered_symbols))
 
+    # One-time balance fetch for this whole run -- see the matching note on
+    # _open_short()'s available_balance param. Decremented locally as each
+    # order below is placed (not on fill confirmation -- a broker blocks
+    # margin the moment an order is accepted, filled or not), instead of a
+    # fresh /fundlimit REST call per symbol.
+    available_balance = _available_balance()
+
     for sym in ordered_symbols:
         existing_pos = positions_today.get(sym)   # present only for Step 1 symbols
         is_partial_fill = existing_pos is not None
@@ -989,17 +1022,16 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             print(f"[dhan]   {reason} — falling back to CNC at {shares} shares "
                   f"(₹{capital_base:,.0f}-based)  ·  margin required: ₹{margin_required:,.2f}")
 
-        available = _available_balance()
-        if available is None:
+        if available_balance is None:
             print(f"[dhan]   SKIP — could not verify available balance for {sym}.")
             n_skipped += 1
             continue
-        if available < margin_required:
-            print(f"[dhan]   SKIP — insufficient balance (available ₹{available:,.2f} "
+        if available_balance < margin_required:
+            print(f"[dhan]   SKIP — insufficient balance (available ₹{available_balance:,.2f} "
                   f"< required ₹{margin_required:,.2f}).")
             n_skipped += 1
             continue
-        print(f"[dhan]   balance confirmed: ₹{available:,.2f} available")
+        print(f"[dhan]   balance confirmed: ₹{available_balance:,.2f} available")
 
         # LIMIT, not MARKET: Dhan/NSE apply their own price-protection band to a
         # MARKET order (confirmed 2026-08-17 -- every "MARKET" order this pipeline
@@ -1031,6 +1063,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             })
             n_skipped += 1
             continue
+
+        available_balance -= margin_required
 
         if dry_run:
             fill_price, fill_qty = ref, shares
@@ -1451,8 +1485,15 @@ def check_exit_925(dry_run: bool = False) -> None:
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
         short_ltp_cache = get_ltp_batch([sym for sym, _ in to_short])
+        # One-time balance fetch for this batch of shorts -- see the matching
+        # note on _open_short()'s available_balance param. Threaded through
+        # each call so a later short in the same batch never oversubscribes
+        # capital an earlier one in this same loop already claimed.
+        available_balance = _available_balance()
         for sym, eq in to_short:
-            _open_short(sym, eq, "925", dry_run=dry_run, ltp=short_ltp_cache.get(sym, 0.0))
+            available_balance = _open_short(sym, eq, "925", dry_run=dry_run,
+                                            ltp=short_ltp_cache.get(sym, 0.0),
+                                            available_balance=available_balance)
 
     print(f"\n[dhan] Exit check 9:25am complete.")
     _sync_pnl_workbook()
@@ -1604,8 +1645,13 @@ def force_exit_1159(dry_run: bool = False) -> None:
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
         short_ltp_cache = get_ltp_batch([sym for sym, _ in to_short])
+        # One-time balance fetch for this batch -- see the matching note in
+        # check_exit_925 / on _open_short()'s available_balance param.
+        available_balance = _available_balance()
         for sym, eq in to_short:
-            _open_short(sym, eq, "1159", dry_run=dry_run, ltp=short_ltp_cache.get(sym, 0.0))
+            available_balance = _open_short(sym, eq, "1159", dry_run=dry_run,
+                                            ltp=short_ltp_cache.get(sym, 0.0),
+                                            available_balance=available_balance)
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")

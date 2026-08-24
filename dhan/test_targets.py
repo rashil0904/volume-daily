@@ -19,8 +19,11 @@ Exit 0 on all-pass, exit 1 on any failure.
 """
 
 import copy
+import csv
 import sys
+import tempfile
 import types
+from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -276,8 +279,9 @@ def fake_broker_qty_c(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_c = []
-def fake_open_short_c(sym, qty, stage, dry_run=False, ltp=None):
+def fake_open_short_c(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
     open_short_calls_c.append((sym, qty, stage))
+    return available_balance
 
 with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_save_long_pos", store.save), \
@@ -289,6 +293,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_c), \
      patch.object(rt, "_broker_qty", fake_broker_qty_c), \
      patch.object(rt, "_open_short", fake_open_short_c), \
+     patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925_nodata", MagicMock()), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
     rt.check_exit_925(dry_run=False)
@@ -342,8 +347,9 @@ def fake_broker_qty_d(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_d = []
-def fake_open_short_d(sym, qty, stage, dry_run=False, ltp=None):
+def fake_open_short_d(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
     open_short_calls_d.append((sym, qty, stage))
+    return available_balance
 
 with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_save_long_pos", store.save), \
@@ -355,6 +361,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_d), \
      patch.object(rt, "_broker_qty", fake_broker_qty_d), \
      patch.object(rt, "_open_short", fake_open_short_d), \
+     patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925", MagicMock()):
     rt.check_exit_925(dry_run=False)
 
@@ -464,8 +471,9 @@ def fake_poll_fill_safe_f2(oid, fallback_price, fallback_qty):
     return 90.0, fallback_qty  # a LOSS -- 11:59 has no P&L gate, must still force-sell
 
 open_short_calls_f2 = []
-def fake_open_short_f2(sym, qty, stage, dry_run=False, ltp=None):
+def fake_open_short_f2(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
     open_short_calls_f2.append((sym, qty, stage))
+    return available_balance
 
 with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt, "_save_long_pos", store2.save), \
@@ -476,6 +484,7 @@ with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_f2), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
      patch.object(rt, "_open_short", fake_open_short_f2), \
+     patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_force_exit_1159", MagicMock()), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
     rt.force_exit_1159(dry_run=False)
@@ -921,6 +930,291 @@ check("(sl-d) force-cover buy() never called", buy_calls_slf == [])
 row_slf = store_slf.positions[0]
 check("(sl-d) position row completely unchanged (still short_open)", row_slf["status"] == "short_open")
 check("(sl-d) row unchanged entirely", row_slf == short_f)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-1) — _poll_fill: TRADED on the very first check, zero sleeps\n")
+# ─────────────────────────────────────────────────────────────────────────────
+# The old behavior slept 1s BEFORE every check, including the first -- wasting
+# a full second on every single order, entry or exit. Fixed to check-then-sleep.
+
+sleep_calls_p1 = []
+def fake_sleep_p1(secs):
+    sleep_calls_p1.append(secs)
+
+def fake_order_status_p1(oid):
+    return {"orderStatus": "TRADED", "filledQty": 5, "averageTradedPrice": 101.25}
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p1), \
+     patch.object(rt.time, "sleep", fake_sleep_p1):
+    price_p1, qty_p1 = rt._poll_fill("ORD-P1")
+
+check("(poll-1) filled without sleeping at all", sleep_calls_p1 == [], str(sleep_calls_p1))
+check("(poll-1) returns the broker's fill price/qty", (price_p1, qty_p1) == (101.25, 5))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-2) — _poll_fill: fills on the 3rd attempt, sleeps only twice (not 3x)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sleep_calls_p2 = []
+def fake_sleep_p2(secs):
+    sleep_calls_p2.append(secs)
+
+status_calls_p2 = []
+def fake_order_status_p2(oid):
+    status_calls_p2.append(oid)
+    if len(status_calls_p2) < 3:
+        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+    return {"orderStatus": "TRADED", "filledQty": 7, "averageTradedPrice": 88.5}
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p2), \
+     patch.object(rt.time, "sleep", fake_sleep_p2):
+    price_p2, qty_p2 = rt._poll_fill("ORD-P2")
+
+check("(poll-2) exactly 3 status checks before TRADED", len(status_calls_p2) == 3)
+check("(poll-2) only 2 sleeps happened -- none before attempt 1, one before each retry",
+      sleep_calls_p2 == [1.0, 1.0], str(sleep_calls_p2))
+check("(poll-2) returns the 3rd attempt's fill", (price_p2, qty_p2) == (88.5, 7))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-3) — _poll_fill: never fills -> same 12-attempt budget, "
+      "just 11 sleeps instead of 12\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sleep_calls_p3 = []
+def fake_sleep_p3(secs):
+    sleep_calls_p3.append(secs)
+
+status_calls_p3 = []
+def fake_order_status_p3(oid):
+    status_calls_p3.append(oid)
+    return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+
+raised_p3 = False
+with patch.object(rt, "_dhan_order_status", fake_order_status_p3), \
+     patch.object(rt.time, "sleep", fake_sleep_p3):
+    try:
+        rt._poll_fill("ORD-P3")
+    except RuntimeError:
+        raised_p3 = True
+
+check("(poll-3) raises RuntimeError after exhausting retries", raised_p3 is True)
+check("(poll-3) exactly 12 status checks attempted -- retry COUNT unchanged",
+      len(status_calls_p3) == 12, str(len(status_calls_p3)))
+check("(poll-3) only 11 sleeps happened -- the wasted first-second is gone, nothing else changed",
+      sleep_calls_p3 == [1.0] * 11, str(len(sleep_calls_p3)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-4) — _poll_fill: rejected on the very first check, no sleep needed\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sleep_calls_p4 = []
+def fake_sleep_p4(secs):
+    sleep_calls_p4.append(secs)
+
+def fake_order_status_p4(oid):
+    return {"orderStatus": "REJECTED", "omsErrorDescription": "Rate Not Within Ckt Limit"}
+
+raised_p4 = False
+with patch.object(rt, "_dhan_order_status", fake_order_status_p4), \
+     patch.object(rt.time, "sleep", fake_sleep_p4):
+    try:
+        rt._poll_fill("ORD-P4")
+    except rt.OrderRejected:
+        raised_p4 = True
+
+check("(poll-4) OrderRejected raised", raised_p4 is True)
+check("(poll-4) rejected on the FIRST check -- no sleep needed to find out",
+      sleep_calls_p4 == [], str(sleep_calls_p4))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-5) — _poll_fill_safe / _poll_fill_strict inherit the same fix "
+      "(both delegate straight to _poll_fill, no separate sleep logic of their own)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sleep_calls_p5 = []
+def fake_sleep_p5(secs):
+    sleep_calls_p5.append(secs)
+
+def fake_order_status_p5(oid):
+    return {"orderStatus": "TRADED", "filledQty": 3, "averageTradedPrice": 55.0}
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p5), \
+     patch.object(rt.time, "sleep", fake_sleep_p5):
+    price_safe, qty_safe = rt._poll_fill_safe("ORD-P5A", fallback_price=0.0, fallback_qty=0)
+    price_strict, qty_strict, rejected_strict, reason_strict = rt._poll_fill_strict("ORD-P5B")
+
+check("(poll-5) _poll_fill_safe filled immediately, zero sleeps",
+      (price_safe, qty_safe) == (55.0, 3) and sleep_calls_p5 == [], str(sleep_calls_p5))
+check("(poll-5) _poll_fill_strict filled immediately, zero sleeps, rejected=False",
+      (price_strict, qty_strict, rejected_strict) == (55.0, 3, False) and sleep_calls_p5 == [],
+      str(sleep_calls_p5))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (bal-entry) — run_entry_321: balance fetched ONCE for the whole run, "
+      "tracked locally as each order is placed (not re-fetched per symbol)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp_dir_bal  = tempfile.mkdtemp()
+tmp_root_bal = Path(tmp_dir_bal)
+tmp_trades_dir_bal = tmp_root_bal / "trades"
+tmp_trades_dir_bal.mkdir(parents=True, exist_ok=True)
+
+TODAY_BAL = date.today().isoformat()
+with open(tmp_trades_dir_bal / f"trade_list_{TODAY_BAL}.csv", "w", newline="") as f:
+    w = csv.writer(f)
+    w.writerow(["symbol", "shares", "ref_price"])
+    w.writerow(["BIGCO", 100, 100.0])
+    w.writerow(["SMALLCO", 100, 100.0])
+
+# Compute the SAME shares/margin the real function will, rather than
+# hardcoding a guess -- both symbols have identical ref price so both need
+# an identical margin_required.
+CAPITAL_BAL     = 1_500_000.0
+alloc_bal       = rt.compute_allocation(CAPITAL_BAL, 2)
+shares_bal      = rt.compute_shares(alloc_bal, 100.0)
+one_symbol_margin_bal = shares_bal * 100.0 / 3.0   # matches fake_margin_check_bal's 3x leverage
+
+balance_calls_bal = []
+def fake_available_balance_bal():
+    balance_calls_bal.append(1)
+    return one_symbol_margin_bal * 1.5   # enough for ONE symbol, not two
+
+margin_check_calls_bal = []
+def fake_margin_check_bal(sym, qty, price):
+    margin_check_calls_bal.append(sym)
+    return {"leverage": 3.0, "margin_required": qty * price / 3.0}
+
+buy_calls_bal = []
+def fake_buy_bal(symbol, exch, qty, **kw):
+    buy_calls_bal.append(symbol)
+    return f"ORD-{symbol}"
+
+store_bal = FakeStore([])
+
+with patch.object(rt, "_RESULTS_DIR", tmp_root_bal), \
+     patch.object(rt, "_LOG_DIR", tmp_trades_dir_bal), \
+     patch.object(rt, "_load_long_pos", store_bal.load), \
+     patch.object(rt, "_save_long_pos", store_bal.save), \
+     patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
+     patch.object(rt, "security_id", lambda sym: "999"), \
+     patch.object(rt, "_margin_check", fake_margin_check_bal), \
+     patch.object(rt, "_available_balance", fake_available_balance_bal), \
+     patch.object(rt, "buy", fake_buy_bal), \
+     patch.object(rt, "_poll_fill_strict", lambda oid: (100.5, shares_bal, False, "")), \
+     patch.object(rt.notify, "send_entry", MagicMock()):
+    rt.run_entry_321(capital=CAPITAL_BAL, dry_run=False)
+
+check("(bal-entry) _available_balance() called EXACTLY ONCE for the whole run "
+      "(not once per symbol)", balance_calls_bal == [1], str(balance_calls_bal))
+check("(bal-entry) both symbols went through the margin check (SMALLCO wasn't skipped "
+      "for an unrelated reason)", margin_check_calls_bal == ["BIGCO", "SMALLCO"],
+      str(margin_check_calls_bal))
+check("(bal-entry) BIGCO (first) bought — balance was sufficient at that point",
+      "BIGCO" in buy_calls_bal, str(buy_calls_bal))
+check("(bal-entry) SMALLCO (second) SKIPPED — the balance BIGCO already committed was "
+      "correctly subtracted locally, without a fresh /fundlimit re-check that would "
+      "have wrongly seen the original, undiminished figure again",
+      "SMALLCO" not in buy_calls_bal, str(buy_calls_bal))
+
+try:
+    import shutil
+    shutil.rmtree(tmp_dir_bal, ignore_errors=True)
+except Exception:
+    pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (bal-short) — check_exit_925's mirrored-short batch: balance fetched "
+      "ONCE for the whole batch, tracked locally across shorts (not per short)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+pos1_bs = make_long(symbol="SHORTA", target_order_id="TGT-SHORTA", target_price=117.0,
+                    actual_fill_price=100.0, actual_fill_quantity=10)
+pos2_bs = make_long(symbol="SHORTB", target_order_id="TGT-SHORTB", target_price=117.0,
+                    actual_fill_price=100.0, actual_fill_quantity=10)
+store_bs = FakeStore([pos1_bs, pos2_bs])
+
+def fake_order_status_bs(oid):
+    return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+
+def fake_cancel_bs(oid):
+    return oid
+
+def fake_broker_qty_bs(sym, product):
+    return 10, "NSE_EQ"
+
+sell_calls_bs = []
+def fake_sell_bs(symbol, exch, qty, **kw):
+    sell_calls_bs.append(symbol)
+    return f"MKT-{symbol}"
+
+def fake_poll_fill_safe_bs(oid, fallback_price, fallback_qty):
+    return 105.0, fallback_qty   # both longs exit at a profit, both go to_short
+
+balance_calls_bs = []
+def fake_available_balance_bs():
+    balance_calls_bs.append(1)
+    return 1_500.0   # enough for ONE short's margin (1000), not two (2000-0 vs 1500-1000=500<1000)
+
+short_margin_calls_bs = []
+def fake_intraday_margin_check_bs(sym, qty, ltp):
+    short_margin_calls_bs.append(sym)
+    return {"leverage": 3.0, "margin_required": 1_000.0}   # fixed, same for both
+
+short_sell_calls_bs = []
+def fake_short_sell_bs(symbol, exch, qty, **kw):
+    short_sell_calls_bs.append(symbol)
+    return f"SHORT-{symbol}"
+
+def fake_poll_fill_safe_short_bs(oid, fallback_price, fallback_qty):
+    return 100.0, fallback_qty
+
+with patch.object(rt, "_load_long_pos", store_bs.load), \
+     patch.object(rt, "_save_long_pos", store_bs.save), \
+     patch.object(rt, "_load_short_pos", lambda: []), \
+     patch.object(rt, "_save_short_pos", lambda positions: None), \
+     patch.object(rt, "_dhan_order_status", fake_order_status_bs), \
+     patch.object(rt, "_dhan_cancel_order", fake_cancel_bs), \
+     patch.object(rt, "get_ltp_batch", lambda syms: {s: 105.0 for s in syms}), \
+     patch.object(rt, "_broker_qty", fake_broker_qty_bs), \
+     patch.object(rt, "_shorting_skipped_today", lambda: False), \
+     patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check_bs), \
+     patch.object(rt, "_available_balance", fake_available_balance_bs), \
+     patch.object(rt, "_fetch_upper_circuit", lambda sym: 130.0), \
+     patch.object(rt.notify, "send_exit_925", MagicMock()), \
+     patch.object(rt.notify, "send_short_open", MagicMock()):
+
+    def routed_sell(symbol, exch, qty, **kw):
+        # Both the long-exit sell AND the short-open sell go through the same
+        # sell() -- distinguish by product (INTRADAY == the short leg).
+        if kw.get("product") == "INTRADAY":
+            return fake_short_sell_bs(symbol, exch, qty, **kw)
+        return fake_sell_bs(symbol, exch, qty, **kw)
+
+    with patch.object(rt, "sell", routed_sell), \
+         patch.object(rt, "buy", lambda *a, **kw: "COVER-OR-STOP"), \
+         patch.object(rt, "_poll_fill_safe",
+                      lambda oid, fp, fq: (fake_poll_fill_safe_short_bs(oid, fp, fq)
+                                          if oid.startswith("SHORT-")
+                                          else fake_poll_fill_safe_bs(oid, fp, fq))):
+        rt.check_exit_925(dry_run=False)
+
+check("(bal-short) _available_balance() called EXACTLY ONCE for the whole batch "
+      "(not once per short)", balance_calls_bs == [1], str(balance_calls_bs))
+check("(bal-short) both longs exited and were queued for a mirrored short",
+      sell_calls_bs == ["SHORTA", "SHORTB"], str(sell_calls_bs))
+check("(bal-short) SHORTA (first) opened — balance was sufficient at that point",
+      "SHORTA" in short_sell_calls_bs, str(short_sell_calls_bs))
+check("(bal-short) SHORTB (second) SKIPPED — the balance SHORTA already committed was "
+      "correctly subtracted locally instead of re-fetching the original figure",
+      "SHORTB" not in short_sell_calls_bs, str(short_sell_calls_bs))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
