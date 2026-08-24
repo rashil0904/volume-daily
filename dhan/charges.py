@@ -178,6 +178,15 @@ def estimate_trade_charges(quantity: int, price: float, product: str,
                   sell-side only; stamp 0.003% buy-side only
         MTF       brokerage same formula as INTRADAY; STT/stamp same as CNC
 
+    Any product that isn't explicitly MTF or INTRADAY (CNC, MARGIN/T+5, or
+    anything else) is charged at CNC rates -- per explicit instruction
+    2026-08-24: MARGIN (T+5) positions were falling into this function's old
+    catch-all "else" branch and getting charged as INTRADAY, which is wrong
+    (T+5 is a delivery-style holding, not a same-day round-trip). INTRADAY
+    stays its own explicit branch since the mirrored-short entries genuinely
+    are same-day round-trips with real intraday charge treatment at Dhan --
+    only the *default* changed, from "assume intraday" to "assume CNC".
+
     Exchange transaction charges (0.0030699%) and SEBI turnover fees
     (0.0001%) are identical across all three products. GST is 18% on
     (brokerage + exchange charges + SEBI charges) only -- STT and stamp
@@ -187,18 +196,18 @@ def estimate_trade_charges(quantity: int, price: float, product: str,
     transaction_type = transaction_type.upper()
     turnover         = quantity * price
 
-    if product == "CNC":
-        brokerage = 0.0
-        stt = turnover * 0.001                                    # 0.1%, both sides
-        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only
-    elif product == "MTF":
+    if product == "MTF":
         brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
         stt = turnover * 0.001                                    # 0.1%, both sides (same as CNC)
         stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only (same as CNC)
-    else:  # INTRADAY
+    elif product == "INTRADAY":
         brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
         stt = turnover * 0.00025 if transaction_type == "SELL" else 0.0    # 0.025%, sell-side only
         stamp = turnover * 0.00003 if transaction_type == "BUY" else 0.0   # 0.003%, buy-side only
+    else:  # CNC, MARGIN (T+5), or anything else not explicitly MTF/INTRADAY
+        brokerage = 0.0
+        stt = turnover * 0.001                                    # 0.1%, both sides
+        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only
 
     exchange_txn = turnover * 0.000030699   # NSE 0.0030699%
     sebi         = turnover * 0.000001      # 0.0001%
@@ -426,8 +435,14 @@ def position_charge_summary(pos: dict) -> dict:
     else:
         exit_charges, exit_source = 0.0, "none"
 
+    # DP charge applies to every delivery-style entry -- CNC, MTF, MARGIN
+    # (T+5), or anything else not explicitly INTRADAY (same "not MTF/INTRADAY
+    # -> CNC-like" default as estimate_trade_charges). Only MTF additionally
+    # gets the pledge/unpledge fee, since that's specific to MTF's lien
+    # mechanism -- MARGIN/T+5 shares actually get delivered to demat, no
+    # pledge involved.
     dp = pledge = 0.0
-    if not is_short and product in ("CNC", "MTF"):
+    if not is_short and product != "INTRADAY":
         dp = _DP_CHARGE
         if product == "MTF":
             pledge = _MTF_PLEDGE_UNPLEDGE_CHARGE
