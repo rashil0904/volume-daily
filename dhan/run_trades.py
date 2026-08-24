@@ -158,6 +158,33 @@ def _poll_fill_safe(order_id: str,
         return fallback_price, fallback_qty
 
 
+def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
+                      dry_run: bool, order_type: str = "LIMIT") -> str:
+    """Places a SELL order; if product is MARGIN (T+5) and Dhan's RMS rejects
+    it (confirmed live 2026-08-24: "Sell orders under T+5 are permitted only
+    against existing T+5 buy positions. No eligible T+5 quantity found" --
+    the T+5 buy hadn't cleared Dhan's internal eligibility ledger yet even
+    though /holdings showed the full qty as availableQty), retries once as
+    CNC against the same holdings. Returns the order_id actually used
+    (original, or the CNC retry's). Not used for MTF/CNC/INTRADAY sells --
+    those already work and a blind CNC retry there could mask a real
+    problem instead of a T+5-specific eligibility quirk."""
+    order_id = sell(sym, exch, qty, order_type=order_type, price=price,
+                    product=product, dry_run=dry_run)
+    if dry_run or product != "MARGIN":
+        return order_id
+    time.sleep(2)
+    try:
+        status = (_dhan_order_status(order_id).get("orderStatus") or "").upper()
+    except Exception:
+        return order_id
+    if status in ("REJECTED", "CANCELLED"):
+        print(f"[dhan]   MARGIN SELL REJECTED — retrying as CNC.")
+        return sell(sym, exch, qty, order_type=order_type, price=price,
+                   product="CNC", dry_run=dry_run)
+    return order_id
+
+
 def _poll_fill_strict(order_id: str) -> tuple[float, int, bool]:
     """Like _poll_fill_safe, but never guesses on an unconfirmed timeout --
     only a genuine broker-confirmed TRADED status counts as filled. Used for
@@ -1119,8 +1146,7 @@ def place_targets_915(dry_run: bool = False) -> None:
                       f"₹{target_price:,.2f}; may be rejected if it's above the real UC.")
 
             print(f"\n[dhan] {sym}  [{product}]  qty={qty}  target=₹{target_price:,.2f}")
-            order_id = sell(sym, "NSE_EQ", qty, order_type="LIMIT",
-                            price=target_price, product=product, dry_run=dry_run)
+            order_id = _sell_margin_safe(sym, "NSE_EQ", qty, target_price, product, dry_run)
 
             pos["target_order_id"] = order_id
             pos["target_price"]    = target_price
@@ -1259,8 +1285,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             # same fallback pattern as the entry order's own LTP-unavailable case.
             fallback_limit = _tick_round(sym, fill_price * 0.995)
             try:
-                oid = sell(sym, exch, half, order_type="LIMIT", price=fallback_limit,
-                          product=product, dry_run=dry_run)
+                oid = _sell_margin_safe(sym, exch, half, fallback_limit, product, dry_run)
             except Exception as exc:
                 print(f"[dhan]   fallback sell failed: {exc}")
                 continue
@@ -1283,8 +1308,8 @@ def check_exit_925(dry_run: bool = False) -> None:
                 # target_price (not recomputed) -- carries target protection
                 # into 11:59am for whatever didn't get sold in the half-sell.
                 try:
-                    new_target_oid = sell(sym, exch, remain, order_type="LIMIT",
-                                          price=pos["target_price"], product=product, dry_run=dry_run)
+                    new_target_oid = _sell_margin_safe(sym, exch, remain, pos["target_price"],
+                                                        product, dry_run)
                     pos["target_order_id"] = new_target_oid
                     if not dry_run:
                         _save_long_pos(positions)
@@ -1317,8 +1342,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             print(f"[dhan]   P&L positive — selling {qty}")
             sell_limit = _tick_round(sym, ltp * 0.995)
             try:
-                oid = sell(sym, exch, qty, order_type="LIMIT", price=sell_limit,
-                          product=product, dry_run=dry_run)
+                oid = _sell_margin_safe(sym, exch, qty, sell_limit, product, dry_run)
             except Exception as exc:
                 print(f"[dhan]   sell failed: {exc}")
                 continue
@@ -1461,8 +1485,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
                   f"as the limit-price anchor instead.")
         sell_limit = _tick_round(sym, exit_ltp * 0.995)
         try:
-            oid = sell(sym, exch, qty, order_type="LIMIT", price=sell_limit,
-                      product=product, dry_run=dry_run)
+            oid = _sell_margin_safe(sym, exch, qty, sell_limit, product, dry_run)
         except Exception as exc:
             print(f"[dhan]   sell failed: {exc}")
             continue

@@ -372,7 +372,9 @@
     "entry_order_id": "321260821720509",
     "status": "open",
     "entry_timestamp": "2026-08-21T15:21:10.985938+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "34126082411209",
+    "target_price": 132.76
   },
   {
     "broker": "dhan",
@@ -385,7 +387,9 @@
     "entry_order_id": "361260821483209",
     "status": "open",
     "entry_timestamp": "2026-08-21T15:26:16+05:30",
-    "product": "MARGIN"
+    "product": "MARGIN",
+    "target_order_id": "321260824106109",
+    "target_price": 474.45
   },
   {
     "broker": "dhan",
@@ -398,6 +402,8 @@
     "entry_order_id": "241260821716609",
     "status": "open",
     "entry_timestamp": "2026-08-21T15:25:35+05:30",
-    "product": "MARGIN"
+    "product": "MARGIN",
+    "target_order_id": "321260824106809",
+    "target_price": 60.22
   }
 ]
