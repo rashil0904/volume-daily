@@ -471,6 +471,16 @@ def send_monitor_start_failure(error_msg: str) -> None:
     _send(text, topic="errors")
 
 
+def send_token_renewal_failed(error_msg: str) -> None:
+    text = "\n".join([
+        "<b>&#128308; Dhan Token Renewal FAILED (8:00am)</b>",
+        f"<b>Error:</b> {html_lib.escape(str(error_msg))}",
+        "The previously saved token was left untouched — trading will still work "
+        "if it hasn't expired yet, but check it manually if this keeps failing.",
+    ])
+    _send(text, topic="errors")
+
+
 # ── CLI (for manual testing) ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
