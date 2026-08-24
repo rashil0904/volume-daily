@@ -185,7 +185,7 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
     return order_id
 
 
-def _poll_fill_strict(order_id: str) -> tuple[float, int, bool]:
+def _poll_fill_strict(order_id: str) -> tuple[float, int, bool, str]:
     """Like _poll_fill_safe, but never guesses on an unconfirmed timeout --
     only a genuine broker-confirmed TRADED status counts as filled. Used for
     ENTRIES only: a MARKET order stuck PENDING with no matching liquidity
@@ -194,23 +194,24 @@ def _poll_fill_strict(order_id: str) -> tuple[float, int, bool]:
     waiting (see STYLEBAAZA,
     2026-08-14 -- an order that sat PENDING for the full 12s poll window on a
     circuit-locked stock got recorded as filled at the reference price/qty,
-    when nothing had actually traded). Returns (0.0, 0, rejected) for BOTH a
-    genuine rejection and an unconfirmed timeout -- either way, nothing gets
-    recorded -- but callers that need to tell the two apart (e.g. an
-    MTF-ineligibility retry, which must NOT fire on a plain no-liquidity
-    timeout) can check the third element: True only for a genuine
-    broker-confirmed REJECTED/CANCELLED/EXPIRED, False for an unconfirmed
-    timeout."""
+    when nothing had actually traded). Returns (0.0, 0, rejected, reason) for
+    BOTH a genuine rejection and an unconfirmed timeout -- either way,
+    nothing gets recorded -- but callers that need to tell the two apart
+    (e.g. an MTF-ineligibility retry, which must NOT fire on a plain
+    no-liquidity timeout, NOR on a genuine rejection for an unrelated reason
+    like a circuit-limit breach -- see the reason string) can check the
+    third element: True only for a genuine broker-confirmed
+    REJECTED/CANCELLED/EXPIRED, False for an unconfirmed timeout."""
     try:
         price, qty = _poll_fill(order_id)
-        return price, qty, False
+        return price, qty, False, ""
     except OrderRejected as exc:
         print(f"[dhan]   ORDER REJECTED — {exc}")
-        return 0.0, 0, True
+        return 0.0, 0, True, str(exc)
     except Exception as exc:
         print(f"[dhan]   fill poll failed: {exc} — NOT recording as filled "
               f"(order may still be pending at the broker; check manually)")
-        return 0.0, 0, False
+        return 0.0, 0, False, ""
 
 
 # ── Margin / funds checks ──────────────────────────────────────────────────────
@@ -991,18 +992,23 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             print(f"[dhan]   DRY RUN — simulated fill ₹{fill_price:,.2f} × {fill_qty}")
             status = "dry_run"
         else:
-            fill_price, fill_qty, rejected = _poll_fill_strict(order_id)
+            fill_price, fill_qty, rejected, reject_reason = _poll_fill_strict(order_id)
 
             # The /margincalculator pre-check above can't detect MTF-ineligible
             # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
             # reported 4-5x leverage there, yet the real order came back
             # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
             # actual order attempt surfaces this, so retry once as CNC -- but
-            # ONLY on a genuine broker rejection, not a plain unfilled/timeout
-            # (that can just mean no seller matched yet, and CNC wouldn't fix
-            # that -- retrying would just burn another order for no reason).
-            if fill_qty == 0 and product == "MTF" and rejected:
-                print(f"[dhan]   MTF ORDER REJECTED — retrying as CNC.")
+            # ONLY when the rejection is specifically MTF-ineligibility, not
+            # any genuine rejection: a circuit-limit breach (e.g. SHANTIGEAR,
+            # 2026-08-21, "Rate Not Within Ckt Limit 309.55 To 464.25") would
+            # reject a CNC retry at the same price identically, so retrying
+            # there just burns another order for nothing. Also not on a plain
+            # unfilled/timeout (no seller matched yet -- CNC wouldn't fix that
+            # either).
+            if (fill_qty == 0 and product == "MTF" and rejected
+                    and "mtf product is not allow" in reject_reason.lower()):
+                print(f"[dhan]   MTF-INELIGIBLE — retrying as CNC.")
                 if manual_mode:
                     cnc_capital_base = capital
                     cnc_shares       = shares
@@ -1017,7 +1023,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                     try:
                         cnc_order_id = buy(sym, "NSE_EQ", cnc_shares, order_type="LIMIT",
                                             price=limit_price, product="CNC", dry_run=dry_run)
-                        cnc_fill_price, cnc_fill_qty, _ = _poll_fill_strict(cnc_order_id)
+                        cnc_fill_price, cnc_fill_qty, _, _ = _poll_fill_strict(cnc_order_id)
                     except Exception as exc:
                         print(f"[dhan]   CNC retry ORDER FAILED: {exc}")
                         cnc_fill_qty = 0
