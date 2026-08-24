@@ -274,5 +274,41 @@
     "exit_timestamp_239": "2026-08-21T14:39:22.094025+05:30",
     "realized_return_pct": 0.018,
     "realized_pnl": 28.89
+  },
+  {
+    "broker": "dhan",
+    "symbol": "THOMASCOOK",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-08-24",
+    "entry_price": 115.202,
+    "quantity": 3301,
+    "entry_order_id": "34126082414109",
+    "cover_target_order_id": "221260824111009",
+    "cover_target_price": 109.44,
+    "stop_order_id": "221260824111209",
+    "stop_trigger_price": 135.12,
+    "stop_limit_price": 135.8,
+    "status": "short_open",
+    "entry_timestamp": "2026-08-24T09:25:13.599348+05:30"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "WELSPLSOL",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-08-24",
+    "entry_price": 51.8309,
+    "quantity": 7230,
+    "entry_order_id": "34126082414209",
+    "cover_target_order_id": "23126082415709",
+    "cover_target_price": 49.24,
+    "stop_order_id": "321260824116809",
+    "stop_trigger_price": 61.34,
+    "stop_limit_price": 61.65,
+    "status": "short_open",
+    "entry_timestamp": "2026-08-24T09:25:16.321944+05:30"
   }
 ]
