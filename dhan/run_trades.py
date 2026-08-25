@@ -169,28 +169,76 @@ def _poll_fill_safe(order_id: str,
 
 def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
                       dry_run: bool, order_type: str = "LIMIT") -> str:
-    """Places a SELL order; if product is MARGIN (T+5) and Dhan's RMS rejects
-    it (confirmed live 2026-08-24: "Sell orders under T+5 are permitted only
-    against existing T+5 buy positions. No eligible T+5 quantity found" --
-    the T+5 buy hadn't cleared Dhan's internal eligibility ledger yet even
-    though /holdings showed the full qty as availableQty), retries once as
-    CNC against the same holdings. Returns the order_id actually used
-    (original, or the CNC retry's). Not used for MTF/CNC/INTRADAY sells --
-    those already work and a blind CNC retry there could mask a real
-    problem instead of a T+5-specific eligibility quirk."""
+    """Places a SELL order; retries once if the broker rejects it for a
+    specific, confirmed-live settlement/pledge-ledger lag -- NOT on any
+    rejection (a genuine circuit-limit or other rejection would fail
+    identically on retry too, so retrying there just burns another order for
+    nothing). Two confirmed patterns share the same root cause -- a
+    reporting API (/positions, /holdings) already shows the full quantity,
+    but the broker's real-time RMS eligibility check for that SPECIFIC
+    product hasn't caught up yet -- but they need DIFFERENT remedies:
+
+      - product == "MARGIN" (T+5): "Sell orders under T+5 are permitted only
+        against existing T+5 buy positions. No eligible T+5 quantity found"
+        -- confirmed live 2026-08-24 (KLBRENG-B/WELSPLSOL). Retries almost
+        immediately as CNC -- CNC sells against plain settled DEMAT holdings
+        and sidesteps the T+5-specific eligibility check entirely.
+
+      - product == "MTF": "...You are trying to sell more than the quantity
+        you currently hold" -- confirmed live 2026-08-25 (OPTIEMUS, bought
+        the previous session, sold at 9:25am the next morning). UNLIKE the
+        T+5 case, a CNC retry does NOT fix this -- the shares are pledged as
+        collateral for the MTF loan itself, so the block sits at the
+        depository/pledge level, not a product-routing quirk; CNC would hit
+        the exact same pledge block and fail identically (confirmed by
+        reasoning through the mechanism, not just guessed). The only thing
+        that actually resolved it live was waiting for the pledge-linkage
+        reconciliation with CDSL/NSDL to finish, then retrying at the SAME
+        product -- a manual retry as plain MTF, a few minutes later,
+        succeeded on its own. So this retries as MTF again, not CNC, after a
+        30s wait -- long enough to give the reconciliation a real chance,
+        short enough not to badly stall every OTHER symbol still waiting in
+        the same exit-check loop (this call blocks synchronously). NOT
+        guaranteed to succeed -- the real case took ~4 minutes wall-clock to
+        clear -- if this retry is ALSO rejected, its order_id is returned
+        as-is; the caller's normal fill-confirmation polling correctly
+        reports it as not filled, and the position is picked up again,
+        unconditionally, by the 11:59am force exit -- the real safety net
+        for whatever this 30s retry doesn't catch.
+
+    Gated on the SPECIFIC rejection text for MTF (unlike MARGIN, which
+    retries on any REJECTED/CANCELLED) -- an MTF sell can also legitimately
+    fail for unrelated reasons (e.g. a circuit-limit breach), and blindly
+    retrying THOSE would be pointless and could mask a real issue.
+
+    Returns the order_id actually used (original, or the retry's). Not used
+    for CNC/INTRADAY sells -- no known ledger-lag quirk there, and a blind
+    retry could mask a real problem."""
     order_id = sell(sym, exch, qty, order_type=order_type, price=price,
                     product=product, dry_run=dry_run)
-    if dry_run or product != "MARGIN":
+    if dry_run or product not in ("MARGIN", "MTF"):
         return order_id
     time.sleep(2)
     try:
-        status = (_dhan_order_status(order_id).get("orderStatus") or "").upper()
+        o      = _dhan_order_status(order_id)
+        status = (o.get("orderStatus") or "").upper()
     except Exception:
         return order_id
-    if status in ("REJECTED", "CANCELLED"):
+
+    if product == "MARGIN" and status in ("REJECTED", "CANCELLED"):
         print(f"[dhan]   MARGIN SELL REJECTED — retrying as CNC.")
         return sell(sym, exch, qty, order_type=order_type, price=price,
                    product="CNC", dry_run=dry_run)
+
+    if product == "MTF" and status in ("REJECTED", "CANCELLED"):
+        reason = (o.get("omsErrorDescription") or "").lower()
+        if "trying to sell more than" in reason:
+            print(f"[dhan]   MTF SELL REJECTED (pledge-ledger lag) — waiting 30s "
+                  f"then retrying as MTF again (CNC would hit the same pledge block).")
+            time.sleep(30)
+            return sell(sym, exch, qty, order_type=order_type, price=price,
+                       product="MTF", dry_run=dry_run)
+
     return order_id
 
 
