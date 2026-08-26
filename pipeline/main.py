@@ -31,6 +31,8 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
+from dateutil.relativedelta import relativedelta
+
 _PIPELINE_DIR = Path(__file__).resolve().parent
 _ROOT         = _PIPELINE_DIR.parent
 sys.path.insert(0, str(_PIPELINE_DIR))
@@ -61,7 +63,7 @@ TRADES_DIR      = _ROOT / "results" / "trades"
 TRADES_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY       = date.today()
-ONE_YEAR_AGO = TODAY - timedelta(days=365)
+BACKFILL_START = TODAY - relativedelta(months=6)
 TOTAL_CAPITAL = 500_000
 
 FIELDNAMES = ["symbol", "shares", "ref_price"]
@@ -164,10 +166,10 @@ def main():
                 matched_new = []
                 print("  All new symbols already in instrument master.")
             if matched_new:
-                print(f"  Backfilling {len(matched_new)} new symbol(s) from {ONE_YEAR_AGO} …")
+                print(f"  Backfilling {len(matched_new)} new symbol(s) from {BACKFILL_START} …")
                 data_loader.load_candles(
                     matched_new, interval="15minute", mode="historical",
-                    from_date=ONE_YEAR_AGO, to_date=TODAY,
+                    from_date=BACKFILL_START, to_date=TODAY,
                 )
         else:
             print("  No new symbols — skipping instrument match and historical backfill.")
