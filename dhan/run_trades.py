@@ -37,7 +37,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, wait as _wait_futures
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -121,6 +121,20 @@ def _load_symbols(trade_date: date) -> list[str]:
 
 def _ts() -> str:
     return datetime.now(_IST).isoformat()
+
+
+# ── Entry staging — hold until exactly 15:21:00 IST before firing, same as
+# zerodha/trade.py's stage_entry_orders() ──────────────────────────────────────
+
+_LTP_FETCH_AT = (15, 20, 57)   # wall-clock (H, M, S) IST -- fresh LTP fetched here
+_FIRE_AT      = (15, 21, 0)    # wall-clock (H, M, S) IST -- orders fire exactly here
+
+def _seconds_until(hh: int, mm: int, ss: int, now: datetime | None = None) -> float:
+    now    = now or datetime.now(_IST)
+    target = now.replace(hour=hh, minute=mm, second=ss, microsecond=0)
+    if target < now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 # ── Order fill polling ─────────────────────────────────────────────────────────
@@ -964,12 +978,6 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     if step1_syms:
         print(f"[dhan] Step 1 priority completion(s): {step1_syms}")
 
-    # One batched call for every candidate symbol's LTP, not one call per
-    # symbol inside the loop below -- see get_ltp's docstring for why (Quote
-    # APIs are 1 req/sec; with N signals today, N sequential single-symbol
-    # calls would 429 from the 2nd symbol on).
-    ltp_cache = get_ltp_batch(list(ordered_symbols))
-
     # One-time balance fetch for this whole run -- see the matching note on
     # _open_short()'s available_balance param. Decremented locally in Phase 1
     # below as each order is DECIDED (not on fill confirmation, and now not
@@ -1091,28 +1099,65 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         available_balance -= margin_required
         print(f"[dhan]   balance confirmed: ₹{available_balance:,.2f} remaining after this order")
 
-        # LIMIT, not MARKET: Dhan/NSE apply their own price-protection band to a
-        # MARKET order (confirmed 2026-08-17 -- every "MARKET" order this pipeline
-        # places actually comes back from Dhan as orderType=LIMIT near the
-        # submission price), and that band is tight enough that CAMLINFINE/UFLEX
-        # got 0-filled on ordinary same-second price movement, no circuit lock
-        # involved. Placing our own LIMIT 0.5% above live LTP gives explicit,
-        # wider headroom to fill instead of relying on Dhan's undocumented band.
-        if sym in ltp_cache:
-            entry_ltp = ltp_cache[sym]
-        else:
-            entry_ltp = ref
-            print(f"[dhan]   live LTP unavailable — using ref price ₹{ref:,.2f} "
-                  f"as the limit-price anchor instead.")
-        limit_price = _tick_round(sym, entry_ltp * 1.005)
-        print(f"[dhan]   LIMIT buy @ ₹{limit_price:,.2f}  (0.5% above LTP ₹{entry_ltp:,.2f})")
-
+        # LIMIT price itself isn't resolved yet -- see the staging hold right
+        # below Phase 1 for why (computing it here, before the 15:21:00 hold,
+        # would anchor it to an LTP up to ~a minute stale by the time the
+        # order actually fires).
         ready.append({
             "symbol": sym, "is_partial_fill": is_partial_fill, "existing_pos": existing_pos,
             "ref": ref, "shares": shares, "product": product, "leverage": leverage,
             "margin_required": margin_required, "capital_base": capital_base,
-            "limit_price": limit_price,
         })
+
+    # ── Staging hold, part 1: block until 15:20:57 IST -- 3s ahead of fire
+    # time, leaving just enough room for the LTP fetch + limit-price calc
+    # below to finish before part 2's hold takes over for the final stretch.
+    if ready:
+        hold1_s = _seconds_until(*_LTP_FETCH_AT)
+        if 0 < hold1_s <= 60:
+            print(f"\n[dhan] Staged {len(ready)}/{len(ordered_symbols)} symbol(s) — "
+                  f"holding {hold1_s:.1f}s until 15:20:57 to fetch LTP…")
+            time.sleep(hold1_s)
+
+    # LIMIT, not MARKET: Dhan/NSE apply their own price-protection band to a
+    # MARKET order (confirmed 2026-08-17 -- every "MARKET" order this pipeline
+    # places actually comes back from Dhan as orderType=LIMIT near the
+    # submission price), and that band is tight enough that CAMLINFINE/UFLEX
+    # got 0-filled on ordinary same-second price movement, no circuit lock
+    # involved. Placing our own LIMIT 0.5% above live LTP gives explicit,
+    # wider headroom to fill instead of relying on Dhan's undocumented band.
+    #
+    # Fetched fresh HERE, at 15:20:57, not earlier -- one batched call for
+    # every ready symbol's LTP, not one call per symbol (see get_ltp_batch's
+    # docstring: Quote APIs are 1 req/sec, N sequential single-symbol calls
+    # would 429 from the 2nd symbol on).
+    ltp_cache = get_ltp_batch([item["symbol"] for item in ready])
+    for item in ready:
+        sym, ref = item["symbol"], item["ref"]
+        if sym in ltp_cache:
+            entry_ltp = ltp_cache[sym]
+        else:
+            entry_ltp = ref
+            print(f"[dhan]   {sym}: live LTP unavailable — using ref price ₹{ref:,.2f} "
+                  f"as the limit-price anchor instead.")
+        item["limit_price"] = _tick_round(sym, entry_ltp * 1.005)
+        print(f"[dhan]   {sym}: LIMIT buy @ ₹{item['limit_price']:,.2f}  "
+              f"(0.5% above LTP ₹{entry_ltp:,.2f})")
+
+    # ── Staging hold, part 2: block until exactly 15:21:00 IST, same as
+    # zerodha/trade.py's stage_entry_orders() -- so this cron's dry-run test
+    # (scheduled at 15:20 to leave prep time) fires at the SAME wall-clock
+    # moment as the real production entry, rather than ~a minute early. The
+    # LTP fetch + limit-price calc above should only eat ~1s of the 2s left
+    # after part 1's hold, so this is normally a short ~1s wait, not another
+    # full 2s one. Only sleeps if the wait is short (called mid-window as
+    # intended); a late or manual run skips the wait and fires immediately.
+    if ready:
+        hold2_s = _seconds_until(*_FIRE_AT)
+        if 0 < hold2_s <= 60:
+            print(f"[dhan] Priced {len(ready)} order(s) — holding {hold2_s:.1f}s "
+                  f"until 15:21:00…")
+            time.sleep(hold2_s)
 
     # ── Phase 2 (parallel): fire every resolved order at once. Each worker
     # places the order, polls its own fill, and (on a confirmed MTF-
