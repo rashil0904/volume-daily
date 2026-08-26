@@ -37,7 +37,7 @@ for _m in ("data_loader",):
 
 import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 
-# _tick_round() now looks up each symbol's REAL tick size via dhan.instruments
+# _tick_round() now looks up each symbol's REAL tick size via dhan.trade
 # .tick_size() (see run_trades.py -- tick size varies per symbol, e.g. ₹0.10 for
 # TVSSRICHAK vs ₹0.01 for CAMLINFINE, confirmed live 2026-08-18). None of this
 # suite's fictional symbols (DELTA, EPSILON, IOTA, ...) exist in the real scrip

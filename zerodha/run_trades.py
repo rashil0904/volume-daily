@@ -666,6 +666,13 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     # any other symbol's task or the eventual position-file write below.
     def _place_and_poll(item: dict) -> dict:
         sym, ref, shares, product = item["symbol"], item["ref"], item["shares"], item["product"]
+        # MARKET order -- no predetermined price the way Dhan's LIMIT entry
+        # has. ref (the 15:20 candle close) is only ever used for share
+        # sizing; the real fill price is whatever the market gives, subject
+        # to the 0.5% market_protection collar in trade.py's place_order().
+        print(f"[zerodha]   {_ts()} — placing {product} MARKET BUY {shares}× {sym}  "
+              f"(sizing ref ₹{ref:,.2f} — MARKET orders have no predetermined fill price)"
+              + ("  (DRY RUN)" if dry_run else ""))
         try:
             order_id = buy(sym, "NSE", shares, order_type="MARKET", product=product, dry_run=dry_run)
         except Exception as exc:

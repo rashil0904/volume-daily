@@ -36,6 +36,7 @@ import math
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, wait as _wait_futures
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -46,8 +47,7 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.trade import (buy, sell, place_order, order_status as _dhan_order_status,
-                        cancel_order as _dhan_cancel_order)
-from dhan.instruments import security_id, tick_size
+                        cancel_order as _dhan_cancel_order, security_id, tick_size)
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 import notify
@@ -439,7 +439,7 @@ def get_ltp_batch(symbols: list[str]) -> dict[str, float]:
 
 def _tick_round(symbol: str, price: float) -> float:
     """Rounds to the nearest valid tick for THIS symbol, per Dhan's own scrip
-    master (dhan/instruments.py's tick_size()) -- tick size is NOT a flat ₹0.05
+    master (dhan/trade.py's tick_size()) -- tick size is NOT a flat ₹0.05
     across NSE equities as originally assumed (that assumption is what caused
     two real order rejections, EXCH:16283, on 2026-08-18): TVSSRICHAK/DREDGECORP/
     RELIANCE are ₹0.10, CAMLINFINE/MOTISONS/SHANTIGOLD are ₹0.01, UFLEX/TARSONS
@@ -971,12 +971,21 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     ltp_cache = get_ltp_batch(list(ordered_symbols))
 
     # One-time balance fetch for this whole run -- see the matching note on
-    # _open_short()'s available_balance param. Decremented locally as each
-    # order below is placed (not on fill confirmation -- a broker blocks
-    # margin the moment an order is accepted, filled or not), instead of a
-    # fresh /fundlimit REST call per symbol.
+    # _open_short()'s available_balance param. Decremented locally in Phase 1
+    # below as each order is DECIDED (not on fill confirmation, and now not
+    # even on order placement -- placement itself moves to Phase 2's thread
+    # pool, so the pool can never oversubscribe the same balance two threads
+    # both still see as available), instead of a fresh /fundlimit REST call
+    # per symbol.
     available_balance = _available_balance()
 
+    # ── Phase 1 (sequential): resolve reference price, shares, product/
+    # leverage/margin, and the balance-availability decision for every
+    # symbol, decrementing the shared available_balance pool as we go. Must
+    # stay sequential -- these are the /margincalculator leverage checks and
+    # the capital-pool bookkeeping that is NOT safe to run concurrently
+    # against the same pool. Nothing here places an order yet.
+    ready: list[dict] = []
     for sym in ordered_symbols:
         existing_pos = positions_today.get(sym)   # present only for Step 1 symbols
         is_partial_fill = existing_pos is not None
@@ -1079,7 +1088,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                   f"< required ₹{margin_required:,.2f}).")
             n_skipped += 1
             continue
-        print(f"[dhan]   balance confirmed: ₹{available_balance:,.2f} available")
+        available_balance -= margin_required
+        print(f"[dhan]   balance confirmed: ₹{available_balance:,.2f} remaining after this order")
 
         # LIMIT, not MARKET: Dhan/NSE apply their own price-protection band to a
         # MARKET order (confirmed 2026-08-17 -- every "MARKET" order this pipeline
@@ -1097,97 +1107,130 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         limit_price = _tick_round(sym, entry_ltp * 1.005)
         print(f"[dhan]   LIMIT buy @ ₹{limit_price:,.2f}  (0.5% above LTP ₹{entry_ltp:,.2f})")
 
+        ready.append({
+            "symbol": sym, "is_partial_fill": is_partial_fill, "existing_pos": existing_pos,
+            "ref": ref, "shares": shares, "product": product, "leverage": leverage,
+            "margin_required": margin_required, "capital_base": capital_base,
+            "limit_price": limit_price,
+        })
+
+    # ── Phase 2 (parallel): fire every resolved order at once. Each worker
+    # places the order, polls its own fill, and (on a confirmed MTF-
+    # ineligibility rejection) retries once as CNC -- exactly the same retry
+    # this file has always done, just now running inside the worker instead
+    # of inline in a sequential loop. No position-file access, no shared-
+    # state mutation beyond the rate limiter (already thread-safe on its own)
+    # -- available_balance is already fully consumed by Phase 1 above, so
+    # there's nothing left for two workers to race over. A single symbol's
+    # exception/rejection cannot block or delay any other symbol's task or
+    # the eventual position-file write below.
+    def _place_and_poll(item: dict) -> dict:
+        sym, shares, product = item["symbol"], item["shares"], item["product"]
+        ref, limit_price     = item["ref"], item["limit_price"]
+        print(f"[dhan]   {_ts()} — placing {product} LIMIT BUY {shares}× {sym} @ ₹{limit_price:,.2f}"
+              + ("  (DRY RUN)" if dry_run else ""))
         try:
             order_id = buy(sym, "NSE_EQ", shares,
                           order_type="LIMIT", price=limit_price, product=product, dry_run=dry_run)
         except Exception as exc:
-            print(f"[dhan]   ORDER FAILED: {exc}")
+            return {**item, "error": f"ORDER FAILED: {exc}", "log_status": "order_failed",
+                    "order_id": ""}
+
+        if dry_run:
+            # Report the ACTUAL LIMIT price that would be submitted, not the
+            # reference candle close (ref is only used for share sizing) --
+            # this is the exact price a dry run should show as "what would
+            # be placed."
+            return {**item, "order_id": order_id, "fill_price": limit_price, "fill_qty": shares}
+
+        fill_price, fill_qty, rejected, reject_reason = _poll_fill_strict(order_id)
+
+        # The /margincalculator pre-check above can't detect MTF-ineligible
+        # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
+        # reported 4-5x leverage there, yet the real order came back
+        # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
+        # actual order attempt surfaces this, so retry once as CNC -- but
+        # ONLY when the rejection is specifically MTF-ineligibility, not
+        # any genuine rejection: a circuit-limit breach (e.g. SHANTIGEAR,
+        # 2026-08-21, "Rate Not Within Ckt Limit 309.55 To 464.25") would
+        # reject a CNC retry at the same price identically, so retrying
+        # there just burns another order for nothing. Also not on a plain
+        # unfilled/timeout (no seller matched yet -- CNC wouldn't fix that
+        # either).
+        if (fill_qty == 0 and product == "MTF" and rejected
+                and "mtf product is not allow" in reject_reason.lower()):
+            print(f"[dhan]   MTF-INELIGIBLE — retrying as CNC.")
+            if manual_mode:
+                cnc_capital_base = capital
+                cnc_shares       = shares
+            else:
+                cnc_capital_base = capital / 2
+                cnc_allocation   = compute_allocation(cnc_capital_base, n)
+                cnc_shares       = compute_shares(cnc_allocation, ref)
+            if cnc_shares == 0:
+                print(f"[dhan]   SKIP — 0 shares at ₹{ref:,.2f} on "
+                      f"₹{cnc_capital_base:,.0f}-based CNC retry.")
+            else:
+                try:
+                    cnc_order_id = buy(sym, "NSE_EQ", cnc_shares, order_type="LIMIT",
+                                        price=limit_price, product="CNC", dry_run=dry_run)
+                    cnc_fill_price, cnc_fill_qty, _, _ = _poll_fill_strict(cnc_order_id)
+                except Exception as exc:
+                    print(f"[dhan]   CNC retry ORDER FAILED: {exc}")
+                    cnc_fill_qty = 0
+                if cnc_fill_qty > 0:
+                    print(f"[dhan]   CNC retry filled ₹{cnc_fill_price:,.2f} × {cnc_fill_qty}")
+                    return {**item, "order_id": cnc_order_id, "product": "CNC", "leverage": 0.0,
+                            "shares": cnc_shares, "capital_base": cnc_capital_base,
+                            "margin_required": cnc_shares * ref,
+                            "fill_price": cnc_fill_price, "fill_qty": cnc_fill_qty}
+
+        if fill_qty == 0:
+            return {**item, "order_id": order_id,
+                    "error": "NOT FILLED — order rejected or unconfirmed "
+                             "(check broker manually, e.g. a circuit-locked stock).",
+                    "log_status": "not_filled"}
+        return {**item, "order_id": order_id, "fill_price": fill_price, "fill_qty": fill_qty}
+
+    results: list[dict] = []
+    if ready:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_place_and_poll, item): item for item in ready}
+            _wait_futures(futures.keys())   # do not proceed on partial completion
+            for fut in futures:
+                results.append(fut.result())
+
+    # ── Phase 3 (sequential): one pass over every result, one save at the end.
+    for res in results:
+        sym, product = res["symbol"], res["product"]
+        print(f"\n[dhan] {sym}  [{product}]")
+
+        if "error" in res:
+            print(f"[dhan]   {res['error']}")
             _append_log(trade_date, {
-                "timestamp": _ts(), "symbol": sym, "quantity": shares,
-                "ref_price": round(ref, 4), "fill_price": "",
-                "leverage": leverage, "margin_required": margin_required,
-                "order_id": "", "status": "order_failed", "product": product,
-                "capital_base": capital_base,
+                "timestamp": _ts(), "symbol": sym, "quantity": res["shares"],
+                "ref_price": round(res["ref"], 4), "fill_price": "",
+                "leverage": res["leverage"], "margin_required": res["margin_required"],
+                "order_id": res.get("order_id", ""), "status": res["log_status"],
+                "product": product, "capital_base": res["capital_base"],
             })
             n_skipped += 1
             continue
 
-        available_balance -= margin_required
-
-        if dry_run:
-            fill_price, fill_qty = ref, shares
-            print(f"[dhan]   DRY RUN — simulated fill ₹{fill_price:,.2f} × {fill_qty}")
-            status = "dry_run"
-        else:
-            fill_price, fill_qty, rejected, reject_reason = _poll_fill_strict(order_id)
-
-            # The /margincalculator pre-check above can't detect MTF-ineligible
-            # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
-            # reported 4-5x leverage there, yet the real order came back
-            # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
-            # actual order attempt surfaces this, so retry once as CNC -- but
-            # ONLY when the rejection is specifically MTF-ineligibility, not
-            # any genuine rejection: a circuit-limit breach (e.g. SHANTIGEAR,
-            # 2026-08-21, "Rate Not Within Ckt Limit 309.55 To 464.25") would
-            # reject a CNC retry at the same price identically, so retrying
-            # there just burns another order for nothing. Also not on a plain
-            # unfilled/timeout (no seller matched yet -- CNC wouldn't fix that
-            # either).
-            if (fill_qty == 0 and product == "MTF" and rejected
-                    and "mtf product is not allow" in reject_reason.lower()):
-                print(f"[dhan]   MTF-INELIGIBLE — retrying as CNC.")
-                if manual_mode:
-                    cnc_capital_base = capital
-                    cnc_shares       = shares
-                else:
-                    cnc_capital_base = capital / 2
-                    cnc_allocation   = compute_allocation(cnc_capital_base, n)
-                    cnc_shares       = compute_shares(cnc_allocation, ref)
-                if cnc_shares == 0:
-                    print(f"[dhan]   SKIP — 0 shares at ₹{ref:,.2f} on "
-                          f"₹{cnc_capital_base:,.0f}-based CNC retry.")
-                else:
-                    try:
-                        cnc_order_id = buy(sym, "NSE_EQ", cnc_shares, order_type="LIMIT",
-                                            price=limit_price, product="CNC", dry_run=dry_run)
-                        cnc_fill_price, cnc_fill_qty, _, _ = _poll_fill_strict(cnc_order_id)
-                    except Exception as exc:
-                        print(f"[dhan]   CNC retry ORDER FAILED: {exc}")
-                        cnc_fill_qty = 0
-                    if cnc_fill_qty > 0:
-                        product         = "CNC"
-                        leverage        = 0.0
-                        shares          = cnc_shares
-                        capital_base    = cnc_capital_base
-                        margin_required = cnc_shares * ref
-                        order_id        = cnc_order_id
-                        fill_price, fill_qty = cnc_fill_price, cnc_fill_qty
-                        print(f"[dhan]   CNC retry filled ₹{fill_price:,.2f} × {fill_qty}")
-
-            if fill_qty == 0:
-                print(f"[dhan]   NOT FILLED — order rejected or unconfirmed "
-                      f"(check broker manually, e.g. a circuit-locked stock).")
-                _append_log(trade_date, {
-                    "timestamp": _ts(), "symbol": sym, "quantity": shares,
-                    "ref_price": round(ref, 4), "fill_price": "",
-                    "leverage": leverage, "margin_required": margin_required,
-                    "order_id": order_id, "status": "not_filled", "product": product,
-                    "capital_base": capital_base,
-                })
-                n_skipped += 1
-                continue
-            print(f"[dhan]   filled ₹{fill_price:,.2f} × {fill_qty}")
-            status = "filled"
+        order_id, fill_price, fill_qty = res["order_id"], res["fill_price"], res["fill_qty"]
+        status = "dry_run" if dry_run else "filled"
+        print(f"[dhan]   filled ₹{fill_price:,.2f} × {fill_qty}"
+              + ("  (DRY RUN)" if dry_run else ""))
 
         _append_log(trade_date, {
             "timestamp": _ts(), "symbol": sym, "quantity": fill_qty,
-            "ref_price": round(ref, 4), "fill_price": round(fill_price, 4),
-            "leverage": leverage, "margin_required": margin_required,
+            "ref_price": round(res["ref"], 4), "fill_price": round(fill_price, 4),
+            "leverage": res["leverage"], "margin_required": res["margin_required"],
             "order_id": order_id, "status": status, "product": product,
-            "capital_base": capital_base,
+            "capital_base": res["capital_base"],
         })
 
-        if is_partial_fill:
+        if res["is_partial_fill"]:
             # Fold the completion fill into the SAME row leg 1 already wrote
             # (weighted-average price, summed quantity) rather than a second
             # row, so exit logic (place_targets_915/check_exit_925/
@@ -1195,6 +1238,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             # they already only match status in ("open",
             # "partial_exit_925_nodata"), so flipping this to "open" is all
             # that's needed for them to pick it up with zero changes.
+            existing_pos = res["existing_pos"]
             total_qty   = existing_pos["actual_fill_quantity"] + fill_qty
             avg_price   = ((existing_pos["actual_fill_price"] * existing_pos["actual_fill_quantity"]
                            + fill_price * fill_qty) / total_qty)
@@ -1216,8 +1260,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                 "broker":               _BROKER,
                 "symbol":               sym,
                 "entry_date":           trade_date.isoformat(),
-                "reference_price":      round(ref, 4),
-                "shares_intended":      shares,
+                "reference_price":      round(res["ref"], 4),
+                "shares_intended":      res["shares"],
                 "actual_fill_price":    round(fill_price, 4),
                 "actual_fill_quantity": fill_qty,
                 "entry_order_id":       order_id,
@@ -1225,15 +1269,16 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                 "entry_timestamp":      _ts(),
                 "product":              product,
             })
-        if not dry_run:
-            _save_long_pos(positions)
         try:
-            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", ref_price=ref,
+            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", ref_price=res["ref"],
                               shares=fill_qty, order_id=order_id, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry failed: {exc}", file=sys.stderr)
 
         n_entered += 1
+
+    if not dry_run and results:
+        _save_long_pos(positions)   # single write for the whole batch
 
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
@@ -1343,11 +1388,6 @@ def check_exit_925(dry_run: bool = False) -> None:
         _sync_pnl_workbook()
         return
 
-    # Collected here and opened in one pass AFTER every exit below has been
-    # attempted -- all long exits complete first, then all mirrored shorts,
-    # rather than interleaving short(A) between exit(A) and exit(B).
-    to_short: list[tuple[str, int]] = []
-
     # One batched call for every open position's LTP, not one call per symbol
     # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
     # single-symbol calls reliably 429 on the 2nd+ symbol (see get_ltp's
@@ -1355,6 +1395,14 @@ def check_exit_925(dry_run: bool = False) -> None:
     # get_ltp() raising -- falls into the existing no-data fallback branch.
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
+    dirty = False   # any in-memory mutation this run -- decides whether to save at the end
+
+    # ── Phase 1 (sequential): target-hit checks resolve immediately in place
+    # (no new order -- just recording an already-completed fill), and the
+    # no-data/pnl-gate decision for everything else. Builds a list of
+    # per-symbol exit tasks to run in parallel below; positions that hit
+    # their target or are held for 11:59 never enter that list.
+    tasks: list[dict] = []
     for pos in open_ps:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
@@ -1390,8 +1438,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                     "realized_return_pct": round(ret, 4),
                     "realized_pnl":        round(pnl, 2),
                 })
-                if not dry_run:
-                    _save_long_pos(positions)
+                dirty = True
                 print(f"[dhan]   TARGET HIT — exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="925",
@@ -1420,115 +1467,146 @@ def check_exit_925(dry_run: bool = False) -> None:
             no_data = True
 
         if no_data:
-            if target_oid:
-                try:
-                    _dhan_cancel_order(target_oid)
-                except Exception as exc:
-                    print(f"[dhan]   target cancel failed (may already be filled/cancelled): {exc}")
             half   = math.floor(qty / 2)
             remain = qty - half
             if half == 0:
                 print(f"[dhan]   qty too small to halve — holding until 11:59am.")
                 continue
-            exch = "NSE_EQ"
-            if not dry_run:
-                bqty, exch = _broker_qty(sym, product)
-                if bqty != qty:
-                    print(f"[dhan]   !! MISMATCH — local={qty} broker={bqty}. "
-                          f"Skipping {sym} — manual review required.")
-                    continue
-            print(f"[dhan]   NO-DATA FALLBACK — selling {half} of {qty}")
             # LTP is unavailable in this branch by definition (that's why we're
             # here) -- anchor the LIMIT price on the recorded fill price instead,
             # same fallback pattern as the entry order's own LTP-unavailable case.
             fallback_limit = _tick_round(sym, fill_price * 0.995)
+            tasks.append({"kind": "fallback", "pos": pos, "sym": sym, "product": product,
+                         "fill_price": fill_price, "check_qty": qty, "qty": half, "remain": remain,
+                         "sell_limit": fallback_limit,
+                         "target_oid": target_oid, "target_price": pos.get("target_price")})
+            continue
+
+        if pnl_live > 0:
+            print(f"[dhan]   P&L positive — queuing sell of {qty}")
+            sell_limit = _tick_round(sym, ltp * 0.995)
+            tasks.append({"kind": "full", "pos": pos, "sym": sym, "product": product,
+                         "fill_price": fill_price, "check_qty": qty, "qty": qty,
+                         "sell_limit": sell_limit, "target_oid": target_oid})
+        else:
+            print(f"[dhan]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
+
+    # ── Phase 2 (parallel): each task cancels its own stale target (if any),
+    # cross-checks broker qty, places the sell (through _sell_margin_safe, the
+    # MTF pledge-ledger-lag retry logic unchanged), and polls the fill. No
+    # position-file access inside the task. Mirrored-short-opening deliberately
+    # stays OUT of this parallel phase (unlike zerodha's equivalent) and runs
+    # in its own sequential batch below Phase 3 -- _open_short()'s
+    # available_balance is threaded sequentially across that batch (see its
+    # docstring), which two threads sharing the same Python float cannot
+    # safely do concurrently without reintroducing the per-symbol /fundlimit
+    # re-fetch this was built to avoid.
+    def _do_exit_task(task: dict) -> dict:
+        sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
+        target_oid = task["target_oid"]
+        if target_oid:
             try:
-                oid = _sell_margin_safe(sym, exch, half, fallback_limit, product, dry_run)
+                _dhan_cancel_order(target_oid)
             except Exception as exc:
-                print(f"[dhan]   fallback sell failed: {exc}")
-                continue
-            ep, eq = (fill_price, half) if dry_run else _poll_fill_safe(oid, fill_price, half)
-            if eq == 0:
-                print(f"[dhan]   NOT FILLED — fallback sell rejected, position left open.")
-                continue
+                print(f"[dhan]   target cancel failed for {sym} (may already be filled/cancelled): {exc}")
+
+        exch = "NSE_EQ"
+        if not dry_run:
+            bqty, exch = _broker_qty(sym, product)
+            if bqty != task["check_qty"]:
+                return {**task, "error": f"!! MISMATCH — local={task['check_qty']} broker={bqty}. "
+                                          f"Skipping {sym} — manual review required."}
+
+        try:
+            oid = _sell_margin_safe(sym, exch, qty, task["sell_limit"], product, dry_run)
+        except Exception as exc:
+            kind_label = "fallback sell" if task["kind"] == "fallback" else "sell"
+            return {**task, "error": f"{kind_label} failed: {exc}"}
+
+        ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+        if eq == 0:
+            err = ("NOT FILLED — fallback sell rejected, position left open." if task["kind"] == "fallback"
+                   else "NOT FILLED — sell rejected, position left open.")
+            return {**task, "error": err}
+
+        return {**task, "oid": oid, "ep": ep, "eq": eq, "exch": exch}
+
+    results: list[dict] = []
+    if tasks:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_do_exit_task, t): t for t in tasks}
+            _wait_futures(futures.keys())   # do not proceed on partial completion
+            for fut in futures:
+                results.append(fut.result())
+
+    # ── Phase 3 (sequential): apply every result, collecting mirrored-short
+    # candidates into to_short for the sequential batch below -- one save for
+    # the whole batch, no two threads ever touch the position file at once,
+    # because nothing but this loop, running after every thread has already
+    # finished, ever writes to it.
+    to_short: list[tuple[str, int]] = []
+    for res in results:
+        sym, product, pos, fill_price = res["sym"], res["product"], res["pos"], res["fill_price"]
+        print(f"\n[dhan] {sym}  [{product}]")
+
+        if "error" in res:
+            print(f"[dhan]   {res['error']}")
+            continue
+
+        ep, eq = res["ep"], res["eq"]
+        dirty = True
+
+        if res["kind"] == "fallback":
+            remain = res["remain"]
             pos.update({
                 "status":             "partial_exit_925_nodata",
-                "shares_exited_925":  half,
+                "shares_exited_925":  eq,
                 "shares_remaining":   remain,
                 "exit_price_925":     round(ep, 4),
-                "exit_order_id_925":  oid,
+                "exit_order_id_925":  res["oid"],
                 "exit_timestamp_925": _ts(),
             })
-            if not dry_run:
-                _save_long_pos(positions)
-            if remain > 0 and target_oid:
+            print(f"[dhan]   NO-DATA FALLBACK — sold {eq}  ₹{ep:,.2f}")
+            if remain > 0 and res["target_oid"] and res.get("target_price"):
                 # Fresh target for the still-open remainder, at the SAME
                 # target_price (not recomputed) -- carries target protection
                 # into 11:59am for whatever didn't get sold in the half-sell.
                 try:
-                    new_target_oid = _sell_margin_safe(sym, exch, remain, pos["target_price"],
+                    new_target_oid = _sell_margin_safe(sym, res["exch"], remain, res["target_price"],
                                                         product, dry_run)
                     pos["target_order_id"] = new_target_oid
-                    if not dry_run:
-                        _save_long_pos(positions)
                     print(f"[dhan]   fresh target placed for remaining {remain} "
-                          f"@ ₹{pos['target_price']:,.2f} — order {new_target_oid}")
+                          f"@ ₹{res['target_price']:,.2f} — order {new_target_oid}")
                 except Exception as exc:
                     print(f"[dhan]   !! fresh target placement failed for {sym}: {exc}")
             try:
                 notify.send_exit_925_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
-                                            shares_exited=half, shares_remaining=remain,
+                                            shares_exited=eq, shares_remaining=remain,
                                             exit_price=ep, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_925_nodata failed: {exc}", file=sys.stderr)
-            to_short.append((sym, eq))
-            continue
-
-        if pnl_live > 0:
-            if target_oid:
-                try:
-                    _dhan_cancel_order(target_oid)
-                except Exception as exc:
-                    print(f"[dhan]   target cancel failed (may already be filled/cancelled): {exc}")
-            exch = "NSE_EQ"
-            if not dry_run:
-                bqty, exch = _broker_qty(sym, product)
-                if bqty != qty:
-                    print(f"[dhan]   !! MISMATCH — local={qty} broker={bqty}. "
-                          f"Skipping {sym} — manual review required.")
-                    continue
-            print(f"[dhan]   P&L positive — selling {qty}")
-            sell_limit = _tick_round(sym, ltp * 0.995)
-            try:
-                oid = _sell_margin_safe(sym, exch, qty, sell_limit, product, dry_run)
-            except Exception as exc:
-                print(f"[dhan]   sell failed: {exc}")
-                continue
-            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
-            if eq == 0:
-                print(f"[dhan]   NOT FILLED — sell rejected, position left open.")
-                continue
+        else:
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
             pos.update({
                 "status":              "exited_925",
                 "exit_price_925":      round(ep, 4),
-                "exit_order_id_925":   oid,
+                "exit_order_id_925":   res["oid"],
                 "exit_timestamp_925":  _ts(),
                 "realized_return_pct": round(ret_act, 4),
                 "realized_pnl":        round(pnl, 2),
             })
-            if not dry_run:
-                _save_long_pos(positions)
             print(f"[dhan]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
                 notify.send_exit_925(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
                                      return_pct=ret_act, pnl=pnl, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
-            to_short.append((sym, eq))
-        else:
-            print(f"[dhan]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
+
+        to_short.append((sym, eq))
+
+    if not dry_run and dirty:
+        _save_long_pos(positions)
 
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")
@@ -1536,7 +1614,9 @@ def check_exit_925(dry_run: bool = False) -> None:
         # One-time balance fetch for this batch of shorts -- see the matching
         # note on _open_short()'s available_balance param. Threaded through
         # each call so a later short in the same batch never oversubscribes
-        # capital an earlier one in this same loop already claimed.
+        # capital an earlier one in this same loop already claimed. Stays a
+        # plain sequential loop, not a thread pool -- see the note on Phase 2
+        # above for why.
         available_balance = _available_balance()
         for sym, eq in to_short:
             available_balance = _open_short(sym, eq, "925", dry_run=dry_run,
@@ -1567,14 +1647,16 @@ def force_exit_1159(dry_run: bool = False) -> None:
         return
 
     n_force = 0
-    # Collected here and opened in one pass AFTER every forced exit below has
-    # been attempted -- see the matching comment in check_exit_925.
-    to_short: list[tuple[str, int]] = []
+    dirty   = False
 
     # One batched call for every still-open position's LTP -- see the matching
     # comment in check_exit_925.
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
+    # ── Phase 1 (sequential): target-hit checks resolve immediately in place;
+    # everything else queues an unconditional force-sell task (no P&L gate at
+    # this stage -- unlike 9:25, every remaining open position sells here).
+    tasks: list[dict] = []
     for pos in open_ps:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
@@ -1617,8 +1699,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
                     "realized_return_pct":  round(ret, 4),
                     "realized_pnl":         round(pnl, 2),
                 })
-                if not dry_run:
-                    _save_long_pos(positions)
+                dirty = True
                 print(f"[dhan]   TARGET HIT — closed ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="1159",
@@ -1633,15 +1714,6 @@ def force_exit_1159(dry_run: bool = False) -> None:
             except Exception as exc:
                 print(f"[dhan]   target cancel failed (may already be filled/cancelled): {exc}")
 
-        exch = "NSE_EQ"
-        if not dry_run:
-            bqty, exch = _broker_qty(sym, product)
-            if bqty != qty:
-                print(f"[dhan]   !! MISMATCH — local={qty} broker={bqty}. "
-                      f"Skipping {sym} — manual review required.")
-                continue
-            print(f"[dhan]   broker confirmed: {bqty} shares [{exch}]")
-
         if sym in ltp_cache:
             exit_ltp = ltp_cache[sym]
         else:
@@ -1649,17 +1721,58 @@ def force_exit_1159(dry_run: bool = False) -> None:
             print(f"[dhan]   live LTP unavailable — using fill price ₹{fill_price:,.2f} "
                   f"as the limit-price anchor instead.")
         sell_limit = _tick_round(sym, exit_ltp * 0.995)
+
+        tasks.append({"pos": pos, "sym": sym, "product": product, "fill_price": fill_price,
+                      "qty": qty, "is_partial": is_partial, "sell_limit": sell_limit})
+
+    # ── Phase 2 (parallel): each task cross-checks broker qty, force-sells
+    # (through _sell_margin_safe, the MTF pledge-ledger-lag retry logic
+    # unchanged), and polls the fill. No position-file access inside the
+    # task. Mirrored-short-opening deliberately stays OUT of this parallel
+    # phase -- see the matching note in check_exit_925.
+    def _do_force_task(task: dict) -> dict:
+        sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
+
+        exch = "NSE_EQ"
+        if not dry_run:
+            bqty, exch = _broker_qty(sym, product)
+            if bqty != qty:
+                return {**task, "error": f"!! MISMATCH — local={qty} broker={bqty}. "
+                                          f"Skipping {sym} — manual review required."}
+
         try:
-            oid = _sell_margin_safe(sym, exch, qty, sell_limit, product, dry_run)
+            oid = _sell_margin_safe(sym, exch, qty, task["sell_limit"], product, dry_run)
         except Exception as exc:
-            print(f"[dhan]   sell failed: {exc}")
-            continue
+            return {**task, "error": f"sell failed: {exc}"}
 
         ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
         if eq == 0:
-            print(f"[dhan]   !! NOT FILLED — force-exit sell rejected for {sym}. "
-                  f"Position left as-is — manual review required.")
+            return {**task, "error": f"!! NOT FILLED — force-exit sell rejected for {sym}. "
+                                      f"Position left as-is — manual review required."}
+
+        return {**task, "oid": oid, "ep": ep, "eq": eq}
+
+    results: list[dict] = []
+    if tasks:
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_do_force_task, t): t for t in tasks}
+            _wait_futures(futures.keys())   # do not proceed on partial completion
+            for fut in futures:
+                results.append(fut.result())
+
+    # ── Phase 3 (sequential): apply every result, one save for the whole batch.
+    to_short: list[tuple[str, int]] = []
+    for res in results:
+        sym, product, pos = res["sym"], res["product"], res["pos"]
+        fill_price, is_partial = res["fill_price"], res["is_partial"]
+        print(f"\n[dhan] {sym}  [{product}]")
+
+        if "error" in res:
+            print(f"[dhan]   {res['error']}")
             continue
+
+        ep, eq = res["ep"], res["eq"]
+        dirty  = True
 
         if is_partial:
             s925 = int(pos.get("shares_exited_925") or 0)
@@ -1674,13 +1787,11 @@ def force_exit_1159(dry_run: bool = False) -> None:
         pos.update({
             "status":               "exited_1159",
             "exit_price_1159":      round(ep, 4),
-            "exit_order_id_1159":   oid,
+            "exit_order_id_1159":   res["oid"],
             "exit_timestamp_1159":  _ts(),
             "realized_return_pct":  round(ret, 4),
             "realized_pnl":         round(pnl, 2),
         })
-        if not dry_run:
-            _save_long_pos(positions)
         print(f"[dhan]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         try:
             notify.send_force_exit_1159(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
@@ -1689,6 +1800,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
             print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
         to_short.append((sym, eq))
         n_force += 1
+
+    if not dry_run and dirty:
+        _save_long_pos(positions)
 
     if to_short:
         print(f"\n[dhan] Opening {len(to_short)} mirrored short(s)...")

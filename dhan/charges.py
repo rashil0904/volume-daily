@@ -77,7 +77,7 @@ import json
 from zoneinfo import ZoneInfo
 from datetime import datetime
 from dhan.auth import BASE_URL, get_session
-from dhan.instruments import security_id
+from dhan.trade import security_id
 
 _CHARGE_FIELDS = [
     ("brokerageCharges",          "Brokerage"),

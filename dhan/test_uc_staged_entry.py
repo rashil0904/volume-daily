@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-test_uc_staged_entry.py -- standalone verifier for dhan/uc_staged_entry.py (the
-UC-based staged entry, Case A/B), the per_stock_capital snapshot in
-dhan/live_monitor.py, and the Step 1/2/3 priority restructure in
-dhan/run_trades.py's run_entry_321.
+test_uc_staged_entry.py -- standalone verifier for the UC-based staged entry
+(Case A/B, folded into dhan/live_monitor.py -- see its "UC-based staged
+entry" section), the per_stock_capital snapshot (also in dhan/live_monitor.py),
+and the Step 1/2/3 priority restructure in dhan/run_trades.py's run_entry_321.
 
 Mocks every broker-facing call (_margin_check/_available_balance/buy/
 _poll_fill_strict/_tick_round's underlying tick_size, plus get_reference_price/
@@ -12,14 +12,14 @@ position-file read/write (_load_long_pos/_save_long_pos) with an in-memory
 store -- zero network calls, zero real file writes. Mirrors
 dhan/test_targets.py's standalone script style (no pytest in this repo).
 
-IMPORTANT: dhan/uc_staged_entry.py does `from dhan.run_trades import X` for
-everything it reuses -- that binds its OWN local names, decoupled from
-dhan.run_trades's names. Every mock below patches the name as it exists on
-`uc` (the module under test), NOT on `rt`, except for `tick_size` (patched on
+IMPORTANT: dhan/live_monitor.py does `from dhan.run_trades import X` for
+everything the UC-staged-entry section reuses -- that binds its OWN local
+names, decoupled from dhan.run_trades's names. Every mock below patches the
+name as it exists on `lm` (dhan.live_monitor, the module under test) for
+UC-staged-entry scenarios, NOT on `rt`, except for `tick_size` (patched on
 `rt`, since `_tick_round`'s function body resolves `tick_size` via
 run_trades.py's own globals regardless of which module holds a reference to
-the function) and the run_entry_321/live_monitor-specific scenarios, which
-patch `rt`/`lm` directly.
+the function) and the run_entry_321 scenarios, which patch `rt` directly.
 
 Usage:
     python dhan/test_uc_staged_entry.py
@@ -44,8 +44,8 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 for _m in ("data_loader",):
     sys.modules.setdefault(_m, types.ModuleType(_m))
 
-import dhan.run_trades as rt        # noqa: E402
-import dhan.uc_staged_entry as uc   # noqa: E402
+import dhan.run_trades as rt          # noqa: E402
+import dhan.live_monitor as lm        # noqa: E402
 
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
@@ -101,7 +101,7 @@ PER_STOCK_CAPITAL = 300_000.0   # TOTAL_CAPITAL(1,500,000) / 5 qualified symbols
 print("\nScenario (1) — Case A: leg1 fires, then leg2 retrace fires in-window\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-state1 = uc.UCState(symbol="ALPHA", prev_close=100.0, case_a_qualified=True,
+state1 = lm.UCState(symbol="ALPHA", prev_close=100.0, case_a_qualified=True,
                     hit_uc_before_1430=True, off_uc_in_window=True)
 store1 = FakeStore([])
 buy_calls_1 = []
@@ -119,23 +119,23 @@ def fake_poll_1(order_id):
     return poll_results_1.pop(0)
 
 
-with patch.object(uc, "_load_long_pos", store1.load), \
-     patch.object(uc, "_save_long_pos", store1.save), \
-     patch.object(uc, "_margin_check", fake_margin_check_leveraged), \
-     patch.object(uc, "_available_balance", lambda: 10_000_000.0), \
-     patch.object(uc, "buy", fake_buy_1), \
-     patch.object(uc, "_poll_fill_strict", fake_poll_1), \
-     patch.object(uc.notify, "send_entry", MagicMock()):
+with patch.object(lm, "_load_long_pos", store1.load), \
+     patch.object(lm, "_save_long_pos", store1.save), \
+     patch.object(lm, "_margin_check", fake_margin_check_leveraged), \
+     patch.object(lm, "_available_balance", lambda: 10_000_000.0), \
+     patch.object(lm, "buy", fake_buy_1), \
+     patch.object(lm, "_poll_fill_strict", fake_poll_1), \
+     patch.object(lm.notify, "send_entry", MagicMock()):
 
-    now_1445 = datetime(2026, 8, 25, 14, 45, tzinfo=uc._IST)
-    ev = uc.evaluate_tick(state1, 120.0, PER_STOCK_CAPITAL, now=now_1445)
+    now_1445 = datetime(2026, 8, 25, 14, 45, tzinfo=lm._IST)
+    ev = lm.uc_evaluate_tick(state1, 120.0, PER_STOCK_CAPITAL, now=now_1445)
     check("(1) 120 >= 100*1.19 fires case_a_leg1", ev == "case_a_leg1")
     check("(1) entry_status latches to order_placed synchronously",
           state1.entry_status == "order_placed")
     check("(1) capital_base captured on the state at trigger time",
           state1.capital_base == PER_STOCK_CAPITAL)
 
-    uc.execute_case_a_leg1("ALPHA", state1, 120.0, upper_circuit=None, dry_run=False)
+    lm.execute_case_a_leg1("ALPHA", state1, 120.0, upper_circuit=None, dry_run=False)
     check("(1) leg1 buys half of capital_base (150000) -> compute_shares=1250 @ 120",
           buy_calls_1 == [("ALPHA", 1250, 120.6, "MTF")], str(buy_calls_1))
     check("(1) state resolves to partially_filled, case_a_leg watching retrace",
@@ -152,15 +152,15 @@ with patch.object(uc, "_load_long_pos", store1.load), \
     check("(1) row carries case_a_qualified=True", row1["case_a_qualified"] is True)
 
     # Window still 14:30-15:18 for leg2 -- even past leg1's own 15:00 cutoff.
-    now_1505 = datetime(2026, 8, 25, 15, 5, tzinfo=uc._IST)
-    ev2 = uc.evaluate_tick(state1, 116.0, PER_STOCK_CAPITAL, now=now_1505)
+    now_1505 = datetime(2026, 8, 25, 15, 5, tzinfo=lm._IST)
+    ev2 = lm.uc_evaluate_tick(state1, 116.0, PER_STOCK_CAPITAL, now=now_1505)
     check("(1) 116 <= 100*1.17 fires case_a_leg2 even AFTER leg1's own 15:00 window closed "
           "(leg2's window runs to 15:18)", ev2 == "case_a_leg2")
     check("(1) entry_status re-latches to order_placed", state1.entry_status == "order_placed")
 
-    uc.execute_case_a_leg2("ALPHA", state1, 116.0, upper_circuit=None, dry_run=False)
+    lm.execute_case_a_leg2("ALPHA", state1, 116.0, upper_circuit=None, dry_run=False)
     check("(1) leg2 buys compute_shares(remaining=149250, 116)=1286 at the tick-rounded limit",
-          buy_calls_1[1] == ("ALPHA", 1286, uc._tick_round("ALPHA", 116.0 * 1.005), "MTF"),
+          buy_calls_1[1] == ("ALPHA", 1286, lm._tick_round("ALPHA", 116.0 * 1.005), "MTF"),
           str(buy_calls_1))
     check("(1) state resolves to filled, case_a_leg=leg2_filled",
           state1.entry_status == "filled" and state1.case_a_leg == "leg2_filled")
@@ -178,26 +178,26 @@ with patch.object(uc, "_load_long_pos", store1.load), \
 print("\nScenario (2) — Case A: leg1 fires, no retrace by 15:18 -> stays partially_filled\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-state2 = uc.UCState(symbol="BETA", prev_close=100.0, case_a_qualified=True,
+state2 = lm.UCState(symbol="BETA", prev_close=100.0, case_a_qualified=True,
                     hit_uc_before_1430=True, off_uc_in_window=True)
 store2 = FakeStore([])
 
-with patch.object(uc, "_load_long_pos", store2.load), \
-     patch.object(uc, "_save_long_pos", store2.save), \
-     patch.object(uc, "_margin_check", fake_margin_check_leveraged), \
-     patch.object(uc, "_available_balance", lambda: 10_000_000.0), \
-     patch.object(uc, "buy", lambda symbol, exch, qty, **kw: "ORD-2"), \
-     patch.object(uc, "_poll_fill_strict", lambda oid: (120.6, 1250, False, "")), \
-     patch.object(uc.notify, "send_entry", MagicMock()):
+with patch.object(lm, "_load_long_pos", store2.load), \
+     patch.object(lm, "_save_long_pos", store2.save), \
+     patch.object(lm, "_margin_check", fake_margin_check_leveraged), \
+     patch.object(lm, "_available_balance", lambda: 10_000_000.0), \
+     patch.object(lm, "buy", lambda symbol, exch, qty, **kw: "ORD-2"), \
+     patch.object(lm, "_poll_fill_strict", lambda oid: (120.6, 1250, False, "")), \
+     patch.object(lm.notify, "send_entry", MagicMock()):
 
-    now_1445 = datetime(2026, 8, 25, 14, 45, tzinfo=uc._IST)
-    uc.evaluate_tick(state2, 120.0, PER_STOCK_CAPITAL, now=now_1445)
-    uc.execute_case_a_leg1("BETA", state2, 120.0, upper_circuit=None, dry_run=False)
+    now_1445 = datetime(2026, 8, 25, 14, 45, tzinfo=lm._IST)
+    lm.uc_evaluate_tick(state2, 120.0, PER_STOCK_CAPITAL, now=now_1445)
+    lm.execute_case_a_leg1("BETA", state2, 120.0, upper_circuit=None, dry_run=False)
     check("(2) leg1 filled, state armed watching retrace", state2.entry_status == "partially_filled")
 
     # No retrace ever happens; window closes at 15:18.
-    now_1519 = datetime(2026, 8, 25, 15, 19, tzinfo=uc._IST)
-    ev = uc.evaluate_tick(state2, 90.0, PER_STOCK_CAPITAL, now=now_1519)
+    now_1519 = datetime(2026, 8, 25, 15, 19, tzinfo=lm._IST)
+    ev = lm.uc_evaluate_tick(state2, 90.0, PER_STOCK_CAPITAL, now=now_1519)
     check("(2) a retrace-shaped tick AFTER 15:18 fires nothing (leg2 window closed)", ev is None)
     check("(2) state stays partially_filled (not silently advanced/lost)",
           state2.entry_status == "partially_filled")
@@ -211,7 +211,7 @@ with patch.object(uc, "_load_long_pos", store2.load), \
 print("\nScenario (3) — Case B: direct 100% fill\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-state3 = uc.UCState(symbol="GAMMA", prev_close=100.0)
+state3 = lm.UCState(symbol="GAMMA", prev_close=100.0)
 store3 = FakeStore([])
 buy_calls_3 = []
 
@@ -221,20 +221,20 @@ def fake_buy_3(symbol, exch, qty, **kw):
     return "ORD-3"
 
 
-with patch.object(uc, "_load_long_pos", store3.load), \
-     patch.object(uc, "_save_long_pos", store3.save), \
-     patch.object(uc, "_margin_check", fake_margin_check_leveraged), \
-     patch.object(uc, "_available_balance", lambda: 10_000_000.0), \
-     patch.object(uc, "buy", fake_buy_3), \
-     patch.object(uc, "_poll_fill_strict", lambda oid: (120.6, 2500, False, "")), \
-     patch.object(uc.notify, "send_entry", MagicMock()):
+with patch.object(lm, "_load_long_pos", store3.load), \
+     patch.object(lm, "_save_long_pos", store3.save), \
+     patch.object(lm, "_margin_check", fake_margin_check_leveraged), \
+     patch.object(lm, "_available_balance", lambda: 10_000_000.0), \
+     patch.object(lm, "buy", fake_buy_3), \
+     patch.object(lm, "_poll_fill_strict", lambda oid: (120.6, 2500, False, "")), \
+     patch.object(lm.notify, "send_entry", MagicMock()):
 
-    now_1510 = datetime(2026, 8, 25, 15, 10, tzinfo=uc._IST)
-    ev = uc.evaluate_tick(state3, 120.0, PER_STOCK_CAPITAL, now=now_1510)
+    now_1510 = datetime(2026, 8, 25, 15, 10, tzinfo=lm._IST)
+    ev = lm.uc_evaluate_tick(state3, 120.0, PER_STOCK_CAPITAL, now=now_1510)
     check("(3) 120 >= 100*1.19 during Case B window fires case_b_fill", ev == "case_b_fill")
     check("(3) entry_status latches to order_placed", state3.entry_status == "order_placed")
 
-    uc.execute_case_b("GAMMA", state3, 120.0, upper_circuit=None, dry_run=False)
+    lm.execute_case_b("GAMMA", state3, 120.0, upper_circuit=None, dry_run=False)
     check("(3) Case B buys the FULL compute_shares(300000, 120)=2500 in one shot",
           buy_calls_3 == [("GAMMA", 2500, 120.6, "MTF")], str(buy_calls_3))
     check("(3) state resolves to filled directly (no case_a_leg involved)",
@@ -256,31 +256,31 @@ print("\nScenario (4) — Case A/B overlap tie-break during 15:00-15:18\n")
 # as a deliberate exclusion in evaluate_tick, not just an entry_status
 # coincidence.
 
-state4 = uc.UCState(symbol="DELTA", prev_close=100.0,
+state4 = lm.UCState(symbol="DELTA", prev_close=100.0,
                     entry_status="partially_filled",
                     case_a_leg="leg1_filled_watching_retrace",
                     case="A", case_a_qualified=True,
                     capital_base=PER_STOCK_CAPITAL, filled_amount=150750.0)
 
-now_1510b = datetime(2026, 8, 25, 15, 10, tzinfo=uc._IST)
+now_1510b = datetime(2026, 8, 25, 15, 10, tzinfo=lm._IST)
 # A tick well above the leg1 threshold (would trivially qualify for Case B's
 # rising trigger if it were evaluated) but BELOW the leg2 retrace threshold --
 # only case_a_leg2 should be a possible outcome here, never case_b_fill.
-ev4 = uc.evaluate_tick(state4, 150.0, PER_STOCK_CAPITAL, now=now_1510b)
+ev4 = lm.uc_evaluate_tick(state4, 150.0, PER_STOCK_CAPITAL, now=now_1510b)
 check("(4) a rising tick well above Case B's own threshold does NOT fire case_b_fill "
       "for a symbol already armed in Case A leg2-watch", ev4 != "case_b_fill")
 check("(4) (and correctly fires nothing here, since 150 doesn't satisfy leg2's retrace "
       "condition either)", ev4 is None)
 
-ev4b = uc.evaluate_tick(state4, 116.0, PER_STOCK_CAPITAL, now=now_1510b)
+ev4b = lm.uc_evaluate_tick(state4, 116.0, PER_STOCK_CAPITAL, now=now_1510b)
 check("(4) the SAME symbol correctly fires case_a_leg2 (not case_b_fill) on a genuine retrace",
       ev4b == "case_a_leg2")
 
 # And the reverse: a fresh not_attempted symbol during the overlap DOES still
 # evaluate for Case B normally (the tie-break only excludes already-armed
 # Case A symbols, not the whole window).
-state4c = uc.UCState(symbol="EPSILON4", prev_close=100.0)
-ev4c = uc.evaluate_tick(state4c, 120.0, PER_STOCK_CAPITAL, now=now_1510b)
+state4c = lm.UCState(symbol="EPSILON4", prev_close=100.0)
+ev4c = lm.uc_evaluate_tick(state4c, 120.0, PER_STOCK_CAPITAL, now=now_1510b)
 check("(4) an untouched symbol during the SAME overlap window fires case_b_fill normally",
       ev4c == "case_b_fill")
 
@@ -288,8 +288,8 @@ check("(4) an untouched symbol during the SAME overlap window fires case_b_fill 
 # qualification filter but hasn't crossed leg1's trigger yet (entry_status
 # still not_attempted) must ALSO never fall into Case B during the overlap --
 # confirmed this is checked even before leg 1 has fired.
-state4d = uc.UCState(symbol="ZETA4", prev_close=100.0, case_a_qualified=True)
-ev4d = uc.evaluate_tick(state4d, 120.0, PER_STOCK_CAPITAL, now=now_1510b)
+state4d = lm.UCState(symbol="ZETA4", prev_close=100.0, case_a_qualified=True)
+ev4d = lm.uc_evaluate_tick(state4d, 120.0, PER_STOCK_CAPITAL, now=now_1510b)
 check("(4) a case_a_qualified symbol that hasn't fired leg1 yet crosses the trigger during "
       "the overlap and fires case_a_leg1, NEVER case_b_fill", ev4d == "case_a_leg1")
 
@@ -298,38 +298,38 @@ check("(4) a case_a_qualified symbol that hasn't fired leg1 yet crosses the trig
 print("\nScenario (4b) — Case A qualification filter: hit-UC-before-1430 + off-UC-in-window latches\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-t_1000 = datetime(2026, 8, 25, 10, 0, tzinfo=uc._IST)
-t_1435 = datetime(2026, 8, 25, 14, 35, tzinfo=uc._IST)
-t_1519 = datetime(2026, 8, 25, 15, 19, tzinfo=uc._IST)
+t_1000 = datetime(2026, 8, 25, 10, 0, tzinfo=lm._IST)
+t_1435 = datetime(2026, 8, 25, 14, 35, tzinfo=lm._IST)
+t_1519 = datetime(2026, 8, 25, 15, 19, tzinfo=lm._IST)
 
 # (a) Qualifies: hits UC before 14:30, then seen off UC during the window.
-state4b_a = uc.UCState(symbol="OMEGA-A", prev_close=100.0)
-uc.update_case_a_qualification(state4b_a, ltp=190.0, upper_circuit=190.0, now=t_1000)
+state4b_a = lm.UCState(symbol="OMEGA-A", prev_close=100.0)
+lm.update_case_a_qualification(state4b_a, ltp=190.0, upper_circuit=190.0, now=t_1000)
 check("(4b-a) LTP >= upper_circuit before 14:30 latches hit_uc_before_1430",
       state4b_a.hit_uc_before_1430 is True)
 check("(4b-a) not yet qualified -- hasn't been seen off UC during the window yet",
       state4b_a.case_a_qualified is False)
-uc.update_case_a_qualification(state4b_a, ltp=185.0, upper_circuit=190.0, now=t_1435)
+lm.update_case_a_qualification(state4b_a, ltp=185.0, upper_circuit=190.0, now=t_1435)
 check("(4b-a) LTP < upper_circuit during 14:30-15:18 latches off_uc_in_window",
       state4b_a.off_uc_in_window is True)
 check("(4b-a) both latches true -> case_a_qualified becomes True",
       state4b_a.case_a_qualified is True)
 
 # (b) FAILS: never hits UC before 14:30 at all.
-state4b_b = uc.UCState(symbol="OMEGA-B", prev_close=100.0)
-uc.update_case_a_qualification(state4b_b, ltp=150.0, upper_circuit=190.0, now=t_1000)
-uc.update_case_a_qualification(state4b_b, ltp=185.0, upper_circuit=190.0, now=t_1435)
-uc.update_case_a_qualification(state4b_b, ltp=185.0, upper_circuit=190.0, now=t_1519)
+state4b_b = lm.UCState(symbol="OMEGA-B", prev_close=100.0)
+lm.update_case_a_qualification(state4b_b, ltp=150.0, upper_circuit=190.0, now=t_1000)
+lm.update_case_a_qualification(state4b_b, ltp=185.0, upper_circuit=190.0, now=t_1435)
+lm.update_case_a_qualification(state4b_b, ltp=185.0, upper_circuit=190.0, now=t_1519)
 check("(4b-b) never hit UC before 14:30 -> hit_uc_before_1430 stays False",
       state4b_b.hit_uc_before_1430 is False)
 check("(4b-b) never qualifies for Case A even after the window closes",
       state4b_b.case_a_qualified is False)
 
 # (c) FAILS: hits UC before 14:30 but stays locked (never seen off UC) through 15:18.
-state4b_c = uc.UCState(symbol="OMEGA-C", prev_close=100.0)
-uc.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1000)
-uc.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1435)
-uc.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1519)
+state4b_c = lm.UCState(symbol="OMEGA-C", prev_close=100.0)
+lm.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1000)
+lm.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1435)
+lm.update_case_a_qualification(state4b_c, ltp=190.0, upper_circuit=190.0, now=t_1519)
 check("(4b-c) hit UC before 14:30", state4b_c.hit_uc_before_1430 is True)
 check("(4b-c) stayed locked on UC the whole window -- off_uc_in_window never latches",
       state4b_c.off_uc_in_window is False)
@@ -338,24 +338,24 @@ check("(4b-c) never qualifies -- stayed locked through 15:18", state4b_c.case_a_
 # A disqualified symbol's Case A leg mechanism never fires -- but it's still an
 # ordinary Case B candidate like any other symbol; the qualification filter
 # only gates the Case A leg path, not staged entry as a whole.
-ev4b_casea = uc.evaluate_tick(state4b_c, 120.0, PER_STOCK_CAPITAL, now=t_1435)
+ev4b_casea = lm.uc_evaluate_tick(state4b_c, 120.0, PER_STOCK_CAPITAL, now=t_1435)
 check("(4b-c) a disqualified symbol crossing the trigger inside Case A's own window "
       "(14:35, before Case B opens at 15:00) fires nothing -- falls through untouched",
       ev4b_casea is None)
 
-state4b_d = uc.UCState(symbol="OMEGA-D", prev_close=100.0)   # never qualified (default)
-now_1510c = datetime(2026, 8, 25, 15, 10, tzinfo=uc._IST)
-ev4b_d = uc.evaluate_tick(state4b_d, 120.0, PER_STOCK_CAPITAL, now=now_1510c)
+state4b_d = lm.UCState(symbol="OMEGA-D", prev_close=100.0)   # never qualified (default)
+now_1510c = datetime(2026, 8, 25, 15, 10, tzinfo=lm._IST)
+ev4b_d = lm.uc_evaluate_tick(state4b_d, 120.0, PER_STOCK_CAPITAL, now=now_1510c)
 check("(4b-d) a never-Case-A-qualified symbol still fires case_b_fill normally during "
       "15:00-15:18 -- qualification failure only excludes the Case A leg path",
       ev4b_d == "case_b_fill")
 
 check("(4b) update_case_a_qualification degrades safely with upper_circuit=None (no crash)",
-      uc.update_case_a_qualification(
-          uc.UCState(symbol="X", prev_close=100.0), 120.0, None, now=t_1435) is None)
+      lm.update_case_a_qualification(
+          lm.UCState(symbol="X", prev_close=100.0), 120.0, None, now=t_1435) is None)
 check("(4b) update_case_a_qualification degrades safely with upper_circuit=0 (falsy, no crash)",
-      uc.update_case_a_qualification(
-          uc.UCState(symbol="Y", prev_close=100.0), 120.0, 0, now=t_1435) is None)
+      lm.update_case_a_qualification(
+          lm.UCState(symbol="Y", prev_close=100.0), 120.0, 0, now=t_1435) is None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,8 +445,6 @@ check("(5) ETA row completely unchanged", eta_row == filled_row)
 print("\nScenario (6) — per_stock_capital snapshot: once at 14:30, never recomputed\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-import dhan.live_monitor as lm   # noqa: E402
-
 mon = lm.LiveMonitor("client1", "tok1", enable_uc_staged_entry=True, dry_run=True)
 mon._executor = MagicMock()   # never actually place an order in this scenario
 
@@ -458,8 +456,8 @@ mon._states = {
                         upper_circuit=200.0, lower_circuit=50.0, qualified=True),
 }
 mon._uc_states = {
-    sid_a: uc.UCState(symbol="SIGMA", prev_close=100.0),
-    sid_b: uc.UCState(symbol="TAU", prev_close=100.0),
+    sid_a: lm.UCState(symbol="SIGMA", prev_close=100.0),
+    sid_b: lm.UCState(symbol="TAU", prev_close=100.0),
 }
 
 check("(6) per_stock_capital starts unset (constructor default)",
@@ -495,13 +493,13 @@ print("\nScenario (7) — UC fetch/no-data mid-tick: degrade safely, no crash, n
 # ─────────────────────────────────────────────────────────────────────────────
 
 check("(7) _capped_limit_price with upper_circuit=None returns the plain uncapped limit",
-      uc._capped_limit_price("KAPPA", 120.0, None) == uc._tick_round("KAPPA", 120.0 * 1.005))
+      lm._capped_limit_price("KAPPA", 120.0, None) == lm._tick_round("KAPPA", 120.0 * 1.005))
 check("(7) _capped_limit_price with upper_circuit=0 (falsy) also stays uncapped",
-      uc._capped_limit_price("KAPPA", 120.0, 0) == uc._tick_round("KAPPA", 120.0 * 1.005))
+      lm._capped_limit_price("KAPPA", 120.0, 0) == lm._tick_round("KAPPA", 120.0 * 1.005))
 check("(7) _capped_limit_price WITH a real UC below the plain limit caps it",
-      uc._capped_limit_price("KAPPA", 120.0, 121.0) == uc._tick_round("KAPPA", 121.0 * 0.995))
+      lm._capped_limit_price("KAPPA", 120.0, 121.0) == lm._tick_round("KAPPA", 121.0 * 0.995))
 
-state7 = uc.UCState(symbol="KAPPA", prev_close=100.0, case_a_qualified=True)
+state7 = lm.UCState(symbol="KAPPA", prev_close=100.0, case_a_qualified=True)
 store7 = FakeStore([])
 buy_calls_7 = []
 
@@ -511,20 +509,20 @@ def fake_buy_7(symbol, exch, qty, **kw):
     return "ORD-7"
 
 
-with patch.object(uc, "_load_long_pos", store7.load), \
-     patch.object(uc, "_save_long_pos", store7.save), \
-     patch.object(uc, "_margin_check", fake_margin_check_leveraged), \
-     patch.object(uc, "_available_balance", lambda: 10_000_000.0), \
-     patch.object(uc, "buy", fake_buy_7), \
-     patch.object(uc, "_poll_fill_strict", lambda oid: (120.6, 1250, False, "")), \
-     patch.object(uc.notify, "send_entry", MagicMock()):
-    now_1445b = datetime(2026, 8, 25, 14, 45, tzinfo=uc._IST)
-    uc.evaluate_tick(state7, 120.0, PER_STOCK_CAPITAL, now=now_1445b)
-    uc.execute_case_a_leg1("KAPPA", state7, 120.0, upper_circuit=None, dry_run=False)
+with patch.object(lm, "_load_long_pos", store7.load), \
+     patch.object(lm, "_save_long_pos", store7.save), \
+     patch.object(lm, "_margin_check", fake_margin_check_leveraged), \
+     patch.object(lm, "_available_balance", lambda: 10_000_000.0), \
+     patch.object(lm, "buy", fake_buy_7), \
+     patch.object(lm, "_poll_fill_strict", lambda oid: (120.6, 1250, False, "")), \
+     patch.object(lm.notify, "send_entry", MagicMock()):
+    now_1445b = datetime(2026, 8, 25, 14, 45, tzinfo=lm._IST)
+    lm.uc_evaluate_tick(state7, 120.0, PER_STOCK_CAPITAL, now=now_1445b)
+    lm.execute_case_a_leg1("KAPPA", state7, 120.0, upper_circuit=None, dry_run=False)
 
 check("(7) leg1 still places a real order at the uncapped limit price when UC is unavailable "
       "(doesn't crash, doesn't silently skip)",
-      buy_calls_7 == [("KAPPA", 1250, uc._tick_round("KAPPA", 120.0 * 1.005))], str(buy_calls_7))
+      buy_calls_7 == [("KAPPA", 1250, lm._tick_round("KAPPA", 120.0 * 1.005))], str(buy_calls_7))
 check("(7) state resolves normally despite no UC data", state7.entry_status == "partially_filled")
 
 

@@ -376,7 +376,7 @@ Unconditional close of every open short, with full **OCO** (one-cancels-other) h
 python -m dhan.live_monitor
 ```
 
-Runs 9:13 AM–3:40 PM (cron-managed, mirrors the Zerodha monitor exactly), using the `dhanhq` package's MarketFeed WebSocket for ticks and this repo's own `dhan/auth.py`/`dhan/instruments.py` for REST calls (circuit limits, symbol→securityId). Same `qualified`/`near_circuit` state machine and thresholds as [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts) — Telegram-only, no CSV log, independent of `zerodha/live_monitor.py`.
+Runs 9:13 AM–3:40 PM (cron-managed, mirrors the Zerodha monitor exactly), using the `dhanhq` package's MarketFeed WebSocket for ticks and this repo's own `dhan/auth.py`/`dhan/trade.py` for REST calls (circuit limits, symbol→securityId). Same `qualified`/`near_circuit` state machine and thresholds as [Live Monitoring & Signal Alerts](#live-monitoring--signal-alerts) — Telegram-only, no CSV log, independent of `zerodha/live_monitor.py`.
 
 ### Positions JSON Schema (`results/positions_dhan.json`)
 
@@ -407,7 +407,7 @@ Longs and shorts share one file, distinguished by `direction`:
 
 ### UC-Based Staged Entry (Case A/B) — Off By Default
 
-A second, independent entry mechanism (`dhan/uc_staged_entry.py`) that runs **alongside** the 3:21 PM entry, not in place of it — driven by live websocket ticks instead of a single end-of-day snapshot, so a strong stock can be bought earlier than 3:21 PM. **Off by default** behind `--enable-uc-staged-entry` on `dhan/live_monitor.py`; the launcher script and crontab don't pass it, so today's production behavior is unchanged until it's explicitly turned on.
+A second, independent entry mechanism (the "UC-based staged entry" section of `dhan/live_monitor.py`) that runs **alongside** the 3:21 PM entry, not in place of it — driven by live websocket ticks instead of a single end-of-day snapshot, so a strong stock can be bought earlier than 3:21 PM. **Off by default** behind `--enable-uc-staged-entry` on `dhan/live_monitor.py`; the launcher script and crontab don't pass it, so today's production behavior is unchanged until it's explicitly turned on.
 
 - **Case A qualification filter**: a symbol is only eligible if it hit its upper circuit at some point *before* 2:30 PM, then is seen trading *off* that circuit at some point during the 2:30–3:18 PM window. Both are one-way latches, checked continuously from market open. A symbol that never locks at UC, or locks and never comes back off it, is never a Case A candidate — it just falls through untouched to the normal 3:21 PM entry.
 - **Case A leg 1** (2:30–3:18 PM, qualified symbols only): LTP crosses up through `prev_close × 1.19` → buy 50% of `per_stock_capital`.
@@ -434,11 +434,11 @@ Unlike Kite Connect, Dhan has no OAuth handshake for a personal account — the 
 python -m dhan.auth <ACCESS_TOKEN>
 ```
 
-From then on, **`dhan/cron_renew_token.py` renews it automatically**, twice a day (8:00 AM and 8:00 PM IST) via `GET /v2/RenewToken`, and verifies the new token with a real `/fundlimit` call before saving it — a failed renewal (or a failed verification) leaves the previous saved token completely untouched, so one bad attempt never leaves the system with no working token at all.
+From then on, **`python -m dhan.auth --renew` renews it automatically**, twice a day (8:00 AM and 8:00 PM IST) via `GET /v2/RenewToken`, and verifies the new token with a real `/fundlimit` call before saving it — a failed renewal (or a failed verification) leaves the previous saved token completely untouched, so one bad attempt never leaves the system with no working token at all.
 
 Two confirmed gotchas baked into `renew_access_token()`: the renew call **must be GET**, not POST/PUT (both return a misleading `DH-905` "missing fields" error); and renewing **invalidates the previous token immediately** — no overlap window — which is why both renewal times sit in the dead zone between the previous day's live-monitor `pkill` (3:40 PM) and the next launch (9:10 AM), and why it runs *twice* daily rather than once (a once-daily cron at a fixed clock time would leave only a second or two of buffer before the old token's real 24h expiry; twice-daily keeps a comfortable multi-hour buffer, and a failed attempt is caught 12 hours later instead of a full day later).
 
-On a renewal failure, `dhan/cron_renew_token.py` sends a Telegram alert (`notify.send_token_renewal_failed`, `errors` topic) — the same channel used for live-monitor start failures. Manual re-paste via `python -m dhan.auth <ACCESS_TOKEN>` is only needed if automated renewal has been failing long enough for the saved token to fully expire.
+On a renewal failure, `dhan/auth.py`'s `--renew` entry point sends a Telegram alert (`notify.send_token_renewal_failed`, `errors` topic) — the same channel used for live-monitor start failures. Manual re-paste via `python -m dhan.auth <ACCESS_TOKEN>` is only needed if automated renewal has been failing long enough for the saved token to fully expire.
 
 Saved to `dhan/.token.json` (gitignored) and reused for the rest of the day by every other Dhan script.
 
@@ -601,7 +601,7 @@ If the token is missing/expired, `zerodha.auth._login()` falls through to an int
 
 The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in `.env` only when it eventually expires.
 
-The **Dhan access token** also expires every 24h, but unlike Zerodha this one **renews itself automatically** — `dhan/cron_renew_token.py` runs at 8:00 AM and 8:00 PM daily and keeps it fresh with no manual step. A hand-generated token (**web.dhan.co → Profile → Access DhanHQ Trading APIs**) is only needed once, ever, or as a fallback if automated renewal has been failing:
+The **Dhan access token** also expires every 24h, but unlike Zerodha this one **renews itself automatically** — `python -m dhan.auth --renew` runs at 8:00 AM and 8:00 PM daily and keeps it fresh with no manual step. A hand-generated token (**web.dhan.co → Profile → Access DhanHQ Trading APIs**) is only needed once, ever, or as a fallback if automated renewal has been failing:
 
 ```bash
 python -m dhan.auth <ACCESS_TOKEN>
@@ -810,7 +810,7 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 
 | Time (IST) | Cron | Command |
 |---|---|---|
-| 8:00 AM & 8:00 PM (every day) | `0 8,20 * * *` | `dhan/cron_renew_token.py` — access-token auto-renewal (see [Auth](#auth-automated-daily-renewal-manual-fallback)) |
+| 8:00 AM & 8:00 PM (every day) | `0 8,20 * * *` | `python -m dhan.auth --renew` — access-token auto-renewal (see [Auth](#auth-automated-daily-renewal-manual-fallback)) |
 | 9:13 AM | `10 9 * * 1-5` | `scripts/run_dhan_live_monitor.sh` |
 | 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
 | 9:25 AM | `25 9 * * 1-5` | `dhan/run_trades.py --exit-925` |
