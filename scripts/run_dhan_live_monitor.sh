@@ -23,15 +23,11 @@ if [ -n "$OLD_PID" ]; then
     sleep 2
 fi
 
-# One-day dry-run test of UC-based staged entry (2026-08-26 only) -- a cron
-# job reverts this file back to its committed state that same afternoon, so
-# this block should never persist past tomorrow. See git log if it's still
-# here later than that.
-UC_FLAGS=""
-if [ "$(date '+%Y-%m-%d')" = "2026-08-26" ]; then
-    UC_FLAGS="--enable-uc-staged-entry --dry-run"
-    echo "$LOG_PREFIX  UC-based staged entry: DRY-RUN test enabled for today only (2026-08-26)"
-fi
+# UC-based staged entry -- DRY-RUN only, every day. No orders are actually
+# placed (--dry-run); this just keeps generating real signal/fill logs so we
+# can evaluate the feature before ever turning it live.
+UC_FLAGS="--enable-uc-staged-entry --dry-run"
+echo "$LOG_PREFIX  UC-based staged entry: DRY-RUN enabled"
 
 nohup python3.11 -u -m dhan.live_monitor $UC_FLAGS >> /root/dhan_live_monitor.log 2>&1 &
 echo "$LOG_PREFIX  Started dhan/live_monitor.py (PID $!)"
