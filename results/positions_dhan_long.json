@@ -500,5 +500,44 @@
     "exit_timestamp_1159": "2026-08-25T11:59:14.176117+05:30",
     "realized_return_pct": -4.4218,
     "realized_pnl": -7361.42
+  },
+  {
+    "broker": "dhan",
+    "symbol": "BOMDYEING",
+    "entry_date": "2026-08-27",
+    "reference_price": 117.01,
+    "shares_intended": 2991,
+    "actual_fill_price": 116.9946,
+    "actual_fill_quantity": 2991,
+    "entry_order_id": "23126082781609",
+    "status": "open",
+    "entry_timestamp": "2026-08-27T15:21:00.724471+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "GKENERGY",
+    "entry_date": "2026-08-27",
+    "reference_price": 139.51,
+    "shares_intended": 2508,
+    "actual_fill_price": 139.6491,
+    "actual_fill_quantity": 2508,
+    "entry_order_id": "321260827577609",
+    "status": "open",
+    "entry_timestamp": "2026-08-27T15:21:01.799294+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "RAMRAT",
+    "entry_date": "2026-08-27",
+    "reference_price": 569.25,
+    "shares_intended": 614,
+    "actual_fill_price": 572.3033,
+    "actual_fill_quantity": 614,
+    "entry_order_id": "34126082778209",
+    "status": "open",
+    "entry_timestamp": "2026-08-27T15:21:02.537187+05:30",
+    "product": "MTF"
   }
 ]
