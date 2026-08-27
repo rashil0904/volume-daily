@@ -223,14 +223,17 @@ def test_exit_parallel_timing_and_resilience():
     def fake_poll_fill_safe(order_id, fallback_price, fallback_qty):
         return 110.0, fallback_qty
 
-    def fake_open_short(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
-        return available_balance
-
+    # Mirrored-short-opening is deliberately mocked out entirely here (see
+    # this file's module docstring) -- this test covers exit-phase timing/
+    # resilience only, not _open_short_core()'s own concurrency, which
+    # test_targets.py's (bal-short) scenario covers.
     with patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}), \
+         patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "sell", side_effect=fake_sell), \
          patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
-         patch.object(rt, "_open_short", side_effect=fake_open_short), \
+         patch.object(rt, "_open_short_core", lambda *a, **kw: None), \
+         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \
          patch.object(rt, "_load_long_pos", side_effect=long_store.load), \
          patch.object(rt, "_save_long_pos", side_effect=long_store.save), \
@@ -242,9 +245,12 @@ def test_exit_parallel_timing_and_resilience():
         rt.check_exit_925(dry_run=False)
         elapsed = time.monotonic() - start
 
-    expected_ceiling = 2 * _CALL_DELAY + 1.0
-    check(f"8-symbol exit batch on a 4-worker pool completes well under "
-          f"8x{_CALL_DELAY}s sequential time",
+    # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND (5+3) -- one
+    # BATCH_SLEEP_SECONDS pause between the two chunks, not a flat 4-worker
+    # pool anymore (see run_trades.py's chunked-batch redesign).
+    expected_ceiling = 2 * _CALL_DELAY + rt.BATCH_SLEEP_SECONDS + 1.0
+    check(f"8-symbol exit batch, chunked at {rt.MAX_ORDER_CALLS_PER_SECOND}, "
+          f"completes well under 8x{_CALL_DELAY}s sequential time",
           elapsed < expected_ceiling,
           f"took {elapsed:.3f}s, ceiling {expected_ceiling:.3f}s")
 
@@ -254,8 +260,8 @@ def test_exit_parallel_timing_and_resilience():
           by_sym[failing]["status"] == "open", f"status={by_sym[failing]['status']}")
     check("every OTHER symbol was exited despite the one failure",
           all(by_sym[s]["status"] == "exited_925" for s in symbols if s != failing))
-    check("exactly one save() call for the whole batch (single-pass write)",
-          long_store.save_count == 1, f"save_count={long_store.save_count}")
+    check("exactly one save() call per chunk with a change (2 chunks, both had a fill)",
+          long_store.save_count == 2, f"save_count={long_store.save_count}")
 
 
 # ══════════════════════════════════════════════════════════════════════════

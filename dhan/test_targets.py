@@ -279,9 +279,9 @@ def fake_broker_qty_c(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_c = []
-def fake_open_short_c(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
+def fake_open_short_core_c(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
     open_short_calls_c.append((sym, qty, stage))
-    return available_balance
+    return None
 
 with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_save_long_pos", store.save), \
@@ -292,7 +292,8 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_c), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_c), \
      patch.object(rt, "_broker_qty", fake_broker_qty_c), \
-     patch.object(rt, "_open_short", fake_open_short_c), \
+     patch.object(rt, "_open_short_core", fake_open_short_core_c), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925_nodata", MagicMock()), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
@@ -347,9 +348,9 @@ def fake_broker_qty_d(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_d = []
-def fake_open_short_d(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
+def fake_open_short_core_d(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
     open_short_calls_d.append((sym, qty, stage))
-    return available_balance
+    return None
 
 with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_save_long_pos", store.save), \
@@ -360,7 +361,8 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_d), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_d), \
      patch.object(rt, "_broker_qty", fake_broker_qty_d), \
-     patch.object(rt, "_open_short", fake_open_short_d), \
+     patch.object(rt, "_open_short_core", fake_open_short_core_d), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925", MagicMock()):
     rt.check_exit_925(dry_run=False)
@@ -471,19 +473,21 @@ def fake_poll_fill_safe_f2(oid, fallback_price, fallback_qty):
     return 90.0, fallback_qty  # a LOSS -- 11:59 has no P&L gate, must still force-sell
 
 open_short_calls_f2 = []
-def fake_open_short_f2(sym, qty, stage, dry_run=False, ltp=None, available_balance=None):
+def fake_open_short_core_f2(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
     open_short_calls_f2.append((sym, qty, stage))
-    return available_balance
+    return None
 
 with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt, "_save_long_pos", store2.save), \
      patch.object(rt, "_dhan_order_status", fake_order_status_f2), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_f2), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
+     patch.object(rt, "get_ltp", lambda sym: 90.0), \
      patch.object(rt, "sell", fake_sell_f2), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_f2), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
-     patch.object(rt, "_open_short", fake_open_short_f2), \
+     patch.object(rt, "_open_short_core", fake_open_short_core_f2), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_force_exit_1159", MagicMock()), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
@@ -1183,6 +1187,7 @@ with patch.object(rt, "_load_long_pos", store_bs.load), \
      patch.object(rt, "_dhan_order_status", fake_order_status_bs), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_bs), \
      patch.object(rt, "get_ltp_batch", lambda syms: {s: 105.0 for s in syms}), \
+     patch.object(rt, "get_ltp", lambda sym: 105.0), \
      patch.object(rt, "_broker_qty", fake_broker_qty_bs), \
      patch.object(rt, "_shorting_skipped_today", lambda: False), \
      patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check_bs), \
@@ -1209,12 +1214,20 @@ with patch.object(rt, "_load_long_pos", store_bs.load), \
 check("(bal-short) _available_balance() called EXACTLY ONCE for the whole batch "
       "(not once per short)", balance_calls_bs == [1], str(balance_calls_bs))
 check("(bal-short) both longs exited and were queued for a mirrored short",
-      sell_calls_bs == ["SHORTA", "SHORTB"], str(sell_calls_bs))
-check("(bal-short) SHORTA (first) opened — balance was sufficient at that point",
-      "SHORTA" in short_sell_calls_bs, str(short_sell_calls_bs))
-check("(bal-short) SHORTB (second) SKIPPED — the balance SHORTA already committed was "
-      "correctly subtracted locally instead of re-fetching the original figure",
-      "SHORTB" not in short_sell_calls_bs, str(short_sell_calls_bs))
+      set(sell_calls_bs) == {"SHORTA", "SHORTB"}, str(sell_calls_bs))
+# Both SHORTA and SHORTB now run concurrently (same chunk, both exits trigger
+# _open_short_core() in their own thread) -- the balance pool (₹1,500, enough
+# for exactly ONE ₹1,000 short) is shared via a thread-safe _BalanceTracker,
+# so WHICH ONE wins the race is no longer deterministic (unlike the old
+# sequential-loop version this replaced) -- only that exactly one wins, never
+# both, and never zero (the pool covers at least one), is guaranteed.
+check("(bal-short) exactly ONE short opened -- the shared balance pool (enough "
+      "for exactly one ₹1,000 margin) was never double-allocated across the "
+      "two concurrent _open_short_core() calls",
+      len(short_sell_calls_bs) == 1, str(short_sell_calls_bs))
+check("(bal-short) the short that opened is one of the two candidates "
+      "(SHORTA or SHORTB, whichever won the lock first)",
+      short_sell_calls_bs[0] in ("SHORTA", "SHORTB"), str(short_sell_calls_bs))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
