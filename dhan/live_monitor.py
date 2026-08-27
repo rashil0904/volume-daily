@@ -616,7 +616,7 @@ def execute_case_a_leg1(sym: str, state: UCState, ltp: float,
     state.case_a_leg     = "leg1_filled_watching_retrace"
     state.filled_amount  = fill_amount
     try:
-        notify.send_entry(broker="dhan", symbol=f"{sym} [Case A leg1]", ref_price=ltp,
+        notify.send_entry(broker="dhan", symbol=f"{sym} [Case A leg1]", fill_price=result["fill_price"],
                           shares=result["fill_qty"], order_id=result["order_id"], dry_run=dry_run)
     except Exception as exc:
         print(f"  [notify] Case A leg1 failed: {exc}", file=sys.stderr)
@@ -665,7 +665,7 @@ def execute_case_a_leg2(sym: str, state: UCState, ltp: float,
     state.case_a_leg     = "leg2_filled"
     state.filled_amount += fill_amount
     try:
-        notify.send_entry(broker="dhan", symbol=f"{sym} [Case A leg2]", ref_price=ltp,
+        notify.send_entry(broker="dhan", symbol=f"{sym} [Case A leg2]", fill_price=result["fill_price"],
                           shares=result["fill_qty"], order_id=result["order_id"], dry_run=dry_run)
     except Exception as exc:
         print(f"  [notify] Case A leg2 failed: {exc}", file=sys.stderr)
@@ -703,7 +703,7 @@ def execute_case_b(sym: str, state: UCState, ltp: float,
     state.entry_status  = "filled"
     state.filled_amount = fill_amount
     try:
-        notify.send_entry(broker="dhan", symbol=f"{sym} [Case B]", ref_price=ltp,
+        notify.send_entry(broker="dhan", symbol=f"{sym} [Case B]", fill_price=result["fill_price"],
                           shares=result["fill_qty"], order_id=result["order_id"], dry_run=dry_run)
     except Exception as exc:
         print(f"  [notify] Case B failed: {exc}", file=sys.stderr)

@@ -752,7 +752,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                 "product":              product,
             })
         try:
-            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", ref_price=res["ref"],
+            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", fill_price=fill_price,
                               shares=fill_qty, order_id=order_id, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry failed: {exc}", file=sys.stderr)

@@ -228,13 +228,13 @@ def send_scan_preview(date_str: str, as_of_hhmm: int, rows: list) -> None:
 
 # ── Trade execution notifications (Stages 1 / 2 / 3) ─────────────────────────
 
-def send_entry(broker: str, symbol: str, ref_price: float, shares: int,
+def send_entry(broker: str, symbol: str, fill_price: float, shares: int,
                order_id: str, dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
         f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
-        f"<b>Ref price:</b> &#8377;{ref_price:,.2f}",
+        f"<b>Buy price:</b> &#8377;{fill_price:,.2f}",
         f"<b>Shares:</b> {shares}",
         f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
