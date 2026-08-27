@@ -108,6 +108,21 @@ def make_short(**overrides):
     return row
 
 
+def orders_from_status(order_ids, status_fn):
+    """Converts a per-order status_fn(oid) -> dict (this file's older
+    single-order-status mock shape, from before square_off_239's OCO check
+    became a single Order Book pre-check) into the list _dhan_get_orders()
+    now returns -- adds the "orderId" key each list entry needs to be
+    locally matched back to a position's cover_target_order_id/
+    stop_order_id."""
+    orders = []
+    for oid in order_ids:
+        o = dict(status_fn(oid))
+        o["orderId"] = oid
+        orders.append(o)
+    return orders
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 print("\nScenario (a) — place_targets_915\n")
 # ─────────────────────────────────────────────────────────────────────────────
@@ -279,7 +294,7 @@ def fake_broker_qty_c(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_c = []
-def fake_open_short_core_c(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
+def fake_open_short_place_c(sym, qty, stage, dry_run, ltp=None, balance=None):
     open_short_calls_c.append((sym, qty, stage))
     return None
 
@@ -292,7 +307,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_c), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_c), \
      patch.object(rt, "_broker_qty", fake_broker_qty_c), \
-     patch.object(rt, "_open_short_core", fake_open_short_core_c), \
+     patch.object(rt, "_open_short_place", fake_open_short_place_c), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925_nodata", MagicMock()), \
@@ -348,7 +363,7 @@ def fake_broker_qty_d(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_d = []
-def fake_open_short_core_d(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
+def fake_open_short_place_d(sym, qty, stage, dry_run, ltp=None, balance=None):
     open_short_calls_d.append((sym, qty, stage))
     return None
 
@@ -361,14 +376,15 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_d), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_d), \
      patch.object(rt, "_broker_qty", fake_broker_qty_d), \
-     patch.object(rt, "_open_short_core", fake_open_short_core_d), \
+     patch.object(rt, "_open_short_place", fake_open_short_place_d), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_exit_925", MagicMock()):
     rt.check_exit_925(dry_run=False)
 
-check("(d) cancel_order called before the LIMIT sell, in that order",
-      call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "LIMIT", 104.45)], str(call_order_d))
+check("(d) LIMIT sell fires before cancel_order (sell is time-sensitive, "
+      "cancelling the now-stale target is cleanup that follows it), in that order",
+      call_order_d == [("sell", "EPSILON", "LIMIT", 104.45), ("cancel", "TGT-EPS")], str(call_order_d))
 row = store.positions[0]
 check("(d) row exited_925", row["status"] == "exited_925")
 check("(d) mirrored short opened", open_short_calls_d == [("EPSILON", 10, "925")])
@@ -455,7 +471,7 @@ check("(f1) exit_order_id_1159 == target_order_id", row1["exit_order_id_1159"] =
 check("(f1) exit_price_1159 == 117.0", row1["exit_price_1159"] == 117.0)
 check("(f1) NO mirrored short on a target-hit exit (UC risk)", open_short_calls_f1 == [])
 
-# f2: target NOT traded -> cancel then force-sell, regardless of a mocked loss
+# f2: target NOT traded -> force-sell then cancel, regardless of a mocked loss
 pos2 = make_long(symbol="THETA", actual_fill_price=100.0, actual_fill_quantity=10,
                   target_order_id="TGT-THETA", target_price=117.0, status="open")
 store2 = FakeStore([pos2])
@@ -473,7 +489,7 @@ def fake_poll_fill_safe_f2(oid, fallback_price, fallback_qty):
     return 90.0, fallback_qty  # a LOSS -- 11:59 has no P&L gate, must still force-sell
 
 open_short_calls_f2 = []
-def fake_open_short_core_f2(sym, qty, stage, dry_run, ltp=None, balance=None, circuit=None):
+def fake_open_short_place_f2(sym, qty, stage, dry_run, ltp=None, balance=None):
     open_short_calls_f2.append((sym, qty, stage))
     return None
 
@@ -486,15 +502,15 @@ with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt, "sell", fake_sell_f2), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_f2), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
-     patch.object(rt, "_open_short_core", fake_open_short_core_f2), \
+     patch.object(rt, "_open_short_place", fake_open_short_place_f2), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.notify, "send_force_exit_1159", MagicMock()), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
     rt.force_exit_1159(dry_run=False)
 
-check("(f2) cancel_order called before force-sell, in that order",
-      call_order_f2 == [("cancel", "TGT-THETA"), ("sell", "THETA")], str(call_order_f2))
+check("(f2) force-sell fires before cancel_order, in that order",
+      call_order_f2 == [("sell", "THETA"), ("cancel", "TGT-THETA")], str(call_order_f2))
 row2 = store2.positions[0]
 check("(f2) status exited_1159 despite a loss (no P&L gate at 11:59)", row2["status"] == "exited_1159")
 check("(f2) mirrored short still opened even on a losing force-exit",
@@ -640,7 +656,8 @@ def fake_buy_h1(*a, **kw):
 
 with patch.object(rt, "_load_short_pos", store_h1.load), \
      patch.object(rt, "_save_short_pos", store_h1.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_h1), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-K"], fake_order_status_h1)), \
      patch.object(rt, "buy", fake_buy_h1), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
@@ -674,7 +691,8 @@ def fake_poll_fill_safe_h2(oid, fallback_price, fallback_qty):
 
 with patch.object(rt, "_load_short_pos", store_h2.load), \
      patch.object(rt, "_save_short_pos", store_h2.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_h2), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-L"], fake_order_status_h2)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_h2), \
      patch.object(rt, "buy", fake_buy_h2), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_h2), \
@@ -745,16 +763,33 @@ with patch.object(rt, "_load_long_pos", store_nu.load), \
     rt.force_exit_1159(dry_run=False)
 check("(i-1159) order_status raise -> sell() never called, position skipped", sell_calls_nu == [])
 
+# square_off_239's own equivalent failure is different now: the OCO status
+# for every position comes from ONE pre-check GET /orders (Order Book) call,
+# not a per-order/per-position _dhan_order_status() -- so the failure mode
+# to guard is that ONE call itself raising, which must skip EVERY open
+# short for manual review (fails closed, same reasoning as _BalanceTracker's
+# None-balance case), never silently guess any of their statuses.
 short_239 = make_short(symbol="XI", cover_target_order_id="COVERTGT-XI", cover_target_price=190.0)
 store_xi  = FakeStore([short_239])
+manual_review_calls_xi = []
+def fake_get_orders_raises():
+    raise ConnectionError("network blip")
 with patch.object(rt, "_load_short_pos", store_xi.load), \
      patch.object(rt, "_save_short_pos", store_xi.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_raises), \
+     patch.object(rt, "_dhan_get_orders", fake_get_orders_raises), \
      patch.object(rt, "_dhan_cancel_order", lambda oid: (_ for _ in ()).throw(AssertionError("must not cancel"))), \
      patch.object(rt, "buy", lambda *a, **kw: buy_calls_nu.append(1) or "X"), \
-     patch.object(rt, "get_ltp_batch", lambda syms: {}):
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
+     patch.object(rt.notify, "send_square_off_manual_review",
+                  lambda **kw: manual_review_calls_xi.append(kw)):
     rt.square_off_239(dry_run=False)
-check("(i-239) order_status raise -> buy() never called, position skipped", buy_calls_nu == [])
+check("(i-239) Order Book fetch raise -> buy() never called, position skipped",
+      buy_calls_nu == [])
+check("(i-239) position left completely untouched (still short_open)",
+      store_xi.positions[0]["status"] == "short_open")
+check("(i-239) notify.send_square_off_manual_review fired once for the skipped position",
+      len(manual_review_calls_xi) == 1 and manual_review_calls_xi[0]["symbol"] == "XI",
+      str(manual_review_calls_xi))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -786,7 +821,8 @@ def fake_buy_slc(*a, **kw):
 
 with patch.object(rt, "_load_short_pos", store_slc.load), \
      patch.object(rt, "_save_short_pos", store_slc.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_slc), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-RHO", "STOPLOSS-RHO"], fake_order_status_slc)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_slc), \
      patch.object(rt, "buy", fake_buy_slc), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
@@ -831,7 +867,8 @@ def fake_buy_sld(*a, **kw):
 
 with patch.object(rt, "_load_short_pos", store_sld.load), \
      patch.object(rt, "_save_short_pos", store_sld.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_sld), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-SIG", "STOPLOSS-SIG"], fake_order_status_sld)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_sld), \
      patch.object(rt, "buy", fake_buy_sld), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
@@ -877,7 +914,8 @@ def fake_poll_fill_safe_sle(oid, fallback_price, fallback_qty):
 
 with patch.object(rt, "_load_short_pos", store_sle.load), \
      patch.object(rt, "_save_short_pos", store_sle.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_sle), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-TAU", "STOPLOSS-TAU"], fake_order_status_sle)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_sle), \
      patch.object(rt, "buy", fake_buy_sle), \
      patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sle), \
@@ -921,18 +959,26 @@ def fake_buy_slf(*a, **kw):
     buy_calls_slf.append((a, kw))
     return "SHOULD-NOT-HAPPEN"
 
+manual_review_calls_slf = []
+
 with patch.object(rt, "_load_short_pos", store_slf.load), \
      patch.object(rt, "_save_short_pos", store_slf.save), \
-     patch.object(rt, "_dhan_order_status", fake_order_status_slf), \
+     patch.object(rt, "_dhan_get_orders",
+                  lambda: orders_from_status(["COVERTGT-UPS", "STOPLOSS-UPS"], fake_order_status_slf)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_slf), \
      patch.object(rt, "buy", fake_buy_slf), \
-     patch.object(rt, "get_ltp_batch", lambda syms: {}):
+     patch.object(rt, "get_ltp_batch", lambda syms: {}), \
+     patch.object(rt.notify, "send_square_off_manual_review",
+                  lambda **kw: manual_review_calls_slf.append(kw)):
     rt.square_off_239(dry_run=False)
 
 check("(sl-d) NEITHER order cancelled (no automatic pick)", cancel_calls_slf == [])
 check("(sl-d) force-cover buy() never called", buy_calls_slf == [])
 row_slf = store_slf.positions[0]
 check("(sl-d) position row completely unchanged (still short_open)", row_slf["status"] == "short_open")
+check("(sl-d) notify.send_square_off_manual_review fired once for the OCO race",
+      len(manual_review_calls_slf) == 1 and manual_review_calls_slf[0]["symbol"] == "UPSILON",
+      str(manual_review_calls_slf))
 check("(sl-d) row unchanged entirely", row_slf == short_f)
 
 
@@ -1193,6 +1239,8 @@ with patch.object(rt, "_load_long_pos", store_bs.load), \
      patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check_bs), \
      patch.object(rt, "_available_balance", fake_available_balance_bs), \
      patch.object(rt, "_fetch_upper_circuit", lambda sym: 130.0), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
+     patch.object(rt.time, "sleep", lambda secs: None), \
      patch.object(rt.notify, "send_exit_925", MagicMock()), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
 
@@ -1215,15 +1263,16 @@ check("(bal-short) _available_balance() called EXACTLY ONCE for the whole batch 
       "(not once per short)", balance_calls_bs == [1], str(balance_calls_bs))
 check("(bal-short) both longs exited and were queued for a mirrored short",
       set(sell_calls_bs) == {"SHORTA", "SHORTB"}, str(sell_calls_bs))
-# Both SHORTA and SHORTB now run concurrently (same chunk, both exits trigger
-# _open_short_core() in their own thread) -- the balance pool (₹1,500, enough
-# for exactly ONE ₹1,000 short) is shared via a thread-safe _BalanceTracker,
-# so WHICH ONE wins the race is no longer deterministic (unlike the old
-# sequential-loop version this replaced) -- only that exactly one wins, never
-# both, and never zero (the pool covers at least one), is guaranteed.
+# Both SHORTA and SHORTB now run concurrently in Wave 2 (both exits fully
+# resolve in Wave 1 first, then both trigger _open_short_place() in their
+# own thread, same batch) -- the balance pool (₹1,500, enough for exactly
+# ONE ₹1,000 short) is shared via a thread-safe _BalanceTracker, so WHICH
+# ONE wins the race is no longer deterministic (unlike the old sequential-
+# loop version this replaced) -- only that exactly one wins, never both, and
+# never zero (the pool covers at least one), is guaranteed.
 check("(bal-short) exactly ONE short opened -- the shared balance pool (enough "
       "for exactly one ₹1,000 margin) was never double-allocated across the "
-      "two concurrent _open_short_core() calls",
+      "two concurrent _open_short_place() calls",
       len(short_sell_calls_bs) == 1, str(short_sell_calls_bs))
 check("(bal-short) the short that opened is one of the two candidates "
       "(SHORTA or SHORTB, whichever won the lock first)",

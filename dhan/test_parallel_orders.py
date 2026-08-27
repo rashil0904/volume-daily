@@ -225,14 +225,15 @@ def test_exit_parallel_timing_and_resilience():
 
     # Mirrored-short-opening is deliberately mocked out entirely here (see
     # this file's module docstring) -- this test covers exit-phase timing/
-    # resilience only, not _open_short_core()'s own concurrency, which
-    # test_targets.py's (bal-short) scenario covers.
+    # resilience only, not _open_short_place()'s own concurrency, which
+    # test_targets.py's (bal-short) scenario and test_batch_concurrency.py's
+    # wave-ordering tests cover.
     with patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}), \
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "sell", side_effect=fake_sell), \
          patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
-         patch.object(rt, "_open_short_core", lambda *a, **kw: None), \
+         patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \
          patch.object(rt, "_load_long_pos", side_effect=long_store.load), \
@@ -245,10 +246,14 @@ def test_exit_parallel_timing_and_resilience():
         rt.check_exit_925(dry_run=False)
         elapsed = time.monotonic() - start
 
-    # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND (5+3) -- one
-    # BATCH_SLEEP_SECONDS pause between the two chunks, not a flat 4-worker
-    # pool anymore (see run_trades.py's chunked-batch redesign).
-    expected_ceiling = 2 * _CALL_DELAY + rt.BATCH_SLEEP_SECONDS + 1.0
+    # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND (5+3) for
+    # BOTH Wave 1 (cancel+sell) and Wave 2 (short-open, re-chunked over the 7
+    # successfully-sold tasks -- still 5+3) -- one BATCH_SLEEP_SECONDS pause
+    # between chunks in EACH wave now (two separate re-chunked passes, not
+    # one flat per-position cascade anymore -- see the wave-based redesign).
+    # _open_short_place is mocked to return None (no shorts open), so Wave 3
+    # never runs and adds no further delay.
+    expected_ceiling = 2 * _CALL_DELAY + 2 * rt.BATCH_SLEEP_SECONDS + 1.0
     check(f"8-symbol exit batch, chunked at {rt.MAX_ORDER_CALLS_PER_SECOND}, "
           f"completes well under 8x{_CALL_DELAY}s sequential time",
           elapsed < expected_ceiling,
@@ -260,8 +265,11 @@ def test_exit_parallel_timing_and_resilience():
           by_sym[failing]["status"] == "open", f"status={by_sym[failing]['status']}")
     check("every OTHER symbol was exited despite the one failure",
           all(by_sym[s]["status"] == "exited_925" for s in symbols if s != failing))
-    check("exactly one save() call per chunk with a change (2 chunks, both had a fill)",
-          long_store.save_count == 2, f"save_count={long_store.save_count}")
+    check("exactly ONE save() call for the whole run (one write per WAVE now, "
+          "not one per chunk -- 2 chunks within Wave 1, still just 1 save)",
+          long_store.save_count == 1, f"save_count={long_store.save_count}")
+    check("no short-file save at all -- every short-open was mocked out (None)",
+          short_store.save_count == 0, f"save_count={short_store.save_count}")
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -63,6 +63,7 @@ import csv
 import json
 import math
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait as _wait_futures
 from datetime import date, datetime
@@ -75,8 +76,8 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 
 from zerodha.auth import BASE_URL as _KITE_BASE, get_session as _kite_session
 from zerodha.trade import (buy, sell, place_order, order_status as _kite_order_status,
-                           cancel_order as _kite_cancel_order, get_reference_price,
-                           get_ltp, stage_entry_orders)
+                           cancel_order as _kite_cancel_order, get_orders as _kite_get_orders,
+                           get_reference_price, get_ltp, stage_entry_orders)
 from common.calc_utils import compute_allocation, compute_shares
 import notify
 
@@ -89,6 +90,25 @@ _POS_FILE_LONG  = _RESULTS_DIR / "positions_zerodha_long.json"
 _POS_FILE_SHORT = _RESULTS_DIR / "positions_zerodha_short.json"
 _MTF_LOG_DIR  = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 500_000
+
+# ── Wave-based batching (check_exit_925 / force_exit_1159 / square_off_239) ─────
+# Mirrors the dhan/run_trades.py redesign: every position in a batch performs
+# the SAME Order-API call type before any position in that batch moves to the
+# next one (sell-all, then cancel-all; short-open-all; protect-all), so a
+# concurrent burst can never mix call types. Wave 1 sells BEFORE cancelling
+# each task's stale resting target -- the sell is the time-sensitive action,
+# cancelling the now-redundant target is cleanup that can follow it -- and
+# only cancels for tasks whose sell actually succeeded, so a failed sell
+# leaves its resting target live as protection instead of cancelled out from
+# under it. trade.py's `rate_limiter` is ALSO a 5-orders/sec sliding window
+# (see trade.py), so this batch size lines up with the same real ceiling
+# that limiter already enforces -- the batching
+# here isn't a second independent rate limit, it's what keeps each concurrent
+# burst homogeneous by call type within that limiter's own window.
+MAX_ORDER_CALLS_PER_SECOND  = 5
+BATCH_SLEEP_SECONDS         = 1.0
+SHORT_SETTLE_BUFFER_SECONDS = 2.5   # one-time pause between the short-open wave
+                                    # and the cover-target/stop-loss wave
 
 
 def _load_symbols(trade_date: date) -> list[str]:
@@ -342,127 +362,269 @@ def _fetch_upper_circuit(symbol: str) -> float:
     return float(row["upper_circuit_limit"])
 
 
-def _open_short_execute(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> dict | None:
-    """Opens a same-quantity intraday short (product=MIS) mirroring a long exit
-    that just filled at either the 9:25am or 11:59am stage. MARKET, same
-    0.5%-protection shape as every other "fires right now" order in this
-    pipeline (see trade.py). Skips (never raises) on any margin-check/balance/
-    fill failure: the long exit that triggered this has already happened and
-    is never reversed by a failed short.
+def _run_batch(items: list, worker_fn) -> list:
+    """Runs worker_fn(item) concurrently for EVERY item in `items` as one
+    single burst -- a bounded ThreadPoolExecutor (max_workers == len(items))
+    -- and blocks until all of them complete, returning the results as a
+    list. This is the single-burst primitive both _run_in_chunks (one worker
+    per batch) and _run_exit_wave1 (two workers per batch -- sell, then
+    cancel) are built from, so a multi-sub-step batch can compose more than one
+    burst within the same batch boundary without going through separate
+    _run_in_chunks calls.
 
-    Does NOT touch results/positions_zerodha_short.json -- returns the
-    finished position dict (or None if nothing filled) so a caller running
-    this inside a parallel per-symbol task can defer the actual file write to
-    a single sequential pass after every thread in the batch has finished
-    (see check_exit_925/force_exit_1159 -- no two threads may ever write the
-    position file at the same time). Safe to call from multiple threads
-    concurrently for DIFFERENT symbols: every broker call this makes
-    (buy/sell -> place_order, order status) is independently rate-limited and
-    thread-safe on its own; the only shared mutable state (the position file)
-    is exactly what this function avoids touching."""
-    margin_info = _mis_margin_check(sym, qty)
-    if margin_info is None:
-        print(f"[zerodha]   SHORT SKIP — {sym}: could not verify MIS margin.")
-        return None
-    available = _available_margin()
-    if available is None or available < margin_info["margin_required"]:
-        req = margin_info["margin_required"]
-        print(f"[zerodha]   SHORT SKIP — {sym}: insufficient margin "
-              f"(available {'unknown' if available is None else f'₹{available:,.2f}'} "
-              f"< required ₹{req:,.2f}).")
-        return None
+    worker_fn must never let an exception escape (wrap its own body in
+    try/except and return an error dict/marker instead) -- one item's failure
+    must not affect its batch-mates; this helper adds no additional per-item
+    exception handling. Returns [] immediately for an empty list (no
+    ThreadPoolExecutor spun up for nothing)."""
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=len(items)) as executor:
+        futures = {executor.submit(worker_fn, item): item for item in items}
+        _wait_futures(futures.keys())
+        return [fut.result() for fut in futures]
 
+
+def _run_in_chunks(items: list, worker_fn, chunk_size: int | None = None,
+                   sleep_between: float | None = None):
+    """Generator: yields one list of results per chunk of `items` (chunk_size
+    at a time, default MAX_ORDER_CALLS_PER_SECOND), running worker_fn(item)
+    concurrently within each chunk via _run_batch (waiting for the WHOLE
+    chunk to finish before yielding -- never proceed on partial completion),
+    paced with `sleep_between` seconds (default BATCH_SLEEP_SECONDS) between
+    chunks (skipped after the last one).
+
+    A generator rather than a single list-returning function specifically so
+    callers can apply each chunk's results -- including any position-file
+    write -- BEFORE the next chunk's threads start, per the "no position-file
+    write from inside a worker thread" rule (see check_exit_925 /
+    force_exit_1159 / square_off_239, all of which write their results this
+    way).
+
+    worker_fn must never let an exception escape -- see _run_batch."""
+    chunk_size    = chunk_size or MAX_ORDER_CALLS_PER_SECOND
+    sleep_between = BATCH_SLEEP_SECONDS if sleep_between is None else sleep_between
+    for i in range(0, len(items), chunk_size):
+        chunk = items[i : i + chunk_size]
+        yield _run_batch(chunk, worker_fn)
+        if i + chunk_size < len(items):
+            time.sleep(sleep_between)
+
+
+def _run_exit_wave1(tasks: list, sell_fn, cancel_fn, chunk_size: int | None = None,
+                    sleep_between: float | None = None):
+    """Generator shared by check_exit_925/force_exit_1159's Wave 1: for each
+    batch of `tasks`, first SELLS every task in the batch (one concurrent
+    burst via _run_batch; includes fill polling and, for a no-data fallback
+    task, its fresh-target-remainder placement), THEN -- only once every
+    sell in the batch has completed -- cancels each task's now-stale target
+    order, but ONLY for the tasks whose sell actually succeeded (a failed
+    sell means the position is still open, so its resting target must stay
+    live as protection rather than get cancelled out from under it). The two
+    sub-steps within a batch never overlap with each other, so every
+    concurrent Order-API burst stays homogeneous by call type (all sells
+    together, then all cancels together). `sleep_between` (default
+    BATCH_SLEEP_SECONDS) is paced between BATCHES, not between a batch's own
+    sell and cancel sub-steps.
+
+    Yields one batch's SELL-step results at a time -- cancel-step results are
+    never surfaced (a cancel failure is non-fatal, same as today, and only
+    printed inline by cancel_fn itself)."""
+    chunk_size    = chunk_size or MAX_ORDER_CALLS_PER_SECOND
+    sleep_between = BATCH_SLEEP_SECONDS if sleep_between is None else sleep_between
+    for i in range(0, len(tasks), chunk_size):
+        batch = tasks[i : i + chunk_size]
+        sell_results = _run_batch(batch, sell_fn)
+        to_cancel = [res for res in sell_results if "error" not in res]
+        _run_batch(to_cancel, cancel_fn)
+        yield sell_results
+        if i + chunk_size < len(tasks):
+            time.sleep(sleep_between)
+
+
+class _BalanceTracker:
+    """Thread-safe shared margin pool for concurrent _open_short_place()
+    calls within the same batch -- lock around the check-and-decrement so two
+    threads can never both observe "room for this short" and both proceed
+    (the concurrent equivalent of run_entry_321's plain-float
+    available_balance threaded sequentially through its Phase 1 loop; that
+    approach only works single-threaded, hence the lock here). `value` is
+    None when the balance couldn't be verified at all -- every reservation
+    then fails closed (never guesses a balance is fine)."""
+
+    def __init__(self, initial: float | None):
+        self._lock  = threading.Lock()
+        self._value = initial
+
+    def try_reserve(self, amount: float) -> bool:
+        """Atomically checks then decrements. Returns False (no mutation) if
+        the balance is unknown or insufficient."""
+        with self._lock:
+            if self._value is None or self._value < amount:
+                return False
+            self._value -= amount
+            return True
+
+    @property
+    def value(self) -> float | None:
+        with self._lock:
+            return self._value
+
+
+def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
+                      balance: "_BalanceTracker") -> dict | None:
+    """Wave 2 of the mirrored-short open (check_exit_925/force_exit_1159):
+    MIS margin check, thread-safe balance reservation (_BalanceTracker --
+    safe to call concurrently from multiple Wave-2 workers at once), places
+    the short SELL, polls the fill, fires send_short_open. Returns a row
+    dict with cover_target_order_id/cover_target_price/stop_order_id/
+    stop_trigger_price/stop_limit_price all None -- _open_short_protect()
+    (Wave 3) fills those in as a SEPARATE concurrent burst, after
+    SHORT_SETTLE_BUFFER_SECONDS, so a cover-target/stop-loss placement never
+    lands in the same Order-API burst as a different position's short-open
+    sell.
+
+    Never raises: the long exit that triggered this has already happened and
+    is never reversed by a failed short. Wrapped in its own top-level
+    try/except so an unexpected error here can never propagate out of a
+    batch worker and affect sibling positions in the same batch."""
     try:
-        ltp = get_ltp(sym)
-    except Exception:
-        ltp = 0.0
+        margin_info = _mis_margin_check(sym, qty)
+        if margin_info is None:
+            print(f"[zerodha]   SHORT SKIP — {sym}: could not verify MIS margin.")
+            return None
+        if not balance.try_reserve(margin_info["margin_required"]):
+            bal = balance.value
+            print(f"[zerodha]   SHORT SKIP — {sym}: insufficient margin "
+                  f"(available {'unknown' if bal is None else f'₹{bal:,.2f}'} "
+                  f"< required ₹{margin_info['margin_required']:,.2f}).")
+            return None
 
-    try:
-        oid = sell(sym, "NSE", qty, order_type="MARKET", product="MIS", dry_run=dry_run)
-    except Exception as exc:
-        print(f"[zerodha]   SHORT FAILED — {sym}: {exc}")
-        return None
-
-    ep, eq = (ltp, qty) if dry_run else _poll_fill_safe(oid, ltp, qty)
-    if eq == 0:
-        print(f"[zerodha]   SHORT NOT FILLED — {sym} short order rejected.")
-        return None
-
-    cover_price            = round(ep * 0.95, 4)
-    cover_target_order_id  = None
-    cover_target_price     = None
-    try:
-        cover_target_order_id = buy(sym, "NSE", eq, order_type="LIMIT",
-                                    price=cover_price, product="MIS", dry_run=dry_run)
-        cover_target_price = cover_price
-        print(f"[zerodha]   cover target placed @ ₹{cover_price:,.2f} — order {cover_target_order_id}")
-    except Exception as exc:
-        print(f"[zerodha]   !! SHORT OPENED but cover target placement failed for {sym}: {exc} "
-              f"— manual review required (short is live, unprotected until square-off).")
-
-    # UC-based stop-loss: buy-to-cover if price rises to within 0.5% of the
-    # day's upper circuit. Resting LIMIT (not SL-M) pinned AT the UC itself
-    # (the highest price legally tradeable that day), so it sits at the front
-    # of the book instead of risking a worse fill once the stock is already
-    # ripping toward the circuit -- a trigger-based stop can convert to a
-    # market order that finds no liquidity at all once locked at UC.
-    upper_circuit = None
-    try:
-        upper_circuit = _fetch_upper_circuit(sym)
-    except Exception as exc:
-        print(f"[zerodha]   !! circuit fetch failed for {sym}: {exc} — skipping stop-loss "
-              f"(short + cover target remain live, unprotected until manual review).")
         try:
-            notify.send_circuit_fetch_failed(broker=_BROKER, symbol=sym, error_msg=str(exc),
-                                             dry_run=dry_run)
-        except Exception as exc2:
-            print(f"  [notify] circuit_fetch_failed failed: {exc2}", file=sys.stderr)
+            ltp = get_ltp(sym)
+        except Exception:
+            ltp = 0.0
 
-    stop_order_id      = None
-    stop_trigger_price = None
-    stop_limit_price   = None
-    if upper_circuit is not None:
         try:
-            stop_limit_price   = round(upper_circuit, 4)
-            stop_trigger_price = round(upper_circuit * 0.995, 4)
-            stop_order_id = place_order(sym, "NSE", "BUY", eq,
-                                        order_type="SL",
-                                        price=stop_limit_price,
-                                        trigger_price=stop_trigger_price,
-                                        product="MIS", dry_run=dry_run)
-            print(f"[zerodha]   stop-loss placed @ trigger ₹{stop_trigger_price:,.2f} "
-                  f"limit ₹{stop_limit_price:,.2f} (0.5% below UC ₹{upper_circuit:,.2f}) "
-                  f"— order {stop_order_id}")
+            oid = sell(sym, "NSE", qty, order_type="MARKET", product="MIS", dry_run=dry_run)
         except Exception as exc:
-            print(f"[zerodha]   !! SHORT OPENED (cover target live) but stop-loss placement "
-                  f"failed for {sym}: {exc} — manual review required.")
+            print(f"[zerodha]   SHORT FAILED — {sym}: {exc}")
+            return None
 
-    print(f"[zerodha]   SHORT OPENED — {sym}  ₹{ep:,.2f} × {eq}  (from {source_stage} exit)")
-    try:
-        notify.send_short_open(broker=_BROKER, symbol=f"{sym} [SHORT MIS]", entry_price=ep,
-                               shares=eq, source_exit_stage=source_stage, order_id=oid,
-                               dry_run=dry_run)
+        ep, eq = (ltp, qty) if dry_run else _poll_fill_safe(oid, ltp, qty)
+        if eq == 0:
+            print(f"[zerodha]   SHORT NOT FILLED — {sym} short order rejected.")
+            return None
+
+        print(f"[zerodha]   SHORT OPENED — {sym}  ₹{ep:,.2f} × {eq}  (from {source_stage} exit)")
+        try:
+            notify.send_short_open(broker=_BROKER, symbol=f"{sym} [SHORT MIS]", entry_price=ep,
+                                   shares=eq, source_exit_stage=source_stage, order_id=oid,
+                                   dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
+
+        return {
+            "broker":                _BROKER,
+            "symbol":                sym,
+            "direction":             "short",
+            "product":               "MIS",
+            "source_exit_stage":     source_stage,
+            "entry_date":            date.today().isoformat(),
+            "entry_price":           round(ep, 4),
+            "quantity":              eq,
+            "entry_order_id":        oid,
+            "cover_target_order_id": None,
+            "cover_target_price":    None,
+            "stop_order_id":         None,
+            "stop_trigger_price":    None,
+            "stop_limit_price":      None,
+            "status":                "short_open",
+            "entry_timestamp":       _ts(),
+        }
     except Exception as exc:
-        print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
+        print(f"[zerodha]   !! SHORT open sequence crashed unexpectedly for {sym}: {exc} "
+              f"— manual review required.")
+        return None
 
-    return {
-        "broker":                _BROKER,
-        "symbol":                sym,
-        "direction":             "short",
-        "product":               "MIS",
-        "source_exit_stage":     source_stage,
-        "entry_date":            date.today().isoformat(),
-        "entry_price":           round(ep, 4),
-        "quantity":              eq,
-        "entry_order_id":        oid,
-        "cover_target_order_id": cover_target_order_id,
-        "cover_target_price":    cover_target_price,
-        "stop_order_id":         stop_order_id,
-        "stop_trigger_price":    stop_trigger_price,
-        "stop_limit_price":      stop_limit_price,
-        "status":                "short_open",
-        "entry_timestamp":       _ts(),
-    }
+
+def _open_short_protect(row: dict, dry_run: bool) -> dict:
+    """Wave 3 of the mirrored-short open: places the 5%-below cover target
+    and the UC-based stop-loss for a short _open_short_place() already
+    opened, mutating and returning the SAME row dict with those fields
+    filled in (safe -- each Wave-3 worker only ever touches its own
+    position's row, never a shared one). The short itself is already live by
+    this point; a failure here never unwinds it.
+
+    Never raises: wrapped in its own top-level try/except so an unexpected
+    error here can never propagate out of a batch worker and affect sibling
+    positions in the same batch."""
+    sym, eq, ep = row["symbol"], row["quantity"], row["entry_price"]
+    try:
+        cover_price = round(ep * 0.95, 4)
+        try:
+            cover_target_order_id = buy(sym, "NSE", eq, order_type="LIMIT",
+                                        price=cover_price, product="MIS", dry_run=dry_run)
+            row["cover_target_order_id"] = cover_target_order_id
+            row["cover_target_price"]    = cover_price
+            print(f"[zerodha]   cover target placed @ ₹{cover_price:,.2f} — order {cover_target_order_id}")
+        except Exception as exc:
+            print(f"[zerodha]   !! SHORT OPENED but cover target placement failed for {sym}: {exc} "
+                  f"— manual review required (short is live, unprotected until square-off).")
+
+        # UC-based stop-loss: buy-to-cover if price rises to within 0.5% of
+        # the day's upper circuit. Resting LIMIT (not SL-M) pinned AT the UC
+        # itself (the highest price legally tradeable that day), so it sits
+        # at the front of the book instead of risking a worse fill once the
+        # stock is already ripping toward the circuit -- a trigger-based stop
+        # can convert to a market order that finds no liquidity at all once
+        # locked at UC.
+        upper_circuit = None
+        try:
+            upper_circuit = _fetch_upper_circuit(sym)
+        except Exception as exc:
+            print(f"[zerodha]   !! circuit fetch failed for {sym}: {exc} — skipping stop-loss "
+                  f"(short + cover target remain live, unprotected until manual review).")
+            try:
+                notify.send_circuit_fetch_failed(broker=_BROKER, symbol=sym, error_msg=str(exc),
+                                                 dry_run=dry_run)
+            except Exception as exc2:
+                print(f"  [notify] circuit_fetch_failed failed: {exc2}", file=sys.stderr)
+
+        if upper_circuit is not None:
+            try:
+                stop_limit_price   = round(upper_circuit, 4)
+                stop_trigger_price = round(upper_circuit * 0.995, 4)
+                stop_order_id = place_order(sym, "NSE", "BUY", eq,
+                                            order_type="SL",
+                                            price=stop_limit_price,
+                                            trigger_price=stop_trigger_price,
+                                            product="MIS", dry_run=dry_run)
+                row["stop_order_id"]      = stop_order_id
+                row["stop_trigger_price"] = stop_trigger_price
+                row["stop_limit_price"]   = stop_limit_price
+                print(f"[zerodha]   stop-loss placed @ trigger ₹{stop_trigger_price:,.2f} "
+                      f"limit ₹{stop_limit_price:,.2f} (0.5% below UC ₹{upper_circuit:,.2f}) "
+                      f"— order {stop_order_id}")
+            except Exception as exc:
+                print(f"[zerodha]   !! SHORT OPENED (cover target live) but stop-loss placement "
+                      f"failed for {sym}: {exc} — manual review required.")
+    except Exception as exc:
+        print(f"[zerodha]   !! target/stop-loss placement crashed unexpectedly for {sym}: {exc} "
+              f"— manual review required (short is live).")
+    return row
+
+
+def _open_short_execute(sym: str, qty: int, source_stage: str, dry_run: bool = False) -> dict | None:
+    """Combines _open_short_place() (Wave 2) + _open_short_protect() (Wave 3)
+    into the single call standalone/manual callers expect -- check_exit_925/
+    force_exit_1159 call the two pieces separately instead, as two
+    independently-batched waves. This function's own external
+    behavior/signature is unchanged by that split -- still does NOT touch
+    results/positions_zerodha_short.json, still returns the finished
+    position dict (or None if nothing filled)."""
+    row = _open_short_place(sym, qty, source_stage, dry_run, _BalanceTracker(_available_margin()))
+    return None if row is None else _open_short_protect(row, dry_run)
 
 
 # ── Entries log ──────────────────────────────────────────────────────────────
@@ -927,54 +1089,96 @@ def check_exit_925(dry_run: bool = False) -> None:
         else:
             print(f"[zerodha]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
 
-    # ── Phase 2 (parallel): each task cancels its own stale target (if any),
-    # cross-checks broker qty, places the sell, polls the fill, and -- for a
-    # successful full/fallback exit -- opens the mirrored short (short-open +
-    # cover-target + stop-loss) as ONE atomic sequence within the same task,
-    # since those three calls are causally dependent and belong to this one
-    # symbol's result. No position-file access inside the task.
-    def _do_exit_task(task: dict) -> dict:
-        sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
-        target_oid = task["target_oid"]
+    # Phase 1's target-hit updates (if any) are complete now -- persist them
+    # before any wave work begins below, independent of whether `tasks` ends
+    # up empty (e.g. every open position hit its target -- there would be no
+    # wave to piggyback a save on otherwise).
+    if not dry_run and dirty:
+        _save_long_pos(positions)
+
+    # One-time MIS-short balance fetch for this whole stage-run, tracked
+    # thread-safely across every batch below (Wave 2) -- the concurrent
+    # equivalent of a fresh _available_margin() read per short, now safe for
+    # multiple _open_short_place() calls to share at once (see
+    # _BalanceTracker).
+    short_balance = _BalanceTracker(_available_margin()) if tasks else _BalanceTracker(None)
+
+    # ── Wave 1 (batched-concurrent): sell every task in a batch (one
+    # concurrent burst per batch; includes fill polling and, for a no-data
+    # fallback task, its fresh-target-remainder placement), THEN -- only
+    # once that batch's sells are all confirmed -- cancel each task's now-
+    # stale target order, but ONLY for tasks whose sell actually succeeded
+    # (a failed sell leaves the position open, so its resting target stays
+    # live as protection instead of being cancelled out from under it). The
+    # sell fires first because it's the time-sensitive action; cancelling
+    # the now-redundant target is just cleanup that can follow it. Every
+    # position in a batch performs the SAME action before any position moves
+    # to the next, so a concurrent Order-API burst never mixes call types
+    # from different positions. No position-file access inside either
+    # worker; the sequential apply step below does every field update and
+    # this wave's one write.
+    def _cancel_fn(task: dict) -> None:
+        sym, target_oid = task["sym"], task["target_oid"]
         if target_oid:
             try:
                 _kite_cancel_order(target_oid)
             except Exception as exc:
                 print(f"[zerodha]   target cancel failed for {sym} (may already be filled/cancelled): {exc}")
+        return None
 
-        exch = "NSE"
-        if not dry_run:
-            bqty, exch = _broker_qty(sym, product)
-            if bqty != qty:
-                return {**task, "error": f"!! MISMATCH — local={qty} broker={bqty}. "
-                                          f"Skipping {sym} — manual review required."}
-
+    def _sell_fn(task: dict) -> dict:
         try:
-            oid = sell(sym, exch, qty, order_type="MARKET", product=product, dry_run=dry_run)
+            sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
+            target_oid = task["target_oid"]
+
+            exch = "NSE"
+            if not dry_run:
+                bqty, exch = _broker_qty(sym, product)
+                if bqty != qty:
+                    return {**task, "error": f"!! MISMATCH — local={qty} broker={bqty}. "
+                                              f"Skipping {sym} — manual review required."}
+
+            try:
+                oid = sell(sym, exch, qty, order_type="MARKET", product=product, dry_run=dry_run)
+            except Exception as exc:
+                kind_label = "fallback sell" if task["kind"] == "fallback" else "sell"
+                return {**task, "error": f"{kind_label} failed: {exc}"}
+
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            if eq == 0:
+                err = ("NOT FILLED — fallback sell rejected, position left open." if task["kind"] == "fallback"
+                       else "NOT FILLED — sell rejected, position left open.")
+                return {**task, "error": err}
+
+            result = {**task, "oid": oid, "ep": ep, "eq": eq, "exch": exch}
+
+            # No-data-fallback remainder: fresh target at the SAME price,
+            # placed here (still the sell sub-step -- a fresh SELL-side
+            # target order is the same call TYPE as the exit sell itself,
+            # not a different one this wave split needs to separate out).
+            if task["kind"] == "fallback" and task["remain"] > 0 and target_oid and task.get("target_price"):
+                try:
+                    result["new_target_oid"] = sell(sym, exch, task["remain"], order_type="LIMIT",
+                                                     price=task["target_price"], product=product,
+                                                     dry_run=dry_run)
+                except Exception as exc:
+                    result["fresh_target_error"] = str(exc)
+
+            return result
         except Exception as exc:
-            return {**task, "error": f"sell failed: {exc}"}
+            return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
-        ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
-        if eq == 0:
-            return {**task, "error": "NOT FILLED — sell rejected, position left open."}
+    wave1_results: list[dict] = []
+    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+        wave1_results.extend(batch_results)
 
-        short_result = _open_short_execute(sym, eq, "925", dry_run=dry_run)
-        return {**task, "oid": oid, "ep": ep, "eq": eq, "exch": exch, "short_result": short_result}
-
-    results: list[dict] = []
-    if tasks:
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {executor.submit(_do_exit_task, t): t for t in tasks}
-            _wait_futures(futures.keys())   # do not proceed on partial completion
-            for fut in futures:
-                results.append(fut.result())
-
-    # ── Phase 3 (sequential): apply every result, one save per file for the
-    # whole batch -- no two threads ever touch either position file at once,
-    # because nothing but this loop, running after every thread has already
-    # finished, ever writes to them.
-    new_shorts: list[dict] = []
-    for res in results:
+    # ── Sequential apply for Wave 1 (once per whole run, not per batch):
+    # every field update + notify call, then exactly ONE _save_long_pos() --
+    # the first of check_exit_925's 3 total write-points this run (Wave 1
+    # sold status, Wave 2 short-open rows, Wave 3 target/SL order IDs).
+    wave1_dirty = False
+    sold_tasks: list[dict] = []   # feeds Wave 2 -- everything actually sold in Wave 1
+    for res in wave1_results:
         sym, product, pos, fill_price = res["sym"], res["product"], res["pos"], res["fill_price"]
         print(f"\n[zerodha] {sym}  [{product}]")
 
@@ -983,7 +1187,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             continue
 
         ep, eq = res["ep"], res["eq"]
-        dirty = True
+        wave1_dirty = True
 
         if res["kind"] == "fallback":
             remain = res["remain"]
@@ -996,15 +1200,12 @@ def check_exit_925(dry_run: bool = False) -> None:
                 "exit_timestamp_925": _ts(),
             })
             print(f"[zerodha]   NO-DATA FALLBACK — sold {eq}  ₹{ep:,.2f}")
-            if remain > 0 and res["target_oid"] and res.get("target_price"):
-                try:
-                    new_target_oid = sell(sym, res["exch"], remain, order_type="LIMIT",
-                                          price=res["target_price"], product=product, dry_run=dry_run)
-                    pos["target_order_id"] = new_target_oid
-                    print(f"[zerodha]   fresh target placed for remaining {remain} "
-                          f"@ ₹{res['target_price']:,.2f} — order {new_target_oid}")
-                except Exception as exc:
-                    print(f"[zerodha]   !! fresh target placement failed for {sym}: {exc}")
+            if "new_target_oid" in res:
+                pos["target_order_id"] = res["new_target_oid"]
+                print(f"[zerodha]   fresh target placed for remaining {remain} "
+                      f"@ ₹{res['target_price']:,.2f} — order {res['new_target_oid']}")
+            elif "fresh_target_error" in res:
+                print(f"[zerodha]   !! fresh target placement failed for {sym}: {res['fresh_target_error']}")
             try:
                 notify.send_exit_925_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
                                             shares_exited=eq, shares_remaining=remain,
@@ -1029,14 +1230,50 @@ def check_exit_925(dry_run: bool = False) -> None:
             except Exception as exc:
                 print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
 
-        if res.get("short_result") is not None:
-            new_shorts.append(res["short_result"])
+        sold_tasks.append(res)
 
-    if not dry_run and dirty:
+    if not dry_run and wave1_dirty:
         _save_long_pos(positions)
-    if not dry_run and new_shorts:
+
+    # ── Wave 2 (batched-concurrent): open the mirrored short for everything
+    # sold in Wave 1 -- one Order-API call TYPE (short-open sell) per burst,
+    # nothing else. Shares the same _BalanceTracker across every batch this
+    # wave.
+    def _short_place_fn(res: dict) -> dict | None:
+        return _open_short_place(res["sym"], res["eq"], "925", dry_run, balance=short_balance)
+
+    wave2_rows: list[dict] = []
+    for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
+        wave2_rows.extend([r for r in batch_results if r is not None])
+
+    short_positions = None
+    if wave2_rows:
         short_positions = _load_short_pos()
-        short_positions.extend(new_shorts)
+        short_positions.extend(wave2_rows)
+        if not dry_run:
+            _save_short_pos(short_positions)
+        print(f"\n[zerodha] Opened {len(wave2_rows)} mirrored short(s).")
+
+    # ── Settle buffer: one pause between the short-open wave and the
+    # target/stop-loss wave, giving the exchange a moment to register the
+    # new short before orders referencing it are placed. Only paid once per
+    # run (not per batch -- BATCH_SLEEP_SECONDS already covers that), and
+    # only if anything actually opened.
+    if wave2_rows:
+        time.sleep(SHORT_SETTLE_BUFFER_SECONDS)
+
+    # ── Wave 3 (batched-concurrent): place the cover-target + stop-loss for
+    # every short Wave 2 opened -- one Order-API call TYPE (target/SL buys)
+    # per burst. Each worker mutates and returns the SAME row object Wave 2
+    # already appended to short_positions, so the single save below already
+    # reflects every batch's updates without needing to re-load the file.
+    def _protect_fn(row: dict) -> dict:
+        return _open_short_protect(row, dry_run)
+
+    for _ in _run_in_chunks(wave2_rows, _protect_fn):
+        pass   # each worker mutates its row in place; nothing further to apply here
+
+    if wave2_rows and not dry_run:
         _save_short_pos(short_positions)
 
     print(f"\n[zerodha] Exit check 9:25am complete.")
@@ -1114,54 +1351,74 @@ def force_exit_1159(dry_run: bool = False) -> None:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
                 n_force += 1
                 continue
+            # Not traded -- the actual cancel moves into Wave 1's concurrent
+            # cancel sub-step below (batched with every other task's cancel
+            # in the same burst, AFTER that batch's sells), not fired here
+            # sequentially.
 
         tasks.append({"pos": pos, "sym": sym, "product": product, "fill_price": fill_price,
                       "qty": qty, "is_partial": is_partial, "target_oid": target_oid})
 
-    # ── Phase 2 (parallel): each task cancels its own stale target (if any),
-    # cross-checks broker qty, force-sells, polls the fill, and opens the
-    # mirrored short as one atomic sequence within the same task -- same
-    # shape as check_exit_925's parallel phase.
-    def _do_force_task(task: dict) -> dict:
-        sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
-        target_oid = task["target_oid"]
+    # Phase 1's target-hit updates (if any) are complete now -- persist them
+    # before any wave work begins, independent of whether `tasks` ends up
+    # empty (see the matching note in check_exit_925).
+    if not dry_run and dirty:
+        _save_long_pos(positions)
+
+    # One-time MIS-short balance fetch for this whole stage-run -- same
+    # reasoning as check_exit_925.
+    short_balance = _BalanceTracker(_available_margin()) if tasks else _BalanceTracker(None)
+
+    # ── Wave 1 (batched-concurrent): force-sell every task in a batch (one
+    # concurrent burst per batch; includes fill polling), THEN -- only once
+    # that batch's sells are all confirmed -- cancel each task's now-stale
+    # target order, but ONLY for tasks whose sell actually succeeded. No P&L
+    # gate here (unlike 9:25, no "kind"/fallback distinction -- every task
+    # is a plain unconditional sell). See check_exit_925's matching Wave 1
+    # for the full reasoning; identical shape, reused via _run_exit_wave1.
+    def _cancel_fn(task: dict) -> None:
+        sym, target_oid = task["sym"], task["target_oid"]
         if target_oid:
             try:
                 _kite_cancel_order(target_oid)
             except Exception as exc:
                 print(f"[zerodha]   target cancel failed for {sym} (may already be filled/cancelled): {exc}")
+        return None
 
-        exch = "NSE"
-        if not dry_run:
-            bqty, exch = _broker_qty(sym, product)
-            if bqty != qty:
-                return {**task, "error": f"!! MISMATCH — local={qty} broker={bqty}. "
-                                          f"Skipping {sym} — manual review required."}
-
+    def _sell_fn(task: dict) -> dict:
         try:
-            oid = sell(sym, exch, qty, order_type="MARKET", product=product, dry_run=dry_run)
+            sym, product, fill_price, qty = task["sym"], task["product"], task["fill_price"], task["qty"]
+
+            exch = "NSE"
+            if not dry_run:
+                bqty, exch = _broker_qty(sym, product)
+                if bqty != qty:
+                    return {**task, "error": f"!! MISMATCH — local={qty} broker={bqty}. "
+                                              f"Skipping {sym} — manual review required."}
+
+            try:
+                oid = sell(sym, exch, qty, order_type="MARKET", product=product, dry_run=dry_run)
+            except Exception as exc:
+                return {**task, "error": f"sell failed: {exc}"}
+
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            if eq == 0:
+                return {**task, "error": f"!! NOT FILLED — force-exit sell rejected for {sym}. "
+                                          f"Position left as-is — manual review required."}
+
+            return {**task, "oid": oid, "ep": ep, "eq": eq}
         except Exception as exc:
-            return {**task, "error": f"sell failed: {exc}"}
+            return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
-        ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
-        if eq == 0:
-            return {**task, "error": f"!! NOT FILLED — force-exit sell rejected for {sym}. "
-                                      f"Position left as-is — manual review required."}
+    wave1_results: list[dict] = []
+    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+        wave1_results.extend(batch_results)
 
-        short_result = _open_short_execute(sym, eq, "1159", dry_run=dry_run)
-        return {**task, "oid": oid, "ep": ep, "eq": eq, "short_result": short_result}
-
-    results: list[dict] = []
-    if tasks:
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            futures = {executor.submit(_do_force_task, t): t for t in tasks}
-            _wait_futures(futures.keys())   # do not proceed on partial completion
-            for fut in futures:
-                results.append(fut.result())
-
-    # ── Phase 3 (sequential): apply every result, one save per file.
-    new_shorts: list[dict] = []
-    for res in results:
+    # ── Sequential apply for Wave 1 (once per whole run): every field
+    # update + notify call, then exactly ONE _save_long_pos().
+    wave1_dirty = False
+    sold_tasks: list[dict] = []   # feeds Wave 2 -- everything actually force-sold in Wave 1
+    for res in wave1_results:
         sym, product, pos = res["sym"], res["product"], res["pos"]
         fill_price, is_partial = res["fill_price"], res["is_partial"]
         print(f"\n[zerodha] {sym}  [{product}]")
@@ -1171,7 +1428,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
             continue
 
         ep, eq = res["ep"], res["eq"]
-        dirty  = True
+        wave1_dirty = True
 
         if is_partial:
             s925 = int(pos.get("shares_exited_925") or 0)
@@ -1197,16 +1454,43 @@ def force_exit_1159(dry_run: bool = False) -> None:
                                         return_pct=ret, pnl=pnl, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
-
-        if res.get("short_result") is not None:
-            new_shorts.append(res["short_result"])
         n_force += 1
 
-    if not dry_run and dirty:
+        sold_tasks.append(res)
+
+    if not dry_run and wave1_dirty:
         _save_long_pos(positions)
-    if not dry_run and new_shorts:
+
+    # ── Wave 2 (batched-concurrent): open the mirrored short for everything
+    # force-sold in Wave 1 -- see check_exit_925's matching Wave 2.
+    def _short_place_fn(res: dict) -> dict | None:
+        return _open_short_place(res["sym"], res["eq"], "1159", dry_run, balance=short_balance)
+
+    wave2_rows: list[dict] = []
+    for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
+        wave2_rows.extend([r for r in batch_results if r is not None])
+
+    short_positions = None
+    if wave2_rows:
         short_positions = _load_short_pos()
-        short_positions.extend(new_shorts)
+        short_positions.extend(wave2_rows)
+        if not dry_run:
+            _save_short_pos(short_positions)
+        print(f"\n[zerodha] Opened {len(wave2_rows)} mirrored short(s).")
+
+    # ── Settle buffer -- see check_exit_925's matching comment.
+    if wave2_rows:
+        time.sleep(SHORT_SETTLE_BUFFER_SECONDS)
+
+    # ── Wave 3 (batched-concurrent): place cover-target + stop-loss for
+    # every short Wave 2 opened -- see check_exit_925's matching Wave 3.
+    def _protect_fn(row: dict) -> dict:
+        return _open_short_protect(row, dry_run)
+
+    for _ in _run_in_chunks(wave2_rows, _protect_fn):
+        pass
+
+    if wave2_rows and not dry_run:
         _save_short_pos(short_positions)
 
     _daily_summary(positions, n_force, dry_run)
@@ -1253,156 +1537,237 @@ def square_off_239(dry_run: bool = False) -> None:
 
     n_closed = 0
 
+    # ── Pre-check (single call): the whole run's cover-target/stop-loss OCO
+    # status now comes from ONE GET /orders (Order Book) call, not one
+    # GET /orders/{id} per order per position -- every order this account
+    # placed today, looked up locally by order_id from here on. If this one
+    # call itself fails, nothing about ANY position's status can be trusted,
+    # so every open short is skipped for manual review rather than guessed
+    # (same fail-closed reasoning as _BalanceTracker's None-balance case).
+    try:
+        order_by_id = {o.get("order_id"): o for o in _kite_get_orders()}
+        orders_ok   = True
+    except Exception as exc:
+        print(f"[zerodha]   !! Order Book fetch failed: {exc} -- cannot verify any cover/stop "
+              f"status this run. Skipping all {len(open_shorts)} short(s) — manual review required.")
+        order_by_id = {}
+        orders_ok   = False
+
+    # Classify every position from that ONE pre-fetched snapshot -- no
+    # per-order API calls anywhere in this loop.
+    classified: list[dict] = []
     for pos in open_shorts:
         sym         = pos["symbol"]
         entry_price = float(pos["entry_price"] or 0)
         qty         = int(pos["quantity"])
+        cover_oid   = pos.get("cover_target_order_id")
+        stop_oid    = pos.get("stop_order_id")
 
-        print(f"\n[zerodha] {sym}  [SHORT MIS]  entry=₹{entry_price:,.2f}  qty={qty}  "
-              f"(from {pos.get('source_exit_stage', '?')} exit)")
-
-        cover_oid = pos.get("cover_target_order_id")
-        stop_oid  = pos.get("stop_order_id")
-
-        cover_status = None
-        stop_status  = None
-
-        if cover_oid:
+        if not orders_ok:
             try:
-                cover_status = _kite_order_status(cover_oid)
+                notify.send_square_off_manual_review(broker=_BROKER, symbol=sym,
+                    error_msg="Order Book fetch failed this run -- status unverifiable.",
+                    dry_run=dry_run)
             except Exception as exc:
-                print(f"[zerodha]   !! cover target status check failed for {sym}: {exc}. "
-                      f"Skipping {sym} — manual review required.")
-                continue
-        if stop_oid:
+                print(f"  [notify] square_off_manual_review failed: {exc}", file=sys.stderr)
+            continue
+
+        cover_status = order_by_id.get(cover_oid) if cover_oid else None
+        stop_status  = order_by_id.get(stop_oid) if stop_oid else None
+
+        # An order_id the position record says it has, but that's genuinely
+        # missing from today's Order Book, is NOT the same thing as "not
+        # filled yet" -- treating it as neither_filled could force-cover a
+        # short whose cover/stop already closed it, buying back twice. Skip
+        # for manual review instead of guessing.
+        if cover_oid and cover_status is None:
+            msg = f"cover_target_order_id {cover_oid} not found in today's Order Book."
+            print(f"[zerodha]   !! {sym}: {msg} Skipping — manual review required.")
             try:
-                stop_status = _kite_order_status(stop_oid)
+                notify.send_square_off_manual_review(broker=_BROKER, symbol=sym, error_msg=msg, dry_run=dry_run)
             except Exception as exc:
-                print(f"[zerodha]   !! stop-loss status check failed for {sym}: {exc}. "
-                      f"Skipping {sym} — manual review required.")
-                continue
+                print(f"  [notify] square_off_manual_review failed: {exc}", file=sys.stderr)
+            continue
+        if stop_oid and stop_status is None:
+            msg = f"stop_order_id {stop_oid} not found in today's Order Book."
+            print(f"[zerodha]   !! {sym}: {msg} Skipping — manual review required.")
+            try:
+                notify.send_square_off_manual_review(broker=_BROKER, symbol=sym, error_msg=msg, dry_run=dry_run)
+            except Exception as exc:
+                print(f"  [notify] square_off_manual_review failed: {exc}", file=sys.stderr)
+            continue
 
         cover_traded = bool(cover_status) and (cover_status.get("status") or "").upper() == "COMPLETE"
         stop_traded  = bool(stop_status)  and (stop_status.get("status")  or "").upper() == "COMPLETE"
 
         if cover_traded and stop_traded:
-            print(f"[zerodha]   !! BOTH cover target AND stop-loss show COMPLETE for {sym} -- "
-                  f"OCO race, cannot determine which actually executed first. "
-                  f"Skipping {sym} — manual review required.")
-            continue
-
-        if cover_traded:
-            if stop_oid:
-                try:
-                    _kite_cancel_order(stop_oid)
-                except Exception as exc:
-                    print(f"[zerodha]   stop-loss cancel failed (may already be filled/cancelled): {exc}")
-            ep  = float(cover_status.get("average_price") or 0)
-            eq  = int(cover_status.get("filled_quantity") or 0) or qty
-            pnl = (entry_price - ep) * eq
-            ret = (entry_price - ep) / entry_price * 100 if entry_price else 0
-            pos.update({
-                "status":              "short_closed",
-                "exit_price_239":      round(ep, 4),
-                "exit_order_id_239":   cover_oid,
-                "exit_timestamp_239":  _ts(),
-                "realized_return_pct": round(ret, 4),
-                "realized_pnl":        round(pnl, 2),
-            })
-            if not dry_run:
-                _save_short_pos(positions)
-            print(f"[zerodha]   COVER TARGET HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+            msg = ("BOTH cover target AND stop-loss show COMPLETE -- OCO race, "
+                   "cannot determine which actually executed first.")
+            print(f"[zerodha]   !! {sym}: {msg} Skipping — manual review required.")
             try:
-                notify.send_cover_target_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
-                                             entry_price=entry_price, exit_price=ep,
-                                             return_pct=ret, pnl=pnl, dry_run=dry_run)
+                notify.send_square_off_manual_review(broker=_BROKER, symbol=sym, error_msg=msg, dry_run=dry_run)
             except Exception as exc:
-                print(f"  [notify] cover_target_hit failed: {exc}", file=sys.stderr)
-            n_closed += 1
+                print(f"  [notify] square_off_manual_review failed: {exc}", file=sys.stderr)
             continue
 
-        if stop_traded:
-            if cover_oid:
+        kind = "cover_filled" if cover_traded else "stop_filled" if stop_traded else "neither_filled"
+        classified.append({"pos": pos, "sym": sym, "kind": kind, "entry_price": entry_price,
+                           "qty": qty, "cover_oid": cover_oid, "stop_oid": stop_oid,
+                           "cover_status": cover_status, "stop_status": stop_status})
+
+    # ── Batches of MAX_ORDER_CALLS_PER_SECOND: cancel sub-step, then a
+    # force-cover sub-step (only for whichever of THIS batch's positions were
+    # neither_filled -- cover_filled/stop_filled resolve from the pre-fetched
+    # status alone, no further order call needed), save this batch's results
+    # before the next batch's cancels begin. Per-batch saves (not one save
+    # for the whole run, unlike check_exit_925/force_exit_1159's waves) --
+    # if this run is interrupted, some batches end up fully resolved
+    # (cancelled + closed) and others fully untouched, never a half-cancelled
+    # position in between.
+    def _cancel_fn(item: dict) -> None:
+        sym, kind = item["sym"], item["kind"]
+        if kind == "cover_filled" and item["stop_oid"]:
+            try:
+                _kite_cancel_order(item["stop_oid"])
+            except Exception as exc:
+                print(f"[zerodha]   stop-loss cancel failed for {sym} (may already be filled/cancelled): {exc}")
+        elif kind == "stop_filled" and item["cover_oid"]:
+            try:
+                _kite_cancel_order(item["cover_oid"])
+            except Exception as exc:
+                print(f"[zerodha]   cover target cancel failed for {sym} (may already be filled/cancelled): {exc}")
+        elif kind == "neither_filled":
+            if item["cover_oid"]:
                 try:
-                    _kite_cancel_order(cover_oid)
+                    _kite_cancel_order(item["cover_oid"])
                 except Exception as exc:
-                    print(f"[zerodha]   cover target cancel failed (may already be filled/cancelled): {exc}")
-            ep  = float(stop_status.get("average_price") or 0)
-            eq  = int(stop_status.get("filled_quantity") or 0) or qty
-            pnl = (entry_price - ep) * eq
+                    print(f"[zerodha]   cover target cancel failed for {sym} (may already be filled/cancelled): {exc}")
+            if item["stop_oid"]:
+                try:
+                    _kite_cancel_order(item["stop_oid"])
+                except Exception as exc:
+                    print(f"[zerodha]   stop-loss cancel failed for {sym} (may already be filled/cancelled): {exc}")
+        return None
+
+    def _force_cover_fn(item: dict) -> dict:
+        sym, entry_price, qty = item["sym"], item["entry_price"], item["qty"]
+        try:
+            print(f"\n[zerodha] {sym}  [SHORT MIS]  entry=₹{entry_price:,.2f}  qty={qty}  "
+                  f"(from {item['pos'].get('source_exit_stage', '?')} exit)")
+            if not dry_run:
+                bqty = _broker_short_qty(sym)
+                if bqty != qty:
+                    return {"pos": item["pos"], "sym": sym,
+                            "error": f"!! MISMATCH — local={qty} broker_short={bqty}. "
+                                     f"Skipping {sym} — manual review required."}
+                print(f"[zerodha]   broker confirmed: {bqty} shares short")
+
+            try:
+                oid = buy(sym, "NSE", qty, order_type="MARKET", product="MIS", dry_run=dry_run)
+            except Exception as exc:
+                return {"pos": item["pos"], "sym": sym, "error": f"cover buy failed: {exc}"}
+
+            ep, eq = (entry_price, qty) if dry_run else _poll_fill_safe(oid, entry_price, qty)
+            if eq == 0:
+                return {"pos": item["pos"], "sym": sym,
+                        "error": f"!! NOT FILLED — cover buy rejected for {sym}. "
+                                 f"Position left as-is — manual review required."}
+
+            return {"pos": item["pos"], "sym": sym, "kind": "force_cover",
+                    "ep": ep, "eq": eq, "oid": oid, "entry_price": entry_price}
+        except Exception as exc:
+            return {"pos": item["pos"], "sym": sym, "error": f"!! task crashed unexpectedly: {exc}"}
+
+    chunk_size = MAX_ORDER_CALLS_PER_SECOND
+    for i in range(0, len(classified), chunk_size):
+        batch = classified[i : i + chunk_size]
+
+        _run_batch(batch, _cancel_fn)   # sub-step 1: cancels, non-fatal, printed inline
+
+        # sub-step 2: force-cover -- ONLY the neither_filled items in this
+        # batch make an actual Order-API call; cover_filled/stop_filled
+        # resolve immediately below from the pre-fetched status, no thread
+        # needed for those.
+        neither = [item for item in batch if item["kind"] == "neither_filled"]
+        force_cover_by_sym = {r["sym"]: r for r in _run_batch(neither, _force_cover_fn)}
+
+        batch_results: list[dict] = []
+        for item in batch:
+            sym, kind = item["sym"], item["kind"]
+            if kind == "cover_filled":
+                cs = item["cover_status"]
+                ep = float(cs.get("average_price") or 0)
+                eq = int(cs.get("filled_quantity") or 0) or item["qty"]
+                batch_results.append({"pos": item["pos"], "sym": sym, "kind": "cover_target_hit",
+                                      "ep": ep, "eq": eq, "oid": item["cover_oid"],
+                                      "entry_price": item["entry_price"]})
+            elif kind == "stop_filled":
+                ss = item["stop_status"]
+                ep = float(ss.get("average_price") or 0)
+                eq = int(ss.get("filled_quantity") or 0) or item["qty"]
+                batch_results.append({"pos": item["pos"], "sym": sym, "kind": "stop_loss_hit",
+                                      "ep": ep, "eq": eq, "oid": item["stop_oid"],
+                                      "entry_price": item["entry_price"]})
+            else:
+                batch_results.append(force_cover_by_sym[sym])
+
+        # ── Sequential apply for THIS batch: field updates + notify, then
+        # this batch's ONE save -- never begin the next batch's cancels
+        # until this save has completed (the "no half-cancelled state on
+        # interruption" guarantee described above).
+        chunk_dirty = False
+        for res in batch_results:
+            sym, pos = res["sym"], res["pos"]
+
+            if "error" in res:
+                print(f"[zerodha]   {res['error']}")
+                continue
+
+            ep, eq, oid, kind = res["ep"], res["eq"], res["oid"], res["kind"]
+            entry_price = res["entry_price"]
+            pnl = (entry_price - ep) * eq   # short economics: profit when price falls
             ret = (entry_price - ep) / entry_price * 100 if entry_price else 0
             pos.update({
                 "status":              "short_closed",
                 "exit_price_239":      round(ep, 4),
-                "exit_order_id_239":   stop_oid,
+                "exit_order_id_239":   oid,
                 "exit_timestamp_239":  _ts(),
                 "realized_return_pct": round(ret, 4),
                 "realized_pnl":        round(pnl, 2),
             })
-            if not dry_run:
-                _save_short_pos(positions)
-            print(f"[zerodha]   STOP-LOSS HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
-            try:
-                notify.send_short_stoploss_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
+            chunk_dirty = True
+            n_closed += 1
+
+            if kind == "cover_target_hit":
+                print(f"[zerodha]   COVER TARGET HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+                try:
+                    notify.send_cover_target_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
+                                                 entry_price=entry_price, exit_price=ep,
+                                                 return_pct=ret, pnl=pnl, dry_run=dry_run)
+                except Exception as exc:
+                    print(f"  [notify] cover_target_hit failed: {exc}", file=sys.stderr)
+            elif kind == "stop_loss_hit":
+                print(f"[zerodha]   STOP-LOSS HIT — squared off ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+                try:
+                    notify.send_short_stoploss_hit(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
+                                                   entry_price=entry_price, exit_price=ep,
+                                                   return_pct=ret, pnl=pnl, dry_run=dry_run)
+                except Exception as exc:
+                    print(f"  [notify] short_stoploss_hit failed: {exc}", file=sys.stderr)
+            else:  # force_cover
+                print(f"[zerodha]   SQUARED OFF ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
+                try:
+                    notify.send_square_off_239(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
                                                entry_price=entry_price, exit_price=ep,
                                                return_pct=ret, pnl=pnl, dry_run=dry_run)
-            except Exception as exc:
-                print(f"  [notify] short_stoploss_hit failed: {exc}", file=sys.stderr)
-            n_closed += 1
-            continue
+                except Exception as exc:
+                    print(f"  [notify] square_off_239 failed: {exc}", file=sys.stderr)
 
-        if cover_oid:
-            try:
-                _kite_cancel_order(cover_oid)
-            except Exception as exc:
-                print(f"[zerodha]   cover target cancel failed (may already be filled/cancelled): {exc}")
-        if stop_oid:
-            try:
-                _kite_cancel_order(stop_oid)
-            except Exception as exc:
-                print(f"[zerodha]   stop-loss cancel failed (may already be filled/cancelled): {exc}")
-
-        if not dry_run:
-            bqty = _broker_short_qty(sym)
-            if bqty != qty:
-                print(f"[zerodha]   !! MISMATCH — local={qty} broker_short={bqty}. "
-                      f"Skipping {sym} — manual review required.")
-                continue
-            print(f"[zerodha]   broker confirmed: {bqty} shares short")
-
-        try:
-            oid = buy(sym, "NSE", qty, order_type="MARKET", product="MIS", dry_run=dry_run)
-        except Exception as exc:
-            print(f"[zerodha]   cover buy failed: {exc}")
-            continue
-
-        ep, eq = (entry_price, qty) if dry_run else _poll_fill_safe(oid, entry_price, qty)
-        if eq == 0:
-            print(f"[zerodha]   !! NOT FILLED — cover buy rejected for {sym}. "
-                  f"Position left as-is — manual review required.")
-            continue
-
-        pnl = (entry_price - ep) * eq
-        ret = (entry_price - ep) / entry_price * 100 if entry_price else 0
-
-        pos.update({
-            "status":              "short_closed",
-            "exit_price_239":      round(ep, 4),
-            "exit_order_id_239":   oid,
-            "exit_timestamp_239":  _ts(),
-            "realized_return_pct": round(ret, 4),
-            "realized_pnl":        round(pnl, 2),
-        })
-        if not dry_run:
+        if not dry_run and chunk_dirty:
             _save_short_pos(positions)
-        print(f"[zerodha]   SQUARED OFF ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
-        try:
-            notify.send_square_off_239(broker=_BROKER, symbol=f"{sym} [SHORT MIS]",
-                                       entry_price=entry_price, exit_price=ep,
-                                       return_pct=ret, pnl=pnl, dry_run=dry_run)
-        except Exception as exc:
-            print(f"  [notify] square_off_239 failed: {exc}", file=sys.stderr)
-        n_closed += 1
+
+        if i + chunk_size < len(classified):
+            time.sleep(BATCH_SLEEP_SECONDS)
 
     print(f"\n[zerodha] Short square-off complete. Closed: {n_closed}.")
 

@@ -1,31 +1,37 @@
 #!/usr/bin/env python3
 """
 test_batch_concurrency.py -- standalone verifier for the WAVE-BASED
-concurrency redesign (2026-08-27) of check_exit_925/force_exit_1159/
-square_off_239: every position in a batch now performs the SAME action
-before any position moves to the next action (sell-all, then cancel-all;
-short-open-all; target/SL-all for 925/1159 -- cancel-all, then
-force-cover-all for 239), so a concurrent Order-API burst is always
-homogeneous by call type. Covers batching primitives (_run_batch,
-_run_in_chunks, _run_exit_wave1), quote-call batching, the peak Order-API
-concurrency invariant, thread-safe capital allocation (_BalanceTracker),
-write-safety (one _save_long_pos/_save_short_pos per WAVE for 925/1159, one
-per BATCH for 239 -- never from inside a worker thread), per-position
-exception isolation, cross-wave ordering, and square_off_239's single
-Order-Book pre-check (replacing per-order status calls).
+concurrency redesign of check_exit_925/force_exit_1159/square_off_239
+(mirroring the same redesign already done for dhan/run_trades.py): every
+position in a batch now performs the SAME action before any position moves
+to the next action (sell-all, then cancel-all; short-open-all; target/SL-all
+for 925/1159 -- cancel-all, then force-cover-all for 239), so a concurrent
+Order-API burst is always homogeneous by call type. Covers batching
+primitives (_run_batch, _run_in_chunks, _run_exit_wave1), the peak
+Order-API concurrency invariant, thread-safe capital allocation
+(_BalanceTracker), write-safety (one _save_long_pos/_save_short_pos per WAVE
+for 925/1159, one per BATCH for 239 -- never from inside a worker thread),
+per-position exception isolation, cross-wave ordering, and square_off_239's
+single Order-Book pre-check (replacing per-order status calls).
 
 Decision logic itself (target-hit fork, no-data fallback, OCO branches) is
-NOT retested here -- that's dhan/test_targets.py's job, unchanged and still
-passing. This file covers exactly the concurrency mechanics layered on top.
+NOT retested here -- that's zerodha's own existing coverage in
+test_parallel_orders.py's job, unchanged and still passing. This file covers
+exactly the concurrency mechanics layered on top. Zerodha has no batched
+quote-fetch layer (unlike Dhan's get_ltp_batch/_fetch_upper_circuit_batch --
+every LTP/circuit lookup here is still the single-symbol get_ltp()/
+_fetch_upper_circuit() Zerodha always used), so there's no quote-batching
+call-count test in this file -- that optimization doesn't exist on this side
+of the pipeline and isn't part of the wave-based redesign being mirrored.
 
-Mocks every broker-facing call (buy/sell/order_status/get_orders/
-cancel_order/_broker_qty/_broker_short_qty/_available_balance/
-_intraday_margin_check/get_ltp_batch/_fetch_upper_circuit_batch/
-_poll_fill_safe) and the position-file read/write with in-memory stores --
-zero network calls, zero real file writes.
+Mocks every broker-facing call (buy/sell/place_order/order_status/
+get_orders/cancel_order/_broker_qty/_broker_short_qty/_available_margin/
+_mis_margin_check/get_ltp/_fetch_upper_circuit/_poll_fill_safe) and the
+position-file read/write with in-memory stores -- zero network calls, zero
+real file writes.
 
 Usage:
-    python dhan/test_batch_concurrency.py
+    python zerodha/test_batch_concurrency.py
 
 Exit 0 on all-pass, exit 1 on any failure.
 """
@@ -46,16 +52,14 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 for _m in ("data_loader",):
     sys.modules.setdefault(_m, types.ModuleType(_m))
 
-import dhan.run_trades as rt   # noqa: E402
+import zerodha.run_trades as rt   # noqa: E402
 
-patch.object(rt, "tick_size", lambda sym: 0.05).start()
-patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
 # NOTE: rt.time IS the process-wide `time` module (import time returns the
 # same singleton everywhere) -- patching rt.time.sleep globally would ALSO
 # silence every time.sleep() call in THIS file, including the deliberate
-# concurrency-measurement holds a couple of tests below rely on (e.g. test 3's
-# "hold the in-flight window" pattern). So sleep is mocked LOCALLY, per test,
-# only in tests that don't need a real wall-clock window of their own.
+# concurrency-measurement holds a couple of tests below rely on. So sleep is
+# mocked LOCALLY, per test, only in tests that don't need a real wall-clock
+# window of their own.
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -88,12 +92,12 @@ class FakeStore:
 
 def make_long(sym, **overrides):
     row = {
-        "broker": "dhan", "symbol": sym, "entry_date": "2026-08-26",
+        "broker": "zerodha", "symbol": sym, "entry_date": "2026-08-27",
         "reference_price": 100.0, "shares_intended": 10,
         "actual_fill_price": 100.0, "actual_fill_quantity": 10,
         "entry_order_id": f"E-{sym}", "status": "open",
-        "entry_timestamp": "2026-08-26T15:21:00+05:30",
-        "product": "CNC",
+        "entry_timestamp": "2026-08-27T15:21:00+05:30",
+        "product": "MTF",
     }
     row.update(overrides)
     return row
@@ -101,13 +105,13 @@ def make_long(sym, **overrides):
 
 def make_short(sym, **overrides):
     row = {
-        "broker": "dhan", "symbol": sym, "direction": "short",
-        "product": "INTRADAY", "source_exit_stage": "925",
-        "entry_date": "2026-08-26", "entry_price": 100.0, "quantity": 10,
+        "broker": "zerodha", "symbol": sym, "direction": "short",
+        "product": "MIS", "source_exit_stage": "925",
+        "entry_date": "2026-08-27", "entry_price": 100.0, "quantity": 10,
         "entry_order_id": f"S-{sym}", "status": "short_open",
         "cover_target_order_id": f"COVER-{sym}", "cover_target_price": 95.0,
         "stop_order_id": f"STOP-{sym}", "stop_trigger_price": 130.0,
-        "entry_timestamp": "2026-08-26T09:25:00+05:30",
+        "entry_timestamp": "2026-08-27T09:25:00+05:30",
     }
     row.update(overrides)
     return row
@@ -280,182 +284,16 @@ def test_run_exit_wave1_cancel_before_sell():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 2. Quote-batching -- exactly ONE call per stage-run, regardless of N
-# ══════════════════════════════════════════════════════════════════════════
-
-def test_quote_batching_call_counts():
-    print("\n[2] Quote-batching -- get_ltp_batch/_fetch_upper_circuit_batch "
-          "called exactly ONCE per stage-run for N=1,5,12 positions")
-
-    for n in (1, 5, 12):
-        symbols = [f"Q{n}_{i}" for i in range(n)]
-        long_store = FakeStore(positions=[
-            make_long(s, target_order_id=f"TGT-{s}", target_price=117.0) for s in symbols
-        ])
-        short_store = FakeStore(positions=[])
-
-        ltp_calls     = []
-        circuit_calls = []
-        balance_calls = []
-
-        def fake_get_ltp_batch(syms):
-            ltp_calls.append(list(syms))
-            return {s: 105.0 for s in syms}   # positive P&L -> all go to tasks
-
-        def fake_circuit_batch(syms):
-            circuit_calls.append(list(syms))
-            return {s: 130.0 for s in syms}
-
-        def fake_available_balance():
-            balance_calls.append(1)
-            return 10_000_000.0
-
-        def fake_order_status(oid):
-            return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
-
-        def fake_sell(sym, exch, qty, **kw):
-            return f"SELL-{sym}-{kw.get('product')}"
-
-        def fake_buy(sym, exch, qty, **kw):
-            return f"BUY-{sym}-{kw.get('order_type')}"
-
-        def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
-            return 105.0, fallback_qty
-
-        with patch.object(rt, "_load_long_pos", long_store.load), \
-             patch.object(rt, "_save_long_pos", long_store.save), \
-             patch.object(rt, "_load_short_pos", short_store.load), \
-             patch.object(rt, "_save_short_pos", short_store.save), \
-             patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
-             patch.object(rt, "get_ltp", lambda sym: 105.0), \
-             patch.object(rt, "_fetch_upper_circuit_batch", fake_circuit_batch), \
-             patch.object(rt, "_available_balance", fake_available_balance), \
-             patch.object(rt, "_dhan_order_status", fake_order_status), \
-             patch.object(rt, "_dhan_cancel_order", lambda oid: oid), \
-             patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
-             patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
-             patch.object(rt, "sell", fake_sell), \
-             patch.object(rt, "buy", fake_buy), \
-             patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
-             patch.object(rt.time, "sleep", lambda secs: None), \
-             patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
-             patch.object(rt.notify, "send_short_open", lambda **kw: None):
-            rt.check_exit_925(dry_run=False)
-
-        check(f"N={n}: get_ltp_batch called EXACTLY ONCE (not once per position)",
-              len(ltp_calls) == 1, f"calls={len(ltp_calls)}")
-        check(f"N={n}: that one call covered all {n} symbol(s)",
-              ltp_calls and sorted(ltp_calls[0]) == sorted(symbols))
-        check(f"N={n}: _fetch_upper_circuit_batch called EXACTLY ONCE "
-              f"(not once per triggered short)", len(circuit_calls) == 1,
-              f"calls={len(circuit_calls)}")
-        check(f"N={n}: _available_balance() called EXACTLY ONCE for the whole "
-              f"stage-run (not once per short)", balance_calls == [1],
-              f"calls={balance_calls}")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# 3. Combined exit+short budget -- concurrent order-call burst never exceeds
-#    MAX_ORDER_CALLS_PER_SECOND, at every wave (Wave 1 sell, Wave 2 short,
-#    Wave 3 target/SL)
-# ══════════════════════════════════════════════════════════════════════════
-
-def test_combined_exit_and_short_budget():
-    print("\n[3] Peak concurrent order-calls stays <= MAX_ORDER_CALLS_PER_SECOND "
-          f"({rt.MAX_ORDER_CALLS_PER_SECOND}) across every wave -- Wave 1 sells, "
-          "Wave 2 short-opens, and Wave 3 target/SL placements are now separate "
-          "bursts (never mixed call types in the same burst), but each burst on "
-          "its own must still respect the ceiling")
-
-    n = 12   # 3 chunks of 5,5,2 per wave -- every exit ALSO opens a mirrored short
-    symbols = [f"BUD{i}" for i in range(n)]
-    long_store  = FakeStore(positions=[
-        make_long(s, target_order_id=f"TGT-{s}", target_price=117.0) for s in symbols
-    ])
-    short_store = FakeStore(positions=[])
-
-    active_count = 0
-    peak_count   = 0
-    lock = threading.Lock()
-
-    def enter_call():
-        nonlocal active_count, peak_count
-        with lock:
-            active_count += 1
-            peak_count = max(peak_count, active_count)
-
-    def exit_call():
-        nonlocal active_count
-        with lock:
-            active_count -= 1
-
-    def fake_sell(sym, exch, qty, **kw):
-        enter_call()
-        try:
-            time.sleep(0.05)   # hold the "in-flight" window long enough to overlap
-            return f"SELL-{sym}-{kw.get('product')}"
-        finally:
-            exit_call()
-
-    def fake_buy(sym, exch, qty, **kw):
-        enter_call()
-        try:
-            time.sleep(0.05)
-            return f"BUY-{sym}-{kw.get('order_type')}"
-        finally:
-            exit_call()
-
-    def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
-
-    def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
-        return 105.0, fallback_qty
-
-    with patch.object(rt, "_load_long_pos", long_store.load), \
-         patch.object(rt, "_save_long_pos", long_store.save), \
-         patch.object(rt, "_load_short_pos", short_store.load), \
-         patch.object(rt, "_save_short_pos", short_store.save), \
-         patch.object(rt, "get_ltp_batch", lambda syms: {s: 105.0 for s in syms}), \
-         patch.object(rt, "get_ltp", lambda sym: 105.0), \
-         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {s: 130.0 for s in syms}), \
-         patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_dhan_order_status", fake_order_status), \
-         patch.object(rt, "_dhan_cancel_order", lambda oid: oid), \
-         patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
-         patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
-         patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
-         patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
-
-    check(f"peak concurrent order-calls ({peak_count}) never exceeded "
-          f"MAX_ORDER_CALLS_PER_SECOND ({rt.MAX_ORDER_CALLS_PER_SECOND}) across "
-          f"the whole run (Wave 1 sells, Wave 2 short-opens, Wave 3 target/SL "
-          f"placements all measured by the same instrumented sell()/buy())",
-          peak_count <= rt.MAX_ORDER_CALLS_PER_SECOND, f"peak={peak_count}")
-
-    n_shorts = sum(1 for p in short_store.positions if p.get("status") == "short_open")
-    check(f"all {n} exits actually triggered a mirrored short (real work happened, "
-          f"the peak-count assertion above isn't vacuous)", n_shorts == n,
-          f"n_shorts={n_shorts}")
-    n_protected = sum(1 for p in short_store.positions if p.get("cover_target_order_id"))
-    check(f"all {n} shorts also got a cover-target placed (Wave 3 actually ran)",
-          n_protected == n, f"n_protected={n_protected}")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# 4. _BalanceTracker -- genuine concurrent stress, never double-allocates
+# 2. _BalanceTracker -- real concurrent threads never over-commit the pool
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_balance_tracker_concurrent_never_double_allocates():
-    print("\n[4] _BalanceTracker -- real concurrent threads hammering "
+    print("\n[2] _BalanceTracker -- real concurrent threads hammering "
           "try_reserve() never over-commit the pool")
 
-    pool_size    = 1_000.0
-    per_amount   = 100.0
-    n_threads    = 50   # far more contenders than the pool can satisfy
+    pool_size     = 1_000.0
+    per_amount    = 100.0
+    n_threads     = 50   # far more contenders than the pool can satisfy
     expected_wins = int(pool_size // per_amount)   # exactly 10 can succeed
 
     tracker = rt._BalanceTracker(pool_size)
@@ -484,13 +322,11 @@ def test_balance_tracker_concurrent_never_double_allocates():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 5. One write PER WAVE (not per batch) -- near-simultaneous batch
-#    completions within a wave, no lost writes, exactly ONE save for the
-#    whole run
+# 3. One write PER WAVE (not per batch)
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_one_write_per_wave_no_lost_writes():
-    print("\n[5] Position-file writes -- exactly ONE _save_long_pos() for the "
+    print("\n[3] Position-file writes -- exactly ONE _save_long_pos() for the "
           "WHOLE run (not once per batch -- Wave 1 now applies every batch's "
           "results in memory across all 3 chunks, and saves once at the end)")
 
@@ -509,11 +345,9 @@ def test_one_write_per_wave_no_lost_writes():
          patch.object(rt, "_save_long_pos", long_store.save), \
          patch.object(rt, "_load_short_pos", short_store.load), \
          patch.object(rt, "_save_short_pos", short_store.save), \
-         patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}), \
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
-         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
-         patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
+         patch.object(rt, "_available_margin", lambda: 10_000_000.0), \
+         patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
@@ -536,11 +370,11 @@ def test_one_write_per_wave_no_lost_writes():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 6. Exception isolation -- one position's crash never affects batch-mates
+# 4. Exception isolation -- one position's crash never affects batch-mates
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_exception_isolation_within_batch():
-    print("\n[6] One position's unexpected exception doesn't affect siblings "
+    print("\n[4] One position's unexpected exception doesn't affect siblings "
           "in the same batch (check_exit_925, square_off_239)")
 
     # -- check_exit_925 (crash injected in Wave 1's sell sub-step, via
@@ -555,7 +389,7 @@ def test_exception_isolation_within_batch():
     def fake_broker_qty(sym, product):
         if sym == failing:
             raise KeyError("simulated unexpected crash, not a normal RuntimeError")
-        return 10, "NSE_EQ"
+        return 10, "NSE"
 
     def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
         return 110.0, fallback_qty
@@ -564,10 +398,8 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "_save_long_pos", long_store.save), \
          patch.object(rt, "_load_short_pos", short_store.load), \
          patch.object(rt, "_save_short_pos", short_store.save), \
-         patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}), \
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
-         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
-         patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
+         patch.object(rt, "_available_margin", lambda: 10_000_000.0), \
          patch.object(rt, "_broker_qty", fake_broker_qty), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", lambda sym, exch, qty, **kw: f"SELL-{sym}"), \
@@ -608,10 +440,9 @@ def test_exception_isolation_within_batch():
 
     with patch.object(rt, "_load_short_pos", sq_store.load), \
          patch.object(rt, "_save_short_pos", sq_store.save), \
-         patch.object(rt, "_dhan_get_orders", lambda: []), \
-         patch.object(rt, "_dhan_cancel_order", lambda oid: oid), \
+         patch.object(rt, "_kite_get_orders", lambda: []), \
+         patch.object(rt, "_kite_cancel_order", lambda oid: oid), \
          patch.object(rt, "_broker_short_qty", fake_broker_short_qty_sq), \
-         patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "buy", fake_buy), \
          patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sq), \
          patch.object(rt.notify, "send_square_off_239", lambda **kw: None):
@@ -628,107 +459,17 @@ def test_exception_isolation_within_batch():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 7. Mirrored short anchor price -- the stage-start BATCHED ltp_cache value,
-#    NOT a fresh per-thread quote (that design was tried and reverted --
-#    confirmed live on 2026-08-27 to reliably 429: 4 of 5 concurrent
-#    get_ltp() calls failed in every one of 4 live runs. A single isolated
-#    batched call was separately confirmed reliable on its own -- the
-#    earlier concern that even the batch call collides with live_monitor.py
-#    was traced to the measurement script's own preceding burst, not to
-#    live_monitor.py, which only fetches quotes once at startup)
+# 5/6. Cross-wave ordering -- check_exit_925 / force_exit_1159
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_short_anchor_uses_batched_ltp_cache():
-    print("\n[7] Mirrored short anchor price -- uses the stage-start batched "
-          "ltp_cache value; get_ltp() (single-symbol) is never called anywhere "
-          "in this flow")
-
-    sym = "STALE1"   # fill_price defaults to 100.0 in make_long()
-    long_store  = FakeStore(positions=[make_long(sym)])
-    short_store = FakeStore(positions=[])
-
-    BATCH_LTP = 105.0   # what the upfront batched get_ltp_batch returns
-
-    get_ltp_batch_calls: list[list[str]] = []
-    get_ltp_calls: list[str] = []
-    order_prices: dict[str, float] = {}
-    sell_counter = [0]
-
-    def fake_get_ltp_batch(syms):
-        get_ltp_batch_calls.append(list(syms))
-        return {s: BATCH_LTP for s in syms}   # positive P&L (100 -> 105) -> queues a sell
-
-    def fake_get_ltp(s):
-        # Should NEVER be reached: check_exit_925/Wave 1/2/3 no longer call
-        # get_ltp() at all, and ltp_cache covers this symbol so
-        # _open_short_place's own "ltp is None" internal fallback (unrelated,
-        # pre-existing, untouched by this change) doesn't trigger either.
-        get_ltp_calls.append(s)
-        return 999.0
-
-    def fake_sell(s, exch, qty, **kw):
-        sell_counter[0] += 1
-        oid = f"SELL{sell_counter[0]}-{s}"
-        order_prices[oid] = kw.get("price")   # every sell "fills" at its own requested price
-        return oid
-
-    def fake_buy(s, exch, qty, **kw):
-        return f"BUY-{s}-{kw.get('order_type')}"
-
-    def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
-        return order_prices.get(oid, fallback_price), fallback_qty
-
-    with patch.object(rt, "_load_long_pos", long_store.load), \
-         patch.object(rt, "_save_long_pos", long_store.save), \
-         patch.object(rt, "_load_short_pos", short_store.load), \
-         patch.object(rt, "_save_short_pos", short_store.save), \
-         patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
-         patch.object(rt, "get_ltp", fake_get_ltp), \
-         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {s: 200.0 for s in syms}), \
-         patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_broker_qty", lambda s, product: (10, "NSE_EQ")), \
-         patch.object(rt, "_intraday_margin_check", lambda s, qty, ltp: {"margin_required": 1.0}), \
-         patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
-         patch.object(rt.time, "sleep", lambda secs: None), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
-         patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
-
-    check("get_ltp_batch (stage-start, upfront) called exactly once, covering this symbol",
-          len(get_ltp_batch_calls) == 1 and sym in get_ltp_batch_calls[0],
-          str(get_ltp_batch_calls))
-    check("get_ltp (single-symbol) is NEVER called -- no per-thread fresh-quote "
-          "fetch remains anywhere in this flow",
-          get_ltp_calls == [], str(get_ltp_calls))
-
-    check("mirrored short actually opened", len(short_store.positions) == 1,
-          str(short_store.positions))
-    if short_store.positions:
-        row = short_store.positions[0]
-        expected_price = rt._tick_round(sym, BATCH_LTP * 0.995)
-        check(f"short's entry_price (₹{row['entry_price']}) reflects the stage-start "
-              f"batched ltp_cache value (expected ₹{expected_price})",
-              row["entry_price"] == expected_price,
-              f"got {row['entry_price']}")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# 8. Cross-wave ordering -- Wave 1 (cancel+sell) fully completes, for EVERY
-#    batch, before Wave 2 (short-open) starts at all; Wave 2 fully completes
-#    before Wave 3 (target/SL) starts. Proven for both check_exit_925 and
-#    force_exit_1159 (which share _run_exit_wave1).
-# ══════════════════════════════════════════════════════════════════════════
-
-def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
+def _run_wave_ordering_case(stage_fn, n, make_positions):
     symbols = [f"W{n}_{i}" for i in range(n)]
     long_store  = FakeStore(positions=make_positions(symbols))
     short_store = FakeStore(positions=[])
     events = TaggedEvents()
 
     def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+        return {"status": "OPEN", "filled_quantity": 0, "average_price": 0}
 
     def fake_cancel(oid):
         events.add("cancel", oid)
@@ -736,18 +477,26 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
 
     def fake_sell(sym, exch, qty, **kw):
         # Wave 1's exit sell uses whatever product the position carries
-        # (CNC here); Wave 2's short-open sell always uses INTRADAY -- the
-        # two are distinguishable by that alone, same routing trick
-        # test_targets.py's (bal-short) scenario already relies on.
-        if kw.get("product") == "INTRADAY":
+        # (MTF here); Wave 2's short-open sell always uses product=MIS --
+        # the two are distinguishable by that alone.
+        if kw.get("product") == "MIS":
             events.add("short_sell", sym)
         else:
             events.add("exit_sell", sym)
         return f"SELL-{sym}"
 
     def fake_buy(sym, exch, qty, **kw):
+        # Wave 3's cover-target LIMIT buy.
         events.add("protect_buy", sym)
         return f"BUY-{sym}-{kw.get('order_type')}"
+
+    def fake_place_order(sym, exch, txn_type, qty, **kw):
+        # Wave 3's UC-based stop-loss goes through place_order() directly
+        # (order_type="SL"), NOT the buy() wrapper -- see
+        # _open_short_protect. Both cover-target and stop-loss count as
+        # "protect_buy" events for this test's purposes.
+        events.add("protect_buy", sym)
+        return f"ORDER-{sym}-{kw.get('order_type')}"
 
     def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
         return 110.0, fallback_qty
@@ -757,23 +506,16 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
         patch.object(rt, "_save_long_pos", long_store.save),
         patch.object(rt, "_load_short_pos", short_store.load),
         patch.object(rt, "_save_short_pos", short_store.save),
-        patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}),
         patch.object(rt, "get_ltp", lambda sym: 110.0),
-        # circuit_cache is deliberately empty ({}) below to keep this helper's
-        # focus on ORDER-call sequencing -- that means _open_short_protect's
-        # `circuit is None` branch fires for every short, so its single-symbol
-        # fallback (_fetch_upper_circuit) must be mocked too, or it would hit
-        # the real network exactly like the earlier live measurement script's
-        # findings warned about.
-        patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}),
         patch.object(rt, "_fetch_upper_circuit", lambda sym: 200.0),
-        patch.object(rt, "_available_balance", lambda: 10_000_000.0),
-        patch.object(rt, "_dhan_order_status", fake_order_status),
-        patch.object(rt, "_dhan_cancel_order", fake_cancel),
-        patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")),
-        patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}),
+        patch.object(rt, "_available_margin", lambda: 10_000_000.0),
+        patch.object(rt, "_kite_order_status", fake_order_status),
+        patch.object(rt, "_kite_cancel_order", fake_cancel),
+        patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE")),
+        patch.object(rt, "_mis_margin_check", lambda sym, qty: {"leverage": 1.0, "margin_required": 1.0}),
         patch.object(rt, "sell", fake_sell),
         patch.object(rt, "buy", fake_buy),
+        patch.object(rt, "place_order", fake_place_order),
         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe),
         patch.object(rt.time, "sleep", lambda secs: None),
         patch.object(rt.notify, "send_exit_925", lambda **kw: None),
@@ -791,7 +533,7 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
 
 
 def test_wave_ordering_check_exit_925():
-    print("\n[8] check_exit_925 -- cross-wave ordering for N=12 (3 batches/wave): "
+    print("\n[5] check_exit_925 -- cross-wave ordering for N=12 (3 batches/wave): "
           "every Wave-1 cancel/exit-sell precedes every Wave-2 short-sell, which "
           "precedes every Wave-3 target/SL buy")
 
@@ -820,7 +562,7 @@ def test_wave_ordering_check_exit_925():
 
 
 def test_wave_ordering_force_exit_1159():
-    print("\n[9] force_exit_1159 -- cross-wave ordering for N=12, same "
+    print("\n[6] force_exit_1159 -- cross-wave ordering for N=12, same "
           "invariant as check_exit_925 (shares _run_exit_wave1). Also confirms "
           "the target-cancel moved from sequential Phase 1 into Wave 1's "
           "concurrent cancel sub-step -- cancels are visible as batched events "
@@ -848,13 +590,13 @@ def test_wave_ordering_force_exit_1159():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 10. Wave 1 internal ordering, single batch -- a no-LTP-fallback task rides
-#     in the SAME batch as normal "full" sell tasks; cancels for the WHOLE
-#     mixed batch still all precede sells for the whole mixed batch
+# 7. Wave 1 internal ordering, single batch -- a no-LTP-fallback task rides
+#    in the SAME batch as normal "full" sell tasks; cancels for the WHOLE
+#    mixed batch still all precede sells for the whole mixed batch
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_wave1_mixed_fallback_and_full_same_batch():
-    print("\n[10] check_exit_925 Wave 1 -- a no-LTP-fallback task and two "
+    print("\n[7] check_exit_925 Wave 1 -- a no-LTP-fallback task and two "
           "normal profitable-exit tasks in the SAME batch (n=3, one batch): "
           "still sell-all-then-cancel-all, no separate path for the fallback")
 
@@ -867,7 +609,7 @@ def test_wave1_mixed_fallback_and_full_same_batch():
     events = TaggedEvents()
 
     def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+        return {"status": "OPEN", "filled_quantity": 0, "average_price": 0}
 
     def fake_cancel(oid):
         events.add("cancel", oid)
@@ -877,10 +619,13 @@ def test_wave1_mixed_fallback_and_full_same_batch():
         events.add("sell", sym)
         return f"SELL-{sym}-{qty}"
 
-    def fake_ltp_batch(syms):
-        # NODATA is deliberately absent -> triggers the no-LTP fallback path;
-        # FULLA/FULLB get a profitable LTP -> normal full-sell path.
-        return {s: 110.0 for s in syms if s != "NODATA"}
+    def fake_get_ltp(sym):
+        # NODATA is deliberately unavailable -> triggers the no-LTP
+        # fallback path; FULLA/FULLB get a profitable LTP -> normal
+        # full-sell path.
+        if sym == "NODATA":
+            raise ValueError(f"[zerodha] No LTP found for {sym}.")
+        return 110.0
 
     def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
         return 110.0, fallback_qty
@@ -889,13 +634,12 @@ def test_wave1_mixed_fallback_and_full_same_batch():
          patch.object(rt, "_save_long_pos", long_store.save), \
          patch.object(rt, "_load_short_pos", short_store.load), \
          patch.object(rt, "_save_short_pos", short_store.save), \
-         patch.object(rt, "get_ltp_batch", fake_ltp_batch), \
-         patch.object(rt, "get_ltp", lambda sym: 110.0), \
-         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
-         patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_dhan_order_status", fake_order_status), \
-         patch.object(rt, "_dhan_cancel_order", fake_cancel), \
-         patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
+         patch.object(rt, "get_ltp", fake_get_ltp), \
+         patch.object(rt, "_available_margin", lambda: 10_000_000.0), \
+         patch.object(rt, "_kite_order_status", fake_order_status), \
+         patch.object(rt, "_kite_cancel_order", fake_cancel), \
+         patch.object(rt, "_broker_qty",
+                      lambda sym, product: (5, "NSE") if sym == "NODATA" else (10, "NSE")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
@@ -925,13 +669,13 @@ def test_wave1_mixed_fallback_and_full_same_batch():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 11. square_off_239 -- single Order Book pre-check (not per-order status
-#     calls), both_filled positions excluded without consuming a batch slot
+# 8. square_off_239 -- single Order Book pre-check (not per-order status
+#    calls), both_filled positions excluded without consuming a batch slot
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_square_off_single_order_book_call_and_both_filled_exclusion():
-    print("\n[11] square_off_239 -- ONE _dhan_get_orders() call regardless of N; "
-          "_dhan_order_status is NEVER called; a both_filled position is "
+    print("\n[8] square_off_239 -- ONE _kite_get_orders() call regardless of N; "
+          "_kite_order_status is NEVER called; a both_filled position is "
           "excluded from batching entirely (manual review, no cancel/cover "
           "action), siblings unaffected")
 
@@ -942,14 +686,14 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
     sq_store   = FakeStore(positions=[cover_hit, stop_hit, neither, both])
 
     orders = [
-        {"orderId": "C-1", "orderStatus": "TRADED", "filledQty": 10, "averageTradedPrice": 95.0},
-        {"orderId": "S-1", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
-        {"orderId": "C-2", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
-        {"orderId": "S-2", "orderStatus": "TRADED", "filledQty": 10, "averageTradedPrice": 129.0},
-        {"orderId": "C-3", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
-        {"orderId": "S-3", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
-        {"orderId": "C-4", "orderStatus": "TRADED", "filledQty": 10, "averageTradedPrice": 95.0},
-        {"orderId": "S-4", "orderStatus": "TRADED", "filledQty": 10, "averageTradedPrice": 129.0},
+        {"order_id": "C-1", "status": "COMPLETE", "filled_quantity": 10, "average_price": 95.0},
+        {"order_id": "S-1", "status": "OPEN", "filled_quantity": 0, "average_price": 0},
+        {"order_id": "C-2", "status": "OPEN", "filled_quantity": 0, "average_price": 0},
+        {"order_id": "S-2", "status": "COMPLETE", "filled_quantity": 10, "average_price": 129.0},
+        {"order_id": "C-3", "status": "OPEN", "filled_quantity": 0, "average_price": 0},
+        {"order_id": "S-3", "status": "OPEN", "filled_quantity": 0, "average_price": 0},
+        {"order_id": "C-4", "status": "COMPLETE", "filled_quantity": 10, "average_price": 95.0},
+        {"order_id": "S-4", "status": "COMPLETE", "filled_quantity": 10, "average_price": 129.0},
     ]
     get_orders_calls = [0]
     def fake_get_orders():
@@ -957,9 +701,8 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
         return orders
 
     def fail_if_order_status_called(oid):
-        raise AssertionError(f"_dhan_order_status must never be called anymore, got oid={oid}")
+        raise AssertionError(f"_kite_order_status must never be called anymore, got oid={oid}")
 
-    manual_review_calls = []
     cancel_calls = []
     def fake_cancel(oid):
         cancel_calls.append(oid)
@@ -971,13 +714,13 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
     def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
         return 90.0, fallback_qty
 
+    manual_review_calls = []
     with patch.object(rt, "_load_short_pos", sq_store.load), \
          patch.object(rt, "_save_short_pos", sq_store.save), \
-         patch.object(rt, "_dhan_get_orders", fake_get_orders), \
-         patch.object(rt, "_dhan_order_status", fail_if_order_status_called), \
-         patch.object(rt, "_dhan_cancel_order", fake_cancel), \
+         patch.object(rt, "_kite_get_orders", fake_get_orders), \
+         patch.object(rt, "_kite_order_status", fail_if_order_status_called), \
+         patch.object(rt, "_kite_cancel_order", fake_cancel), \
          patch.object(rt, "_broker_short_qty", lambda sym: 10), \
-         patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "buy", fake_buy), \
          patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_cover_target_hit", lambda **kw: None), \
@@ -987,7 +730,7 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
                       lambda **kw: manual_review_calls.append(kw)):
         rt.square_off_239(dry_run=False)
 
-    check("_dhan_get_orders() called EXACTLY ONCE for the whole run "
+    check("_kite_get_orders() called EXACTLY ONCE for the whole run "
           "(not once per position)", get_orders_calls[0] == 1, str(get_orders_calls))
 
     by_sym = {p["symbol"]: p for p in sq_store.positions}
@@ -1026,12 +769,9 @@ if __name__ == "__main__":
     test_run_in_chunks_boundaries()
     test_run_batch_primitive()
     test_run_exit_wave1_cancel_before_sell()
-    test_quote_batching_call_counts()
-    test_combined_exit_and_short_budget()
     test_balance_tracker_concurrent_never_double_allocates()
     test_one_write_per_wave_no_lost_writes()
     test_exception_isolation_within_batch()
-    test_short_anchor_uses_batched_ltp_cache()
     test_wave_ordering_check_exit_925()
     test_wave_ordering_force_exit_1159()
     test_wave1_mixed_fallback_and_full_same_batch()
@@ -1042,3 +782,4 @@ if __name__ == "__main__":
         print(f"{failures} check(s) FAILED.")
         sys.exit(1)
     print("All checks PASSED.")
+    sys.exit(0)

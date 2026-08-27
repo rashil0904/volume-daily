@@ -381,6 +381,17 @@ def send_circuit_fetch_failed(broker: str, symbol: str, error_msg: str,
     _send(text, topic="errors")
 
 
+def send_square_off_manual_review(broker: str, symbol: str, error_msg: str,
+                                  dry_run: bool = False) -> None:
+    tag  = "  [DRY RUN]" if dry_run else ""
+    text = "\n".join([
+        f"<b>&#9888; SQUARE-OFF MANUAL REVIEW — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Issue:</b> {html_lib.escape(str(error_msg))}",
+    ])
+    _send(text, topic="errors")
+
+
 def send_nothing_open_at_1159(broker: str) -> None:
     _send(
         f"<b>11:59am Exit — {html_lib.escape(broker)}</b>\n"

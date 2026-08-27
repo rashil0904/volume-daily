@@ -22,7 +22,7 @@ Covers:
 Mocks every broker-facing call this touches (trade.py's buy/sell are never
 actually invoked -- run_trades.py's own module-level buy/sell/stage_entry_
 orders/_mtf_margin_check/_available_margin/_poll_fill_safe/get_ltp/
-_broker_qty/_open_short_execute references are patched directly) and the
+_broker_qty/_open_short_place references are patched directly) and the
 position-file read/write (_load_long_pos/_save_long_pos) with an in-memory
 store -- zero network calls, zero real file writes, zero real sleeps beyond
 the small artificial per-call delays these scenarios ask for on purpose.
@@ -236,7 +236,8 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt, "_broker_qty", side_effect=fake_broker_qty), \
          patch.object(rt, "sell", side_effect=fake_sell), \
          patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
-         patch.object(rt, "_open_short_execute", return_value=None), \
+         patch.object(rt, "_available_margin", return_value=10_000_000.0), \
+         patch.object(rt, "_open_short_place", return_value=None), \
          patch.object(rt, "_load_long_pos", side_effect=long_store.load), \
          patch.object(rt, "_save_long_pos", side_effect=long_store.save), \
          patch.object(rt, "_load_short_pos", side_effect=short_store.load), \
@@ -247,8 +248,15 @@ def test_exit_parallel_timing_and_resilience():
         rt.check_exit_925(dry_run=False)
         elapsed = time.monotonic() - start
 
-    expected_ceiling = 2 * _CALL_DELAY + 1.0
-    check(f"8-symbol exit batch on a 4-worker pool completes well under "
+    # Wave 1 batches the 8 tasks into [5, 3] (MAX_ORDER_CALLS_PER_SECOND=5),
+    # each sell sub-step firing concurrently (~1x_CALL_DELAY per batch) with
+    # one BATCH_SLEEP_SECONDS between the two batches. Wave 2 then re-chunks
+    # the 7 successfully-sold symbols into [5, 2] -- _open_short_place is
+    # mocked to return instantly, but _run_in_chunks still pays its own
+    # inter-chunk sleep between those two batches regardless of how fast the
+    # mocked worker returns.
+    expected_ceiling = 2 * _CALL_DELAY + 2 * rt.BATCH_SLEEP_SECONDS + 1.0
+    check(f"8-symbol exit batch across wave 1/2 completes well under "
           f"8x{_CALL_DELAY}s sequential time",
           elapsed < expected_ceiling,
           f"took {elapsed:.3f}s, ceiling {expected_ceiling:.3f}s")
@@ -261,6 +269,8 @@ def test_exit_parallel_timing_and_resilience():
           all(by_sym[s]["status"] == "exited_925" for s in symbols if s != failing))
     check("exactly one save() call for the whole batch (single-pass write)",
           long_store.save_count == 1, f"save_count={long_store.save_count}")
+    check("no short ever opened (short place mocked to return None) -> zero short saves",
+          short_store.save_count == 0, f"save_count={short_store.save_count}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
