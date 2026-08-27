@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 test_auth_renew.py -- standalone verifier for dhan/auth.py's
-renew_access_token() (automated daily Dhan token renewal).
+renew_access_token() (automated daily Dhan token renewal) AND
+_load_valid_token()'s Telegram renewal-needed alert (fired whenever ANY
+script's get_session() call discovers there's no usable token at all --
+distinct from send_token_renewal_failed, which only fires from the dedicated
+8am/8pm --renew cron when its own renewal attempt fails).
 
 Mocks every network call (requests.get/requests.post on the module dhan.auth
 imports) and redirects dhan.auth._TOKEN_FILE to a temp file for the duration
@@ -26,6 +30,7 @@ sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
 import dhan.auth as auth   # noqa: E402
+import notify              # noqa: E402 -- same module object auth.py's local import resolves to
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -190,6 +195,143 @@ check("(4) requests.post was NEVER called -- proves the implementation uses GET,
       "not POST, for both RenewToken and the verification call",
       mock_post_4.call_count == 0, f"post called {mock_post_4.call_count}x")
 tmp4.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (5) — No saved token file -> renewal-needed notify fires, "
+      "_load_valid_token() returns None\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp5 = Path(tempfile.mktemp())   # deliberately never created
+alerts5 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp5)), \
+     patch.object(notify, "send_dhan_token_renewal_needed",
+                  lambda reason: alerts5.append(reason)):
+    result5 = auth._load_valid_token()
+
+check("(5) returns None when no token file exists", result5 is None)
+check("(5) notify fired exactly once", len(alerts5) == 1, str(alerts5))
+check("(5) reason mentions no saved token file", "No saved token file" in alerts5[0], alerts5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (6) — Corrupt token file -> notify fires, returns None\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp6 = Path(tempfile.mkstemp()[1])
+tmp6.write_text("{not valid json")
+alerts6 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp6)), \
+     patch.object(notify, "send_dhan_token_renewal_needed",
+                  lambda reason: alerts6.append(reason)):
+    result6 = auth._load_valid_token()
+
+check("(6) returns None on a corrupt token file", result6 is None)
+check("(6) notify fired exactly once", len(alerts6) == 1, str(alerts6))
+check("(6) reason mentions the read failure", "Could not read token file" in alerts6[0], alerts6)
+tmp6.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (7) — Expired token -> notify fires, returns None\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp7 = Path(tempfile.mkstemp()[1])
+tmp7.write_text(json.dumps({
+    "access_token": "OLD_TOKEN",
+    "issued_at":  "2020-01-01T08:00:00+05:30",
+    "expires_at": "2020-01-02T08:00:00+05:30",   # long past
+}))
+alerts7 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp7)), \
+     patch.object(notify, "send_dhan_token_renewal_needed",
+                  lambda reason: alerts7.append(reason)):
+    result7 = auth._load_valid_token()
+
+check("(7) returns None for an expired token", result7 is None)
+check("(7) notify fired exactly once", len(alerts7) == 1, str(alerts7))
+check("(7) reason mentions the token expired", "expired" in alerts7[0].lower(), alerts7)
+tmp7.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (8) — Valid token -> notify must NOT fire\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp8 = Path(tempfile.mkstemp()[1])
+tmp8.write_text(json.dumps({
+    "access_token": "GOOD_TOKEN",
+    "issued_at":  "2026-08-27T08:00:00+05:30",
+    "expires_at": "2099-01-01T06:00:00+05:30",   # far future -- avoids depending on real "now"
+}))
+alerts8 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp8)), \
+     patch.object(notify, "send_dhan_token_renewal_needed",
+                  lambda reason: alerts8.append(reason)):
+    result8 = auth._load_valid_token()
+
+check("(8) returns the valid access_token", result8 == "GOOD_TOKEN", str(result8))
+check("(8) notify NEVER fired for a still-valid token", alerts8 == [], str(alerts8))
+tmp8.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (9) — --renew CLI success -> confirmation notify fires\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp9 = Path(tempfile.mkstemp()[1])
+seed_token_file(tmp9, "OLD_TOKEN")
+success_alerts9 = []
+failure_alerts9 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp9)), \
+     patch.object(auth, "_CLIENT_ID", "CID123"), \
+     patch.object(auth.requests, "get", fake_get_1), \
+     patch.object(auth.requests, "post", MagicMock(side_effect=AssertionError("must not use POST"))), \
+     patch.object(notify, "send_token_renewal_succeeded",
+                  lambda message: success_alerts9.append(message)), \
+     patch.object(notify, "send_token_renewal_failed",
+                  lambda message: failure_alerts9.append(message)):
+    exit_code9 = auth._run_renew_cli()
+
+check("(9) --renew exits 0 on success", exit_code9 == 0, str(exit_code9))
+check("(9) success notify fired exactly once", len(success_alerts9) == 1, str(success_alerts9))
+check("(9) success message mentions the new expiry",
+      "renewed successfully" in success_alerts9[0], success_alerts9)
+check("(9) failure notify never fired on a successful renewal",
+      failure_alerts9 == [], str(failure_alerts9))
+tmp9.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (10) — --renew CLI failure -> failure notify fires, "
+      "NOT the success one\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+tmp10 = Path(tempfile.mkstemp()[1])
+seed_token_file(tmp10, "OLD_TOKEN")
+success_alerts10 = []
+failure_alerts10 = []
+
+with patch.object(auth, "_TOKEN_FILE", str(tmp10)), \
+     patch.object(auth, "_CLIENT_ID", "CID123"), \
+     patch.object(auth.requests, "get", fake_get_2), \
+     patch.object(auth.requests, "post", MagicMock(side_effect=AssertionError("must not use POST"))), \
+     patch.object(notify, "send_token_renewal_succeeded",
+                  lambda message: success_alerts10.append(message)), \
+     patch.object(notify, "send_token_renewal_failed",
+                  lambda message: failure_alerts10.append(message)):
+    exit_code10 = auth._run_renew_cli()
+
+check("(10) --renew exits 1 on failure", exit_code10 == 1, str(exit_code10))
+check("(10) failure notify fired exactly once", len(failure_alerts10) == 1, str(failure_alerts10))
+check("(10) success notify never fired on a failed renewal",
+      success_alerts10 == [], str(success_alerts10))
+tmp10.unlink()
 
 
 print("\n" + "─" * 60)

@@ -492,6 +492,37 @@ def send_token_renewal_failed(error_msg: str) -> None:
     _send(text, topic="errors")
 
 
+def send_token_renewal_succeeded(message: str) -> None:
+    text = "\n".join([
+        "<b>&#9989; Dhan Token Renewed</b>",
+        html_lib.escape(str(message)),
+    ])
+    _send(text, topic="errors")
+
+
+def send_zerodha_token_renewal_needed(reason: str) -> None:
+    text = "\n".join([
+        "<b>&#128308; Zerodha Token Renewal NEEDED</b>",
+        f"<b>Reason:</b> {html_lib.escape(str(reason))}",
+        "Zerodha has no automated renewal (unlike Dhan) — run "
+        "<code>python -m zerodha.auth</code> to log in manually before the "
+        "next scheduled stage needs it.",
+    ])
+    _send(text, topic="errors")
+
+
+def send_dhan_token_renewal_needed(reason: str) -> None:
+    text = "\n".join([
+        "<b>&#128308; Dhan Token Renewal NEEDED</b>",
+        f"<b>Reason:</b> {html_lib.escape(str(reason))}",
+        "No usable Dhan token was found outside the scheduled 8am/8pm --renew "
+        "cron (see send_token_renewal_failed for THAT alert) — run "
+        "<code>python -m dhan.auth &lt;ACCESS_TOKEN&gt;</code> with a freshly "
+        "generated token from web.dhan.co before the next scheduled stage needs it.",
+    ])
+    _send(text, topic="errors")
+
+
 # ── CLI (for manual testing) ──────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -82,10 +82,30 @@ def _save_token(access_token: str) -> dict:
     return payload
 
 
+def _notify_renewal_needed(reason: str) -> None:
+    """Best-effort Telegram alert -- a notify failure must never break the
+    auth flow itself. Distinct from send_token_renewal_failed (fired only by
+    the dedicated 8am/8pm --renew cron when ITS OWN renewal attempt fails):
+    this fires from _load_valid_token(), which any script's get_session()
+    call goes through, so a script running mid-day that discovers there's no
+    usable token at all (not just "the last renewal attempt failed") also
+    alerts, not just the cron entry point."""
+    try:
+        _root = Path(__file__).resolve().parent.parent
+        for _p in (str(_root), str(_root / "pipeline")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        import notify
+        notify.send_dhan_token_renewal_needed(reason)
+    except Exception as exc:
+        print(f"[dhan]   (also failed to send Telegram alert: {exc})", file=sys.stderr)
+
+
 def _load_valid_token() -> str | None:
     """Returns access_token if the saved token is still valid, else None."""
     if not os.path.exists(_TOKEN_FILE):
         print("[dhan] No saved token found — run `python -m dhan.auth <ACCESS_TOKEN>`.")
+        _notify_renewal_needed("No saved token file found.")
         return None
     try:
         with open(_TOKEN_FILE) as f:
@@ -93,11 +113,13 @@ def _load_valid_token() -> str | None:
         expires_at = datetime.fromisoformat(data["expires_at"])
     except Exception as exc:
         print(f"[dhan] Could not read token file ({exc}) — new token required.")
+        _notify_renewal_needed(f"Could not read token file: {exc}")
         return None
 
     if datetime.now(_IST) >= expires_at:
         print(f"[dhan] Token expired at {expires_at.strftime('%Y-%m-%d %H:%M %Z')} — "
               "generate a new one at web.dhan.co and run `python -m dhan.auth <ACCESS_TOKEN>`.")
+        _notify_renewal_needed(f"Token expired at {expires_at.strftime('%Y-%m-%d %H:%M %Z')}.")
         return None
 
     issued = data.get("issued_at", "")[:16]
@@ -233,17 +255,26 @@ BASE_URL = _BASE_URL
 
 # ── CLI entry point ────────────────────────────────────────────────────────────
 # --renew : daily automated renewal (cron entry point, replaces the old
-# standalone dhan/cron_renew_token.py). On success, logs the new expiry. On
-# failure, sends a Telegram alert via pipeline/notify.py's existing "errors"
-# topic (same channel already used for live_monitor start failures/
-# disconnects) and exits 1 -- renew_access_token() itself never touches the
-# saved token file on failure, so trading can still proceed on the old token
-# today if it hasn't actually expired yet.
+# standalone dhan/cron_renew_token.py). On success, logs the new expiry and
+# sends a confirmation Telegram alert. On failure, sends a Telegram alert via
+# pipeline/notify.py's existing "errors" topic (same channel already used for
+# live_monitor start failures/disconnects) and exits 1 -- renew_access_token()
+# itself never touches the saved token file on failure, so trading can still
+# proceed on the old token today if it hasn't actually expired yet.
 
 def _run_renew_cli() -> int:
     ok, message = renew_access_token()
     if ok:
         print(f"[dhan] {message}")
+        try:
+            _root = Path(__file__).resolve().parent.parent
+            for _p in (str(_root), str(_root / "pipeline")):
+                if _p not in sys.path:
+                    sys.path.insert(0, _p)
+            import notify
+            notify.send_token_renewal_succeeded(message)
+        except Exception as exc:
+            print(f"[dhan]   (also failed to send Telegram alert: {exc})", file=sys.stderr)
         return 0
     print(f"[dhan] ERROR: Token renewal failed -- {message}", file=sys.stderr)
     try:

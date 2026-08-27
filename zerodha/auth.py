@@ -68,10 +68,28 @@ def _save_token(access_token: str, user_id: str) -> None:
     print(f"[zerodha] Token saved → {_TOKEN_FILE}  (expires {expiry.strftime('%Y-%m-%d %H:%M %Z')})")
 
 
+def _notify_renewal_needed(reason: str) -> None:
+    """Best-effort Telegram alert -- a notify failure must never break the
+    auth flow itself. Zerodha has no automated renewal (unlike Dhan's
+    RenewToken cron): every expiry/invalidation genuinely needs a human to
+    run `python -m zerodha.auth`, so this fires at every point that
+    discovers that need, not just a dedicated cron entry point."""
+    try:
+        _root = Path(__file__).resolve().parent.parent
+        for _p in (str(_root), str(_root / "pipeline")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        import notify
+        notify.send_zerodha_token_renewal_needed(reason)
+    except Exception as exc:
+        print(f"[zerodha]   (also failed to send Telegram alert: {exc})", file=sys.stderr)
+
+
 def _load_valid_token() -> tuple[str, str] | None:
     """Returns (access_token, user_id) if saved token is still valid, else None."""
     if not os.path.exists(_TOKEN_FILE):
         print("[zerodha] No saved token found — login required.")
+        _notify_renewal_needed("No saved token file found.")
         return None
     try:
         with open(_TOKEN_FILE) as f:
@@ -79,10 +97,12 @@ def _load_valid_token() -> tuple[str, str] | None:
         expires_at = datetime.fromisoformat(data["expires_at"])
     except Exception as exc:
         print(f"[zerodha] Could not read token file ({exc}) — login required.")
+        _notify_renewal_needed(f"Could not read token file: {exc}")
         return None
 
     if datetime.now(_IST) >= expires_at:
         print(f"[zerodha] Token expired at {expires_at.strftime('%Y-%m-%d %H:%M %Z')} — login required.")
+        _notify_renewal_needed(f"Token expired at {expires_at.strftime('%Y-%m-%d %H:%M %Z')}.")
         return None
 
     issued = data.get("issued_at", "")[:16]
@@ -225,6 +245,7 @@ class _KiteSession(requests.Session):
         try:
             access_token, _ = _login()
         except Exception as exc:
+            _notify_renewal_needed(f"401 received mid-run and re-authentication failed: {exc}")
             raise RuntimeError(
                 f"[zerodha] 401 received and re-authentication failed: {exc}\n"
                 "Re-run `python zerodha_auth.py` manually."
