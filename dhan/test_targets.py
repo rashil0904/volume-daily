@@ -382,9 +382,8 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt.notify, "send_exit_925", MagicMock()):
     rt.check_exit_925(dry_run=False)
 
-check("(d) LIMIT sell fires before cancel_order (sell is time-sensitive, "
-      "cancelling the now-stale target is cleanup that follows it), in that order",
-      call_order_d == [("sell", "EPSILON", "LIMIT", 104.45), ("cancel", "TGT-EPS")], str(call_order_d))
+check("(d) cancel_order called before the LIMIT sell, in that order",
+      call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "LIMIT", 104.45)], str(call_order_d))
 row = store.positions[0]
 check("(d) row exited_925", row["status"] == "exited_925")
 check("(d) mirrored short opened", open_short_calls_d == [("EPSILON", 10, "925")])
@@ -471,7 +470,7 @@ check("(f1) exit_order_id_1159 == target_order_id", row1["exit_order_id_1159"] =
 check("(f1) exit_price_1159 == 117.0", row1["exit_price_1159"] == 117.0)
 check("(f1) NO mirrored short on a target-hit exit (UC risk)", open_short_calls_f1 == [])
 
-# f2: target NOT traded -> force-sell then cancel, regardless of a mocked loss
+# f2: target NOT traded -> cancel then force-sell, regardless of a mocked loss
 pos2 = make_long(symbol="THETA", actual_fill_price=100.0, actual_fill_quantity=10,
                   target_order_id="TGT-THETA", target_price=117.0, status="open")
 store2 = FakeStore([pos2])
@@ -509,8 +508,8 @@ with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
     rt.force_exit_1159(dry_run=False)
 
-check("(f2) force-sell fires before cancel_order, in that order",
-      call_order_f2 == [("sell", "THETA"), ("cancel", "TGT-THETA")], str(call_order_f2))
+check("(f2) cancel_order called before force-sell, in that order",
+      call_order_f2 == [("cancel", "TGT-THETA"), ("sell", "THETA")], str(call_order_f2))
 row2 = store2.positions[0]
 check("(f2) status exited_1159 despite a loss (no P&L gate at 11:59)", row2["status"] == "exited_1159")
 check("(f2) mirrored short still opened even on a losing force-exit",

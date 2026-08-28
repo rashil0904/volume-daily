@@ -510,11 +510,17 @@
     "actual_fill_price": 116.9946,
     "actual_fill_quantity": 2991,
     "entry_order_id": "23126082781609",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-27T15:21:00.724471+05:30",
     "product": "MTF",
     "target_order_id": "23126082811609",
-    "target_price": 136.88
+    "target_price": 136.88,
+    "exit_price_1159": 117.67849,
+    "exit_order_id_1159": "241260828765609",
+    "exit_timestamp_1159": "2026-08-28T12:03:03+05:30",
+    "realized_return_pct": 0.5845,
+    "realized_pnl": 2045.51,
+    "exit_note": "Automated 11:59 force-exit REJECTED twice (RMS: 'trying to sell more than the quantity you currently hold' -- stale target order still resting, sold before cancel). Manually cancelled the resting target then squared off via MARKET sell (order 241260828765609)."
   },
   {
     "broker": "dhan",
@@ -525,11 +531,17 @@
     "actual_fill_price": 139.6491,
     "actual_fill_quantity": 2508,
     "entry_order_id": "321260827577609",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-27T15:21:01.799294+05:30",
     "product": "MTF",
     "target_order_id": "22126082849209",
-    "target_price": 152.84
+    "target_price": 152.84,
+    "exit_price_1159": 138.89584,
+    "exit_order_id_1159": "241260828766309",
+    "exit_timestamp_1159": "2026-08-28T12:03:23+05:30",
+    "realized_return_pct": -0.5394,
+    "realized_pnl": -1889.18,
+    "exit_note": "Automated 11:59 force-exit REJECTED twice (RMS: 'trying to sell more than the quantity you currently hold' -- stale target order still resting, sold before cancel). Manually cancelled the resting target then squared off via MARKET sell (order 241260828766309)."
   },
   {
     "broker": "dhan",
@@ -540,11 +552,17 @@
     "actual_fill_price": 572.3033,
     "actual_fill_quantity": 614,
     "entry_order_id": "34126082778209",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-27T15:21:02.537187+05:30",
     "product": "MTF",
     "target_order_id": "22126082850409",
-    "target_price": 669.6
+    "target_price": 669.6,
+    "exit_price_1159": 592.9806,
+    "exit_order_id_1159": "211260828792209",
+    "exit_timestamp_1159": "2026-08-28T12:02:39+05:30",
+    "realized_return_pct": 3.613,
+    "realized_pnl": 12695.86,
+    "exit_note": "Automated 11:59 force-exit REJECTED twice (RMS: 'trying to sell more than the quantity you currently hold' -- stale target order still resting, sold before cancel), plus one manual MARKET retry also rejected for the same reason. Manually cancelled the resting target then squared off via MARKET sell (order 211260828792209)."
   },
   {
     "broker": "dhan",

@@ -4,7 +4,7 @@ test_batch_concurrency.py -- standalone verifier for the WAVE-BASED
 concurrency redesign of check_exit_925/force_exit_1159/square_off_239
 (mirroring the same redesign already done for dhan/run_trades.py): every
 position in a batch now performs the SAME action before any position moves
-to the next action (sell-all, then cancel-all; short-open-all; target/SL-all
+to the next action (cancel-all, then sell-all; short-open-all; target/SL-all
 for 925/1159 -- cancel-all, then force-cover-all for 239), so a concurrent
 Order-API burst is always homogeneous by call type. Covers batching
 primitives (_run_batch, _run_in_chunks, _run_exit_wave1), the peak
@@ -214,73 +214,57 @@ def test_run_batch_primitive():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 1c. _run_exit_wave1 -- sell-then-cancel, two separate bursts per batch,
-#     never overlapping with each other; cancel is skipped for a failed sell
+# 1c. _run_exit_wave1 -- cancel-then-sell, two separate bursts per batch,
+#     never overlapping with each other
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_run_exit_wave1_cancel_before_sell():
-    print("\n[1c] _run_exit_wave1 -- within a batch, EVERY sell completes "
-          "before ANY cancel starts (2026-08-28: sell is the time-sensitive "
-          "action, cancelling the now-stale target is cleanup that follows "
-          "it); sleeps only between batches, not between a batch's own "
-          "sell/cancel sub-steps")
+    print("\n[1c] _run_exit_wave1 -- within a batch, EVERY cancel completes "
+          "before ANY sell starts (2026-08-28: cancel MUST precede sell -- a "
+          "still-resting target and a fresh sell for the same shares can't "
+          "both be live at once, the broker rejects the new sell as "
+          "\"trying to sell more than the quantity you currently hold\"); "
+          "sleeps only between batches, not between a batch's own "
+          "cancel/sell sub-steps")
 
     n = 4   # single batch (< MAX_ORDER_CALLS_PER_SECOND)
     events = TaggedEvents()
 
-    def sell_fn(item):
-        events.add("sell", str(item))
-        return {"item": item}   # sell_fn must return a dict-like value ("error" key checked)
-
-    def cancel_fn(res):
-        events.add("cancel", str(res["item"]))
+    def cancel_fn(item):
+        events.add("cancel", str(item))
         return None
 
+    def sell_fn(item):
+        events.add("sell", str(item))
+        return item
+
     # Ordering here is guaranteed structurally by _run_exit_wave1 (it waits
-    # for the whole sell burst via _run_batch before starting the cancel
+    # for the whole cancel burst via _run_batch before starting the sell
     # burst) -- no artificial delay needed to observe it correctly.
     sleep_calls = []
     with patch.object(rt.time, "sleep", lambda s: sleep_calls.append(s)):
         results = []
-        for batch in rt._run_exit_wave1(list(range(n)), sell_fn, cancel_fn):
+        for batch in rt._run_exit_wave1(list(range(n)), cancel_fn, sell_fn):
             results.extend(batch)
 
-    check("every item's sell result came back",
-          sorted(r["item"] for r in results) == list(range(n)), str(results))
-    sell_idx   = events.indices("sell")
+    check("every item's sell result came back", sorted(results) == list(range(n)), str(results))
     cancel_idx = events.indices("cancel")
-    check("ALL sells (single batch, n=4) completed before ANY cancel started",
-          max(sell_idx) < min(cancel_idx), str(events))
+    sell_idx   = events.indices("sell")
+    check("ALL cancels (single batch, n=4) completed before ANY sell started",
+          max(cancel_idx) < min(sell_idx), str(events))
     check("single batch -> zero inter-batch sleeps", sleep_calls == [], str(sleep_calls))
 
-    # Multi-batch: n=7 -> batches of 5, 2. Sell/cancel never interleave WITHIN
+    # Multi-batch: n=7 -> batches of 5, 2. Cancel/sell never interleave WITHIN
     # a batch, and there's exactly one inter-batch sleep.
     events2 = TaggedEvents()
     sleep_calls2 = []
     with patch.object(rt.time, "sleep", lambda s: sleep_calls2.append(s)):
-        for batch in rt._run_exit_wave1(
-                list(range(7)),
-                lambda it: events2.add("sell", str(it)) or {"item": it},
-                lambda res: events2.add("cancel", str(res["item"]))):
+        for batch in rt._run_exit_wave1(list(range(7)),
+                                        lambda it: events2.add("cancel", str(it)),
+                                        lambda it: events2.add("sell", str(it)) or it):
             pass
     check("multi-batch (n=7, chunks of 5+2): exactly 1 inter-batch sleep",
           sleep_calls2 == [rt.BATCH_SLEEP_SECONDS], str(sleep_calls2))
-
-    # A failed sell must NOT trigger a cancel -- its resting target is the
-    # only protection left on that position, so it must stay live.
-    cancelled = []
-    def sell_fn3(item):
-        if item == 2:
-            return {"item": item, "error": "simulated sell failure"}
-        return {"item": item}
-    def cancel_fn3(res):
-        cancelled.append(res["item"])
-        return None
-    with patch.object(rt.time, "sleep", lambda s: None):
-        for batch in rt._run_exit_wave1(list(range(4)), sell_fn3, cancel_fn3):
-            pass
-    check("item 2's failed sell was NOT followed by a cancel -- its target stays live",
-          sorted(cancelled) == [0, 1, 3], f"cancelled={cancelled}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -598,7 +582,7 @@ def test_wave_ordering_force_exit_1159():
 def test_wave1_mixed_fallback_and_full_same_batch():
     print("\n[7] check_exit_925 Wave 1 -- a no-LTP-fallback task and two "
           "normal profitable-exit tasks in the SAME batch (n=3, one batch): "
-          "still sell-all-then-cancel-all, no separate path for the fallback")
+          "still cancel-all-then-sell-all, no separate path for the fallback")
 
     long_store = FakeStore(positions=[
         make_long("FULLA", target_order_id="TGT-FULLA", target_price=117.0),
@@ -649,16 +633,15 @@ def test_wave1_mixed_fallback_and_full_same_batch():
 
     cancel_idx = events.indices("cancel")
     sell_idx   = events.indices("sell")
-    check("all 3 tasks (2 full + 1 fallback) were cancelled -- same batch "
-          "(every sell succeeded, so every one is cancel-eligible)",
+    check("all 3 tasks (2 full + 1 fallback) were cancelled -- same batch",
           len(cancel_idx) == 3, str(events))
     # NODATA's fallback also places a fresh target for the remainder in the
     # SAME sell sub-step -- so NODATA contributes 2 "sell" events (half-sell +
     # fresh target), FULLA/FULLB contribute 1 each -- 4 total.
     check("all sell-side activity (2 full sells + fallback's half-sell + its "
-          "fresh-target-remainder) happened in the sell sub-step, BEFORE "
-          "every cancel in the batch started",
-          len(sell_idx) == 4 and max(sell_idx) < min(cancel_idx), str(events))
+          "fresh-target-remainder) happened in the sell sub-step, none before "
+          "every cancel in the batch completed",
+          len(sell_idx) == 4 and max(cancel_idx) < min(sell_idx), str(events))
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
     check("NODATA correctly took the no-data fallback path (partial exit)",

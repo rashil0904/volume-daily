@@ -94,15 +94,17 @@ TOTAL_CAPITAL = 500_000
 # ── Wave-based batching (check_exit_925 / force_exit_1159 / square_off_239) ─────
 # Mirrors the dhan/run_trades.py redesign: every position in a batch performs
 # the SAME Order-API call type before any position in that batch moves to the
-# next one (sell-all, then cancel-all; short-open-all; protect-all), so a
-# concurrent burst can never mix call types. Wave 1 sells BEFORE cancelling
-# each task's stale resting target -- the sell is the time-sensitive action,
-# cancelling the now-redundant target is cleanup that can follow it -- and
-# only cancels for tasks whose sell actually succeeded, so a failed sell
-# leaves its resting target live as protection instead of cancelled out from
-# under it. trade.py's `rate_limiter` is ALSO a 5-orders/sec sliding window
-# (see trade.py), so this batch size lines up with the same real ceiling
-# that limiter already enforces -- the batching
+# next one (cancel-all, then sell-all; short-open-all; protect-all), so a
+# concurrent burst can never mix call types. Wave 1 cancels BEFORE selling
+# (reverted 2026-08-28 -- a "sell first" version was tried and broke live on
+# the Dhan side: the broker's RMS rejects a new sell for the same shares a
+# still-resting target order already committed, "you are trying to sell more
+# than the quantity you currently hold" -- confirmed on real positions, all
+# rejected twice and left open until manually cancelled+sold). Cancel-then-
+# sell avoids that collision entirely since the target is gone before the
+# new sell is even placed. trade.py's `rate_limiter` is ALSO a 5-orders/sec
+# sliding window (see trade.py), so this batch size lines up with the same
+# real ceiling that limiter already enforces -- the batching
 # here isn't a second independent rate limit, it's what keeps each concurrent
 # burst homogeneous by call type within that limiter's own window.
 MAX_ORDER_CALLS_PER_SECOND  = 5
@@ -367,8 +369,8 @@ def _run_batch(items: list, worker_fn) -> list:
     single burst -- a bounded ThreadPoolExecutor (max_workers == len(items))
     -- and blocks until all of them complete, returning the results as a
     list. This is the single-burst primitive both _run_in_chunks (one worker
-    per batch) and _run_exit_wave1 (two workers per batch -- sell, then
-    cancel) are built from, so a multi-sub-step batch can compose more than one
+    per batch) and _run_exit_wave1 (two workers per batch -- cancel, then
+    sell) are built from, so a multi-sub-step batch can compose more than one
     burst within the same batch boundary without going through separate
     _run_in_chunks calls.
 
@@ -411,21 +413,22 @@ def _run_in_chunks(items: list, worker_fn, chunk_size: int | None = None,
             time.sleep(sleep_between)
 
 
-def _run_exit_wave1(tasks: list, sell_fn, cancel_fn, chunk_size: int | None = None,
+def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = None,
                     sleep_between: float | None = None):
     """Generator shared by check_exit_925/force_exit_1159's Wave 1: for each
-    batch of `tasks`, first SELLS every task in the batch (one concurrent
-    burst via _run_batch; includes fill polling and, for a no-data fallback
-    task, its fresh-target-remainder placement), THEN -- only once every
-    sell in the batch has completed -- cancels each task's now-stale target
-    order, but ONLY for the tasks whose sell actually succeeded (a failed
-    sell means the position is still open, so its resting target must stay
-    live as protection rather than get cancelled out from under it). The two
-    sub-steps within a batch never overlap with each other, so every
-    concurrent Order-API burst stays homogeneous by call type (all sells
-    together, then all cancels together). `sleep_between` (default
-    BATCH_SLEEP_SECONDS) is paced between BATCHES, not between a batch's own
-    sell and cancel sub-steps.
+    batch of `tasks`, first cancels every task's stale target order (one
+    concurrent burst via _run_batch), THEN -- only once every cancel in the
+    batch has completed -- sells every task in the batch (a second, separate
+    concurrent burst; includes fill polling and, for a no-data fallback task,
+    its fresh-target-remainder placement). The two sub-steps within a batch
+    never overlap with each other, so every concurrent Order-API burst stays
+    homogeneous by call type (all cancels together, then all sells together).
+    Cancel MUST precede sell, not the other way around: a still-resting
+    target order and a fresh sell for the same shares can't both be live at
+    once -- the broker rejects the new sell as "trying to sell more than the
+    quantity you currently hold" (confirmed live on the Dhan side 2026-08-28).
+    `sleep_between` (default BATCH_SLEEP_SECONDS) is paced between BATCHES,
+    not between a batch's own cancel and sell sub-steps.
 
     Yields one batch's SELL-step results at a time -- cancel-step results are
     never surfaced (a cancel failure is non-fatal, same as today, and only
@@ -434,10 +437,8 @@ def _run_exit_wave1(tasks: list, sell_fn, cancel_fn, chunk_size: int | None = No
     sleep_between = BATCH_SLEEP_SECONDS if sleep_between is None else sleep_between
     for i in range(0, len(tasks), chunk_size):
         batch = tasks[i : i + chunk_size]
-        sell_results = _run_batch(batch, sell_fn)
-        to_cancel = [res for res in sell_results if "error" not in res]
-        _run_batch(to_cancel, cancel_fn)
-        yield sell_results
+        _run_batch(batch, cancel_fn)
+        yield _run_batch(batch, sell_fn)
         if i + chunk_size < len(tasks):
             time.sleep(sleep_between)
 
@@ -1103,20 +1104,16 @@ def check_exit_925(dry_run: bool = False) -> None:
     # _BalanceTracker).
     short_balance = _BalanceTracker(_available_margin()) if tasks else _BalanceTracker(None)
 
-    # ── Wave 1 (batched-concurrent): sell every task in a batch (one
-    # concurrent burst per batch; includes fill polling and, for a no-data
-    # fallback task, its fresh-target-remainder placement), THEN -- only
-    # once that batch's sells are all confirmed -- cancel each task's now-
-    # stale target order, but ONLY for tasks whose sell actually succeeded
-    # (a failed sell leaves the position open, so its resting target stays
-    # live as protection instead of being cancelled out from under it). The
-    # sell fires first because it's the time-sensitive action; cancelling
-    # the now-redundant target is just cleanup that can follow it. Every
-    # position in a batch performs the SAME action before any position moves
-    # to the next, so a concurrent Order-API burst never mixes call types
-    # from different positions. No position-file access inside either
-    # worker; the sequential apply step below does every field update and
-    # this wave's one write.
+    # ── Wave 1 (batched-concurrent): cancel every task's stale target (one
+    # concurrent burst per batch), THEN -- only once that batch's cancels are
+    # all confirmed -- sell every task in that same batch (a second, separate
+    # concurrent burst; includes fill polling and, for a no-data fallback
+    # task, its fresh-target-remainder placement). Every position in a batch
+    # performs the SAME action before any position moves to the next, so a
+    # concurrent Order-API burst never mixes call types from different
+    # positions. No position-file access inside either worker; the
+    # sequential apply step below does every field update and this wave's
+    # one write.
     def _cancel_fn(task: dict) -> None:
         sym, target_oid = task["sym"], task["target_oid"]
         if target_oid:
@@ -1169,7 +1166,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
     wave1_results: list[dict] = []
-    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+    for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
 
     # ── Sequential apply for Wave 1 (once per whole run, not per batch):
@@ -1353,8 +1350,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
                 continue
             # Not traded -- the actual cancel moves into Wave 1's concurrent
             # cancel sub-step below (batched with every other task's cancel
-            # in the same burst, AFTER that batch's sells), not fired here
-            # sequentially.
+            # in the same burst), not fired here sequentially.
 
         tasks.append({"pos": pos, "sym": sym, "product": product, "fill_price": fill_price,
                       "qty": qty, "is_partial": is_partial, "target_oid": target_oid})
@@ -1369,13 +1365,13 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # reasoning as check_exit_925.
     short_balance = _BalanceTracker(_available_margin()) if tasks else _BalanceTracker(None)
 
-    # ── Wave 1 (batched-concurrent): force-sell every task in a batch (one
-    # concurrent burst per batch; includes fill polling), THEN -- only once
-    # that batch's sells are all confirmed -- cancel each task's now-stale
-    # target order, but ONLY for tasks whose sell actually succeeded. No P&L
-    # gate here (unlike 9:25, no "kind"/fallback distinction -- every task
-    # is a plain unconditional sell). See check_exit_925's matching Wave 1
-    # for the full reasoning; identical shape, reused via _run_exit_wave1.
+    # ── Wave 1 (batched-concurrent): cancel every task's stale target (one
+    # concurrent burst per batch), THEN -- only once that batch's cancels are
+    # all confirmed -- force-sell every task in that same batch (a second,
+    # separate concurrent burst; includes fill polling). No P&L gate here
+    # (unlike 9:25, no "kind"/fallback distinction -- every task is a plain
+    # unconditional sell). See check_exit_925's matching Wave 1 for the full
+    # reasoning; identical shape, reused via _run_exit_wave1.
     def _cancel_fn(task: dict) -> None:
         sym, target_oid = task["sym"], task["target_oid"]
         if target_oid:
@@ -1411,7 +1407,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
     wave1_results: list[dict] = []
-    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+    for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
 
     # ── Sequential apply for Wave 1 (once per whole run): every field

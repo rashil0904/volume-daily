@@ -88,15 +88,16 @@ BATCH_SLEEP_SECONDS        = 1.0
 # square_off_239 no longer run a position's full cancel->sell->short->
 # target/SL sequence in one worker thread -- every position in a batch now
 # performs the SAME action before any position in that batch moves to the
-# next action (sell-all, then cancel-all; short-all; target/SL-all), so a
+# next action (cancel-all, then sell-all; short-all; target/SL-all), so a
 # concurrent Order-API burst is always homogeneous by call type, never a mix
 # of e.g. one position's cancel landing alongside another's cover-target buy.
-# Wave 1 sells BEFORE cancelling each task's stale resting target (2026-08-28
-# -- the actual exit is the time-sensitive action; cancelling the now-stale
-# target is just cleanup that can follow it) -- and only cancels for tasks
-# whose sell actually succeeded: a failed sell means the position is still
-# open, so its resting target stays live as protection instead of being
-# cancelled out from under it.
+# Wave 1 cancels BEFORE selling (reverted 2026-08-28 -- a "sell first" version
+# was tried and broke live: the broker's RMS rejects a new sell for the same
+# shares a still-resting target order already committed, "you are trying to
+# sell more than the quantity you currently hold" -- confirmed live on
+# BOMDYEING/GKENERGY/RAMRAT's 11:59 force-exit, all 3 rejected twice and left
+# open until manually cancelled+sold). Cancel-then-sell avoids that collision
+# entirely since the target is gone before the new sell is even placed.
 # SHORT_SETTLE_BUFFER_SECONDS is a ONE-TIME pause between the short-open wave
 # and the target/stop-loss wave (not between every batch -- BATCH_SLEEP_SECONDS
 # already covers that) giving the exchange a moment to register the new short
@@ -795,8 +796,8 @@ def _run_batch(items: list, worker_fn) -> list:
     single burst -- a bounded ThreadPoolExecutor (max_workers == len(items))
     -- and blocks until all of them complete, returning the results as a
     list. This is the single-burst primitive both _run_in_chunks (one
-    worker per batch) and _run_exit_wave1 (two workers per batch -- sell,
-    then cancel) are built from, so a multi-sub-step batch can compose more
+    worker per batch) and _run_exit_wave1 (two workers per batch -- cancel,
+    then sell) are built from, so a multi-sub-step batch can compose more
     than one burst within the same batch boundary without going through
     separate _run_in_chunks calls.
 
@@ -842,22 +843,24 @@ def _run_in_chunks(items: list, worker_fn, chunk_size: int | None = None,
             time.sleep(sleep_between)
 
 
-def _run_exit_wave1(tasks: list, sell_fn, cancel_fn, chunk_size: int | None = None,
+def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = None,
                     sleep_between: float | None = None):
     """Generator shared by check_exit_925/force_exit_1159's Wave 1: for each
-    batch of `tasks`, first SELLS every task in the batch (one concurrent
-    burst via _run_batch; includes fill polling and, for a no-data fallback
-    task, its fresh-target-remainder placement), THEN -- only once every
-    sell in the batch has completed -- cancels each task's now-stale target
-    order, but ONLY for the tasks whose sell actually succeeded (a failed
-    sell means the position is still open, so its resting target must stay
-    live as protection rather than get cancelled out from under it). The
-    two sub-steps within a batch never overlap with each other, so every
-    concurrent Order-API burst stays homogeneous by call type (all sells
-    together, then all cancels together) -- the core invariant the wave
-    design trades the old per-position cascade-in-one-thread design for.
-    `sleep_between` (default BATCH_SLEEP_SECONDS) is paced between BATCHES,
-    not between a batch's own sell and cancel sub-steps.
+    batch of `tasks`, first cancels every task's stale target order (one
+    concurrent burst via _run_batch), THEN -- only once every cancel in the
+    batch has completed -- sells every task in the batch (a second, separate
+    concurrent burst; includes fill polling and, for a no-data fallback
+    task, its fresh-target-remainder placement). The two sub-steps within a
+    batch never overlap with each other, so every concurrent Order-API burst
+    stays homogeneous by call type (all cancels together, then all sells
+    together) -- the core invariant the wave design trades the old
+    per-position cascade-in-one-thread design for. Cancel MUST precede sell,
+    not the other way around: a still-resting target order and a fresh sell
+    for the same shares can't both be live at once -- the broker's RMS
+    rejects the new sell as "trying to sell more than the quantity you
+    currently hold" (confirmed live 2026-08-28). `sleep_between` (default
+    BATCH_SLEEP_SECONDS) is paced between BATCHES, not between a batch's own
+    cancel and sell sub-steps.
 
     Yields one batch's SELL-step results at a time -- cancel-step results
     are never surfaced (a cancel failure is non-fatal, same as today, and
@@ -866,10 +869,8 @@ def _run_exit_wave1(tasks: list, sell_fn, cancel_fn, chunk_size: int | None = No
     sleep_between = BATCH_SLEEP_SECONDS if sleep_between is None else sleep_between
     for i in range(0, len(tasks), chunk_size):
         batch = tasks[i : i + chunk_size]
-        sell_results = _run_batch(batch, sell_fn)
-        to_cancel = [res for res in sell_results if "error" not in res]
-        _run_batch(to_cancel, cancel_fn)
-        yield sell_results
+        _run_batch(batch, cancel_fn)
+        yield _run_batch(batch, sell_fn)
         if i + chunk_size < len(tasks):
             time.sleep(sleep_between)
 
@@ -1786,15 +1787,11 @@ def check_exit_925(dry_run: bool = False) -> None:
         # at once (see _BalanceTracker).
         short_balance = _BalanceTracker(_available_balance())
 
-    # ── Wave 1 (batched-concurrent): sell every task in a batch (one
-    # concurrent burst per batch; includes fill polling and, for a no-data
-    # fallback task, its fresh-target-remainder placement), THEN -- only
-    # once that batch's sells are all confirmed -- cancel each task's now-
-    # stale target order, but ONLY for tasks whose sell actually succeeded
-    # (a failed sell leaves the position open, so its resting target stays
-    # live as protection instead of being cancelled out from under it). The
-    # sell fires first because it's the time-sensitive action; cancelling
-    # the now-redundant target is just cleanup that can follow it. See
+    # ── Wave 1 (batched-concurrent): cancel every task's stale target (one
+    # concurrent burst per batch), THEN -- only once that batch's cancels are
+    # all confirmed -- sell every task in that same batch (a second,
+    # separate concurrent burst; includes fill polling and, for a no-data
+    # fallback task, its fresh-target-remainder placement). See
     # _run_exit_wave1's docstring and the module note on the wave-based
     # redesign above MAX_ORDER_CALLS_PER_SECOND's definition -- every
     # position in a batch performs the SAME action before any position moves
@@ -1853,7 +1850,7 @@ def check_exit_925(dry_run: bool = False) -> None:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
     wave1_results: list[dict] = []
-    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+    for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
 
     # ── Sequential apply for Wave 1 (once per whole run, not per batch): every
@@ -2049,9 +2046,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
                 continue
             # Not traded -- the actual cancel moves into Wave 1's concurrent
             # cancel sub-step below (batched with every other task's cancel
-            # in the same burst, AFTER that batch's sells), not fired here
-            # sequentially -- see the module note on the wave-based redesign
-            # above MAX_ORDER_CALLS_PER_SECOND's definition.
+            # in the same burst), not fired here sequentially -- see the
+            # module note on the wave-based redesign above
+            # MAX_ORDER_CALLS_PER_SECOND's definition.
 
         if sym in ltp_cache:
             exit_ltp = ltp_cache[sym]
@@ -2079,13 +2076,13 @@ def force_exit_1159(dry_run: bool = False) -> None:
         circuit_cache = _fetch_upper_circuit_batch([t["sym"] for t in tasks])
         short_balance = _BalanceTracker(_available_balance())
 
-    # ── Wave 1 (batched-concurrent): force-sell every task in a batch (one
-    # concurrent burst per batch; includes fill polling), THEN -- only once
-    # that batch's sells are all confirmed -- cancel each task's now-stale
-    # target order, but ONLY for tasks whose sell actually succeeded. No P&L
-    # gate here (unlike 9:25, no "kind"/fallback distinction -- every task
-    # is a plain unconditional sell). See check_exit_925's matching Wave 1
-    # for the full reasoning; identical shape, reused via _run_exit_wave1.
+    # ── Wave 1 (batched-concurrent): cancel every task's stale target (one
+    # concurrent burst per batch), THEN -- only once that batch's cancels are
+    # all confirmed -- force-sell every task in that same batch (a second,
+    # separate concurrent burst; includes fill polling). No P&L gate here
+    # (unlike 9:25, no "kind"/fallback distinction -- every task is a plain
+    # unconditional sell). See check_exit_925's matching Wave 1 for the full
+    # reasoning; identical shape, reused via _run_exit_wave1.
     def _cancel_fn(task: dict) -> None:
         sym, target_oid = task["sym"], task["target_oid"]
         if target_oid:
@@ -2121,7 +2118,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
     wave1_results: list[dict] = []
-    for batch_results in _run_exit_wave1(tasks, _sell_fn, _cancel_fn):
+    for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
 
     # ── Sequential apply for Wave 1 (once per whole run): every field
