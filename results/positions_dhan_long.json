@@ -512,7 +512,9 @@
     "entry_order_id": "23126082781609",
     "status": "open",
     "entry_timestamp": "2026-08-27T15:21:00.724471+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126082811609",
+    "target_price": 136.88
   },
   {
     "broker": "dhan",
@@ -525,7 +527,9 @@
     "entry_order_id": "321260827577609",
     "status": "open",
     "entry_timestamp": "2026-08-27T15:21:01.799294+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "22126082849209",
+    "target_price": 152.84
   },
   {
     "broker": "dhan",
@@ -538,6 +542,73 @@
     "entry_order_id": "34126082778209",
     "status": "open",
     "entry_timestamp": "2026-08-27T15:21:02.537187+05:30",
+    "product": "MTF",
+    "target_order_id": "22126082850409",
+    "target_price": 669.6
+  },
+  {
+    "broker": "dhan",
+    "symbol": "FMGOETZE",
+    "entry_date": "2026-08-28",
+    "reference_price": 602.75,
+    "shares_intended": 464,
+    "actual_fill_price": 603.0422,
+    "actual_fill_quantity": 464,
+    "entry_order_id": "2212608281405809",
+    "status": "open",
+    "entry_timestamp": "2026-08-28T15:21:02.237922+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JGCHEM",
+    "entry_date": "2026-08-28",
+    "reference_price": 654.1,
+    "shares_intended": 428,
+    "actual_fill_price": 655.6077,
+    "actual_fill_quantity": 428,
+    "entry_order_id": "2312608281035809",
+    "status": "open",
+    "entry_timestamp": "2026-08-28T15:21:03.361532+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "MASTEK",
+    "entry_date": "2026-08-28",
+    "reference_price": 1902.4,
+    "shares_intended": 147,
+    "actual_fill_price": 1908.9741,
+    "actual_fill_quantity": 147,
+    "entry_order_id": "2312608281035709",
+    "status": "open",
+    "entry_timestamp": "2026-08-28T15:21:04.108196+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "OMAXE",
+    "entry_date": "2026-08-28",
+    "reference_price": 129.56,
+    "shares_intended": 2161,
+    "actual_fill_price": 130.8863,
+    "actual_fill_quantity": 2161,
+    "entry_order_id": "2212608281405909",
+    "status": "open",
+    "entry_timestamp": "2026-08-28T15:21:04.846701+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SYNCOMF",
+    "entry_date": "2026-08-28",
+    "reference_price": 19.36,
+    "shares_intended": 14462,
+    "actual_fill_price": 19.4799,
+    "actual_fill_quantity": 14462,
+    "entry_order_id": "2312608281035909",
+    "status": "open",
+    "entry_timestamp": "2026-08-28T15:21:05.565115+05:30",
     "product": "MTF"
   }
 ]
