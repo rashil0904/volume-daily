@@ -573,9 +573,16 @@
     "actual_fill_price": 603.0422,
     "actual_fill_quantity": 464,
     "entry_order_id": "2212608281405809",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-28T15:21:02.237922+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126083111309",
+    "target_price": 705.55,
+    "exit_price_925": 625.1997,
+    "exit_order_id_925": "221260831109209",
+    "exit_timestamp_925": "2026-08-31T09:25:08.595608+05:30",
+    "realized_return_pct": 3.6743,
+    "realized_pnl": 10281.08
   },
   {
     "broker": "dhan",
@@ -586,9 +593,16 @@
     "actual_fill_price": 655.6077,
     "actual_fill_quantity": 428,
     "entry_order_id": "2312608281035809",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-28T15:21:03.361532+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126083111609",
+    "target_price": 767.05,
+    "exit_price_1159": 650.2959,
+    "exit_order_id_1159": "221260831421409",
+    "exit_timestamp_1159": "2026-08-31T11:59:07.878236+05:30",
+    "realized_return_pct": -0.8102,
+    "realized_pnl": -2273.45
   },
   {
     "broker": "dhan",
@@ -599,9 +613,16 @@
     "actual_fill_price": 1908.9741,
     "actual_fill_quantity": 147,
     "entry_order_id": "2312608281035709",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-28T15:21:04.108196+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126083111709",
+    "target_price": 2233.5,
+    "exit_price_1159": 1777.534,
+    "exit_order_id_1159": "34126083147909",
+    "exit_timestamp_1159": "2026-08-31T11:59:08.999657+05:30",
+    "realized_return_pct": -6.8854,
+    "realized_pnl": -19321.69
   },
   {
     "broker": "dhan",
@@ -612,9 +633,16 @@
     "actual_fill_price": 130.8863,
     "actual_fill_quantity": 2161,
     "entry_order_id": "2212608281405909",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-28T15:21:04.846701+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "22126083153809",
+    "target_price": 153.14,
+    "exit_price_925": 130.9149,
+    "exit_order_id_925": "321260831104009",
+    "exit_timestamp_925": "2026-08-31T09:25:09.517254+05:30",
+    "realized_return_pct": 0.0218,
+    "realized_pnl": 61.78
   },
   {
     "broker": "dhan",
@@ -625,8 +653,54 @@
     "actual_fill_price": 19.4799,
     "actual_fill_quantity": 14462,
     "entry_order_id": "2312608281035909",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-28T15:21:05.565115+05:30",
+    "product": "MTF",
+    "target_order_id": "22126083154709",
+    "target_price": 22.79,
+    "exit_price_925": 19.6094,
+    "exit_order_id_925": "23126083118209",
+    "exit_timestamp_925": "2026-08-31T09:25:10.254717+05:30",
+    "realized_return_pct": 0.6647,
+    "realized_pnl": 1872.5
+  },
+  {
+    "broker": "dhan",
+    "symbol": "ASHOKA",
+    "entry_date": "2026-08-31",
+    "reference_price": 119.31,
+    "shares_intended": 2933,
+    "actual_fill_price": 120.2727,
+    "actual_fill_quantity": 2933,
+    "entry_order_id": "231260831122409",
+    "status": "open",
+    "entry_timestamp": "2026-08-31T15:21:00.782338+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "NORTHARC",
+    "entry_date": "2026-08-31",
+    "reference_price": 313.1,
+    "shares_intended": 1117,
+    "actual_fill_price": 310.5,
+    "actual_fill_quantity": 1117,
+    "entry_order_id": "231260831122309",
+    "status": "open",
+    "entry_timestamp": "2026-08-31T15:21:01.677841+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "VENKEYS",
+    "entry_date": "2026-08-31",
+    "reference_price": 1703.5,
+    "shares_intended": 205,
+    "actual_fill_price": 1702.7395,
+    "actual_fill_quantity": 205,
+    "entry_order_id": "321260831702509",
+    "status": "open",
+    "entry_timestamp": "2026-08-31T15:21:02.379095+05:30",
     "product": "MTF"
   }
 ]
