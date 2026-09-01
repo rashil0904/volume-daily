@@ -673,9 +673,16 @@
     "actual_fill_price": 120.2727,
     "actual_fill_quantity": 2933,
     "entry_order_id": "231260831122409",
-    "status": "open",
+    "status": "exited_925",
     "entry_timestamp": "2026-08-31T15:21:00.782338+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "32126090138109",
+    "target_price": 140.72,
+    "exit_price_925": 121.8089,
+    "exit_order_id_925": "34126090119409",
+    "exit_timestamp_925": "2026-09-01T09:25:07.311617+05:30",
+    "realized_return_pct": 1.2773,
+    "realized_pnl": 4505.67
   },
   {
     "broker": "dhan",
@@ -686,9 +693,16 @@
     "actual_fill_price": 310.5,
     "actual_fill_quantity": 1117,
     "entry_order_id": "231260831122309",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-31T15:21:01.677841+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126090111209",
+    "target_price": 363.3,
+    "exit_price_1159": 303.0902,
+    "exit_order_id_1159": "34126090151909",
+    "exit_timestamp_1159": "2026-09-01T11:59:07.915262+05:30",
+    "realized_return_pct": -2.3864,
+    "realized_pnl": -8276.7
   },
   {
     "broker": "dhan",
@@ -699,8 +713,54 @@
     "actual_fill_price": 1702.7395,
     "actual_fill_quantity": 205,
     "entry_order_id": "321260831702509",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-08-31T15:21:02.379095+05:30",
+    "product": "MTF",
+    "target_order_id": "23126090111309",
+    "target_price": 1992.2,
+    "exit_price_1159": 1666.1965,
+    "exit_order_id_1159": "321260901436309",
+    "exit_timestamp_1159": "2026-09-01T11:59:08.995805+05:30",
+    "realized_return_pct": -2.1461,
+    "realized_pnl": -7491.31
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SAKAR",
+    "entry_date": "2026-09-01",
+    "reference_price": 964.75,
+    "shares_intended": 181,
+    "actual_fill_price": 961.5373,
+    "actual_fill_quantity": 181,
+    "entry_order_id": "221260901669709",
+    "status": "open",
+    "entry_timestamp": "2026-09-01T15:21:00.832861+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SOTL",
+    "entry_date": "2026-09-01",
+    "reference_price": 769.85,
+    "shares_intended": 454,
+    "actual_fill_price": 773.7783,
+    "actual_fill_quantity": 454,
+    "entry_order_id": "321260901678509",
+    "status": "open",
+    "entry_timestamp": "2026-09-01T15:21:01.714573+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SSWL",
+    "entry_date": "2026-09-01",
+    "reference_price": 356.7,
+    "shares_intended": 981,
+    "actual_fill_price": 361.4802,
+    "actual_fill_quantity": 981,
+    "entry_order_id": "34126090172909",
+    "status": "open",
+    "entry_timestamp": "2026-09-01T15:21:02.456290+05:30",
     "product": "MTF"
   }
 ]
