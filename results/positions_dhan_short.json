@@ -980,8 +980,13 @@
     "stop_order_id": "221260907196009",
     "stop_trigger_price": 1302.1,
     "stop_limit_price": 1308.65,
-    "status": "short_open",
-    "entry_timestamp": "2026-09-07T09:25:11.574329+05:30"
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-07T09:25:11.574329+05:30",
+    "exit_price_239": 1129.9305,
+    "exit_order_id_239": "23126090754609",
+    "exit_timestamp_239": "2026-09-07T14:39:07.891190+05:30",
+    "realized_return_pct": 4.5224,
+    "realized_pnl": 17179.89
   },
   {
     "broker": "dhan",
@@ -998,7 +1003,35 @@
     "stop_order_id": "321260907112809",
     "stop_trigger_price": 1547.2,
     "stop_limit_price": 1555.0,
-    "status": "short_open",
-    "entry_timestamp": "2026-09-07T09:25:11.510242+05:30"
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-07T09:25:11.510242+05:30",
+    "exit_price_239": 1363.1344,
+    "exit_order_id_239": "23126090754509",
+    "exit_timestamp_239": "2026-09-07T14:39:08.949534+05:30",
+    "realized_return_pct": -1.2916,
+    "realized_pnl": -4693.09
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SINDHUTRAD",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "1159",
+    "entry_date": "2026-09-07",
+    "entry_price": 24.77,
+    "quantity": 13916,
+    "entry_order_id": "34126090734409",
+    "cover_target_order_id": "321260907507509",
+    "cover_target_price": 23.53,
+    "stop_order_id": "34126090734509",
+    "stop_trigger_price": 30.18,
+    "stop_limit_price": 30.33,
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-07T11:59:35.462602+05:30",
+    "exit_price_239": 25.2993,
+    "exit_order_id_239": "321260907714409",
+    "exit_timestamp_239": "2026-09-07T14:39:09.679387+05:30",
+    "realized_return_pct": -2.1368,
+    "realized_pnl": -7365.38
   }
 ]
