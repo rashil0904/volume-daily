@@ -54,6 +54,20 @@ patch.object(rt, "tick_size", lambda sym: 0.05).start()
 # files on every test run. Stubbed out globally, same as tick_size above.
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
 
+# place_targets_915() now persists its UC batch-fetch to the REAL
+# results/dhan_uc_cache.json (see _save_uc_cache) so later stages can read it
+# back instead of re-fetching live. Left unpatched, every scenario below that
+# calls the real place_targets_915() would overwrite that real file. Stubbed
+# out globally, same reasoning as _sync_pnl_workbook above.
+patch.object(rt, "_save_uc_cache", lambda circuits: None).start()
+
+# check_exit_925/force_exit_1159 now read today's persisted UC cache first
+# (see _circuit_cache_for -> _load_uc_cache) before falling back to
+# _fetch_upper_circuit_batch, which this suite mocks directly per-scenario.
+# Forcing a cache miss here keeps that fallback path exercised exactly as
+# before, instead of reading whatever's in the REAL results/dhan_uc_cache.json.
+patch.object(rt, "_load_uc_cache", lambda: {}).start()
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 failures = 0

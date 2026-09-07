@@ -1,8 +1,8 @@
 {
-  "date": "2026-09-04",
+  "date": "2026-09-07",
   "status": "fresh",
-  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-09-04.csv",
-  "rows": 493,
+  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-09-07.csv",
+  "rows": 494,
   "fallback_date": null,
-  "message": "Already fetched today (493 rows) \u2014 skipping."
+  "message": "Fetched 494 stocks from Screener.in in 0.9s"
 }

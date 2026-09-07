@@ -49,7 +49,7 @@ sys.path.insert(0, str(_ROOT / "pipeline"))
 from dhan.auth import BASE_URL as _DHAN_BASE, get_session as _dhan_session
 from dhan.trade import (buy, sell, place_order, order_status as _dhan_order_status,
                         cancel_order as _dhan_cancel_order, get_orders as _dhan_get_orders,
-                        security_id, tick_size)
+                        security_id, tick_size, RateLimiter)
 from common.calc_utils import pick_reference_price, compute_allocation, compute_shares
 import data_loader as _dl
 import notify
@@ -103,6 +103,56 @@ BATCH_SLEEP_SECONDS        = 1.0
 # already covers that) giving the exchange a moment to register the new short
 # before orders referencing it are placed.
 SHORT_SETTLE_BUFFER_SECONDS = 2.5
+
+# Quote APIs (/marketfeed/ltp, /marketfeed/quote) are rate-limited to 1
+# req/sec (see the ceiling table above) -- a SEPARATE, much tighter budget
+# than the Order API's, and NOT the same rate_limiter dhan/trade.py already
+# enforces for buy/sell/place_order/cancel_order. Every quote-API call in
+# this file (get_ltp, get_ltp_batch, _fetch_upper_circuit,
+# _fetch_upper_circuit_batch) shares this ONE process-wide limiter, exactly
+# the same "single shared instance, not one per call site" reasoning as
+# dhan/trade.py's own rate_limiter. Confirmed live 2026-08-31: Wave 3's
+# batched UC pre-fetch itself 429'd, so every worker fell back to
+# _fetch_upper_circuit() concurrently -- 3 single-symbol calls at once
+# against a 1/sec budget, 2 of them (FMGOETZE, SYNCOMF) 429'd too and were
+# left without a stop-loss for over an hour. Not urgent enough to be worth
+# racing -- serializing every quote call to true 1/sec removes the
+# collision entirely instead of just hoping a flat delay dodges it.
+#
+# window_seconds=1.5, not the bare 1.0 default (2026-09-07): a strict 1.0s
+# gap still isn't enough margin for Dhan's real server-side window --
+# reproduced live with two single-symbol quote calls, spaced exactly 1.0s
+# apart by this same limiter, and the second one still 429'd (nothing else
+# was hitting the API at the time). 1.5s buys real headroom instead of
+# racing the exact boundary. Paired with _quote_post()'s retry-with-backoff
+# below so an occasional 429 that slips through still recovers instead of
+# immediately leaving a short unprotected.
+_quote_rate_limiter = RateLimiter(max_per_sec=1, window_seconds=1.5)
+
+_QUOTE_MAX_RETRIES    = 2     # extra attempts after the first, only on a 429
+_QUOTE_RETRY_BACKOFF  = 2.0   # seconds; doubles after each retry
+
+
+def _quote_post(session, url: str, payload: dict):
+    """POST to a Quote-API endpoint (/marketfeed/ltp or /marketfeed/quote),
+    serialized through _quote_rate_limiter and retried with backoff on a
+    429. Confirmed live 2026-09-07 that a 429 here is transient, not a sign
+    the caller is doing anything wrong (see _quote_rate_limiter's comment
+    above) -- worth a couple of backed-off retries before the caller's own
+    except-branch gives up and (for the circuit fetch) leaves a short
+    unprotected. Raises (via raise_for_status) if every attempt fails."""
+    backoff = _QUOTE_RETRY_BACKOFF
+    for attempt in range(_QUOTE_MAX_RETRIES + 1):
+        _quote_rate_limiter.acquire()
+        resp = session.post(url, json=payload, timeout=15)
+        if resp.status_code == 429 and attempt < _QUOTE_MAX_RETRIES:
+            print(f"[dhan]   quote API 429 (attempt {attempt + 1}/{_QUOTE_MAX_RETRIES + 1}) "
+                  f"-- backing off {backoff:.0f}s before retrying.")
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+        resp.raise_for_status()
+        return resp
 
 _env = _ROOT / "pipeline" / ".env"
 if _env.exists():
@@ -437,8 +487,7 @@ def get_ltp(symbol: str) -> float:
     get_ltp_batch() avoids this by fetching every symbol in ONE call."""
     session, _ = _dhan_session()
     sid = security_id(symbol)
-    resp = session.post(f"{_DHAN_BASE}/marketfeed/ltp", json={"NSE_EQ": [int(sid)]}, timeout=15)
-    resp.raise_for_status()
+    resp = _quote_post(session, f"{_DHAN_BASE}/marketfeed/ltp", {"NSE_EQ": [int(sid)]})
     entry = resp.json().get("data", {}).get("NSE_EQ", {}).get(str(sid))
     if not entry or entry.get("last_price") is None:
         raise ValueError(f"[dhan] No LTP found for {symbol}.")
@@ -474,9 +523,7 @@ def get_ltp_batch(symbols: list[str]) -> dict[str, float]:
     for i in range(0, len(sids), _LTP_CHUNK):
         chunk = sids[i : i + _LTP_CHUNK]
         try:
-            resp = session.post(f"{_DHAN_BASE}/marketfeed/ltp",
-                                json={"NSE_EQ": chunk}, timeout=15)
-            resp.raise_for_status()
+            resp = _quote_post(session, f"{_DHAN_BASE}/marketfeed/ltp", {"NSE_EQ": chunk})
             data = resp.json().get("data", {}).get("NSE_EQ", {})
         except Exception as exc:
             print(f"[dhan]   LTP batch chunk {i}-{i+len(chunk)-1} failed: {exc}")
@@ -486,8 +533,6 @@ def get_ltp_batch(symbols: list[str]) -> dict[str, float]:
             if sym is None or row.get("last_price") is None:
                 continue
             result[sym] = float(row["last_price"])
-        if i + _LTP_CHUNK < len(sids):
-            time.sleep(1.0)
 
     return result
 
@@ -710,9 +755,7 @@ def _fetch_upper_circuit(symbol: str) -> float:
     the fetch fails or no circuit data comes back for this symbol."""
     session, _ = _dhan_session()
     sid = security_id(symbol)
-    resp = session.post(f"{_DHAN_BASE}/marketfeed/quote",
-                        json={"NSE_EQ": [int(sid)]}, timeout=15)
-    resp.raise_for_status()
+    resp = _quote_post(session, f"{_DHAN_BASE}/marketfeed/quote", {"NSE_EQ": [int(sid)]})
     row = resp.json().get("data", {}).get("NSE_EQ", {}).get(str(sid))
     if not row or row.get("upper_circuit_limit") is None:
         raise ValueError(f"[dhan] No circuit data found for {symbol}.")
@@ -744,9 +787,7 @@ def _fetch_upper_circuit_batch(symbols: list[str]) -> dict[str, float]:
     for i in range(0, len(sids), _LTP_CHUNK):
         chunk = sids[i : i + _LTP_CHUNK]
         try:
-            resp = session.post(f"{_DHAN_BASE}/marketfeed/quote",
-                                json={"NSE_EQ": chunk}, timeout=15)
-            resp.raise_for_status()
+            resp = _quote_post(session, f"{_DHAN_BASE}/marketfeed/quote", {"NSE_EQ": chunk})
             data = resp.json().get("data", {}).get("NSE_EQ", {})
         except Exception as exc:
             print(f"[dhan]   UC batch chunk {i}-{i+len(chunk)-1} failed: {exc}")
@@ -756,9 +797,61 @@ def _fetch_upper_circuit_batch(symbols: list[str]) -> dict[str, float]:
             if sym is None or row.get("upper_circuit_limit") is None:
                 continue
             result[sym] = float(row["upper_circuit_limit"])
-        if i + _LTP_CHUNK < len(sids):
-            time.sleep(1.0)
 
+    return result
+
+
+_UC_CACHE_FILE = _RESULTS_DIR / "dhan_uc_cache.json"
+
+
+def _save_uc_cache(circuits: dict[str, float]) -> None:
+    """Persists today's upper-circuit values (see place_targets_915, which
+    already batch-fetches UC for every open position at 9:15am) to a small
+    side file so check_exit_925/force_exit_1159 -- separate cron-launched
+    processes, no shared memory with 9:15's -- can read the SAME values back
+    later instead of fetching them again on demand. UC is an exchange-set
+    DAILY price band, not a live tick value (see _fetch_upper_circuit's
+    docstring), so 9:15's fetch is still valid at 9:25/11:59; there is no
+    correctness reason to ever re-fetch it intraday, only the accident of
+    each stage being its own process. Overwrites the whole file each call
+    (place_targets_915 always covers every open position in one shot, so
+    there's nothing from a prior call worth merging in)."""
+    try:
+        _UC_CACHE_FILE.write_text(json.dumps(
+            {"date": date.today().isoformat(), "circuits": circuits}, indent=2))
+    except Exception as exc:
+        print(f"[dhan]   !! failed to persist UC cache: {exc} (non-fatal -- "
+              f"later stages just fall back to a live fetch).")
+
+
+def _load_uc_cache() -> dict[str, float]:
+    """Reads back today's UC values saved by _save_uc_cache(), or {} if the
+    file is missing, unreadable, or from a stale (prior) date -- callers
+    treat a miss here exactly like a miss in a live-fetched circuit_cache,
+    falling back to _fetch_upper_circuit_batch()/_fetch_upper_circuit() for
+    whatever's missing."""
+    try:
+        data = json.loads(_UC_CACHE_FILE.read_text())
+        if data.get("date") != date.today().isoformat():
+            return {}
+        return {sym: float(uc) for sym, uc in data.get("circuits", {}).items()}
+    except Exception:
+        return {}
+
+
+def _circuit_cache_for(symbols: list[str]) -> dict[str, float]:
+    """UC lookup for check_exit_925/force_exit_1159's mirrored-short protect
+    step: reads today's persisted cache first (see _load_uc_cache -- normally
+    covers every symbol, since place_targets_915 fetches UC for every open
+    position at 9:15am and a short only ever opens on a symbol that was
+    already an open long). Only live-fetches whatever's actually missing
+    (e.g. the cache file wasn't written this run for some reason) instead of
+    unconditionally re-fetching everything on demand."""
+    cached  = _load_uc_cache()
+    result  = {sym: cached[sym] for sym in symbols if sym in cached}
+    missing = [sym for sym in symbols if sym not in cached]
+    if missing:
+        result.update(_fetch_upper_circuit_batch(missing))
     return result
 
 
@@ -1584,8 +1677,13 @@ def place_targets_915(dry_run: bool = False) -> None:
 
     # One batched call for every open position's upper circuit -- needed to
     # cap the 17% target below the day's UC (see below); batched for the same
-    # reason get_ltp_batch() exists (Quote APIs are 1 req/sec).
+    # reason get_ltp_batch() exists (Quote APIs are 1 req/sec). Persisted to
+    # _UC_CACHE_FILE so check_exit_925/force_exit_1159 can read these SAME
+    # values back later today instead of fetching UC again on demand right
+    # when a short opens -- exactly the moment a live fetch is most likely to
+    # collide with another one and 429 (confirmed live 2026-09-07).
     uc_cache = _fetch_upper_circuit_batch([p["symbol"] for p in open_ps])
+    _save_uc_cache(uc_cache)
 
     for pos in open_ps:
         sym = pos["symbol"]
@@ -1771,15 +1869,18 @@ def check_exit_925(dry_run: bool = False) -> None:
     if not dry_run and dirty:
         _save_long_pos(positions)
 
-    # Batched circuit-limit pre-fetch (Part 1) for every task candidate, ONE
-    # call covering the whole stage-run, fetched upfront before any chunk
-    # runs -- not every task will actually reach the mirrored-short step
-    # below, but we don't know which will until each chunk's exit fires, so
-    # every candidate is covered now rather than guessing.
+    # Circuit-limit lookup (Part 1) for every task candidate -- not every task
+    # will actually reach the mirrored-short step below, but we don't know
+    # which will until each chunk's exit fires, so every candidate is covered
+    # now rather than guessing. Reads today's persisted cache first (see
+    # _circuit_cache_for) -- place_targets_915 already fetched every open
+    # position's UC at 9:15am, so this is normally a pure file read with zero
+    # live Quote-API calls, not a fresh fetch racing the same 1/sec budget
+    # every other quote call in this run needs.
     circuit_cache: dict[str, float] = {}
     short_balance = _BalanceTracker(None)
     if tasks:
-        circuit_cache = _fetch_upper_circuit_batch([t["sym"] for t in tasks])
+        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks])
         # One-time INTRADAY-short balance fetch for this whole stage-run,
         # tracked thread-safely across every chunk below (Part 3) -- the
         # concurrent equivalent of the old sequential available_balance
@@ -2068,12 +2169,13 @@ def force_exit_1159(dry_run: bool = False) -> None:
     if not dry_run and dirty:
         _save_long_pos(positions)
 
-    # Batched circuit-limit pre-fetch (Part 1) + one-time INTRADAY-short
-    # balance fetch (Part 3), same reasoning as check_exit_925.
+    # Circuit-limit lookup (Part 1) + one-time INTRADAY-short balance fetch
+    # (Part 3), same reasoning as check_exit_925 -- _circuit_cache_for reads
+    # today's persisted 9:15am values first, only live-fetching a gap.
     circuit_cache: dict[str, float] = {}
     short_balance = _BalanceTracker(None)
     if tasks:
-        circuit_cache = _fetch_upper_circuit_batch([t["sym"] for t in tasks])
+        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks])
         short_balance = _BalanceTracker(_available_balance())
 
     # ── Wave 1 (batched-concurrent): cancel every task's stale target (one

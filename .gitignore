@@ -7,6 +7,9 @@ dhan/.token.json
 # Downloaded instrument caches (regenerated on demand)
 data/instruments/dhan_scrip_master.csv
 
+# Per-day operational state (regenerated fresh each trading day)
+results/dhan_uc_cache.json
+
 
 # Python cache
 __pycache__/

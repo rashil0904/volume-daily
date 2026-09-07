@@ -50,6 +50,14 @@ import dhan.run_trades as rt   # noqa: E402
 
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
+# check_exit_925/force_exit_1159 now read today's persisted UC cache first
+# (see _circuit_cache_for -> _load_uc_cache) before falling back to
+# _fetch_upper_circuit_batch, which every scenario below mocks directly and
+# asserts call counts against. Forcing a cache miss here keeps that fallback
+# path -- and this suite's assertions about it -- exercised exactly as
+# before, instead of silently reading whatever's in the REAL
+# results/dhan_uc_cache.json on disk.
+patch.object(rt, "_load_uc_cache", lambda: {}).start()
 # NOTE: rt.time IS the process-wide `time` module (import time returns the
 # same singleton everywhere) -- patching rt.time.sleep globally would ALSO
 # silence every time.sleep() call in THIS file, including the deliberate

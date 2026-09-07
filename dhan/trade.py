@@ -85,8 +85,17 @@ _MAX_AGE    = timedelta(days=7)
 # can never both observe "room for one more" and both proceed.
 
 class RateLimiter:
-    def __init__(self, max_per_sec: int):
-        self._max_per_sec = max_per_sec
+    """window_seconds defaults to a bare 1.0s (the order-limiter's original
+    behavior, unchanged). Confirmed live 2026-09-07 that a bare 1.0s gap is
+    NOT enough margin for Dhan's Quote API specifically: two single-symbol
+    quote calls spaced exactly 1.0s apart by this same class still got a 429
+    on the second one (reproduced from a fresh process with nothing else
+    hitting the API). Quote-API callers should pass a wider window_seconds
+    (e.g. 1.5) for real headroom instead of racing the exact boundary."""
+
+    def __init__(self, max_per_sec: int, window_seconds: float = 1.0):
+        self._max_per_sec   = max_per_sec
+        self._window        = window_seconds
         self._calls: deque[float] = deque()   # timestamps of the last <=max_per_sec calls
         self._lock  = threading.Lock()
 
@@ -94,14 +103,14 @@ class RateLimiter:
         while True:
             with self._lock:
                 now = time.monotonic()
-                # Drop anything that's already aged out of the trailing 1s window.
-                while self._calls and now - self._calls[0] >= 1.0:
+                # Drop anything that's already aged out of the trailing window.
+                while self._calls and now - self._calls[0] >= self._window:
                     self._calls.popleft()
                 if len(self._calls) < self._max_per_sec:
                     self._calls.append(now)
                     return
                 # At capacity -- compute how long until the oldest call ages out.
-                sleep_for = 1.0 - (now - self._calls[0])
+                sleep_for = self._window - (now - self._calls[0])
             if sleep_for > 0:
                 time.sleep(sleep_for)
             # Loop back and re-check under the lock -- another thread may have

@@ -964,5 +964,41 @@
     "exit_timestamp_239": "2026-09-04T14:39:15.267334+05:30",
     "realized_return_pct": 1.6131,
     "realized_pnl": 2804.31
+  },
+  {
+    "broker": "dhan",
+    "symbol": "MAITHANALL",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-09-07",
+    "entry_price": 1183.4504,
+    "quantity": 321,
+    "entry_order_id": "23126090714709",
+    "cover_target_order_id": "34126090715309",
+    "cover_target_price": 1124.3,
+    "stop_order_id": "221260907196009",
+    "stop_trigger_price": 1302.1,
+    "stop_limit_price": 1308.65,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-07T09:25:11.574329+05:30"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "RML",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-09-07",
+    "entry_price": 1345.7526,
+    "quantity": 270,
+    "entry_order_id": "321260907112709",
+    "cover_target_order_id": "221260907113609",
+    "cover_target_price": 1278.5,
+    "stop_order_id": "321260907112809",
+    "stop_trigger_price": 1547.2,
+    "stop_limit_price": 1555.0,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-07T09:25:11.510242+05:30"
   }
 ]
