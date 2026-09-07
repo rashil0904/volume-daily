@@ -154,6 +154,7 @@ def test_entry_parallel_timing_and_resilience():
          patch.object(rt, "security_id", lambda sym: "999"), \
          patch.object(rt, "_margin_check", lambda sym, qty, price: {"leverage": 3.0, "margin_required": qty * price / 3.0}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \
+         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "buy", side_effect=fake_buy), \
          patch.object(rt, "_poll_fill_strict", side_effect=fake_poll_fill_strict), \
          patch.object(rt, "_load_long_pos", side_effect=store.load), \
@@ -184,6 +185,53 @@ def test_entry_parallel_timing_and_resilience():
           f"saved symbols: {saved_symbols}")
     check("exactly one save() call for the whole batch (single-pass write)",
           store.save_count == 1, f"save_count={store.save_count}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 4z. run_entry_321 -- a symbol at its upper circuit bids AT the UC price,
+# not 0.5% above LTP (SHANTIGEAR, 2026-08-21, was rejected for exactly this)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_entry_at_uc_bids_at_uc_price():
+    print("\n[4z] run_entry_321 -- at-UC entries bid AT the UC price, not 0.5% above LTP")
+    symbols = ["ATUC", "BELOWUC", "NOUCDATA"]
+    ltp_by_sym = {"ATUC": 130.0, "BELOWUC": 100.0, "NOUCDATA": 100.0}
+    uc_by_sym  = {"ATUC": 130.0, "BELOWUC": 150.0}   # NOUCDATA deliberately absent
+
+    order_prices = {}
+
+    def fake_buy(sym, exch, qty, **kw):
+        order_prices[sym] = kw.get("price")
+        return f"ORDER-{sym}"
+
+    def fake_poll_fill_strict(order_id):
+        return 100.5, 10, False, ""
+
+    store = FakeStore(positions=[])
+
+    with patch.object(rt, "_load_symbols", return_value=list(symbols)), \
+         patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
+         patch.object(rt, "get_ltp_batch", lambda syms: dict(ltp_by_sym)), \
+         patch.object(rt, "security_id", lambda sym: "999"), \
+         patch.object(rt, "_margin_check", lambda sym, qty, price: {"leverage": 3.0, "margin_required": qty * price / 3.0}), \
+         patch.object(rt, "_available_balance", return_value=10_000_000.0), \
+         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: dict(uc_by_sym)), \
+         patch.object(rt, "buy", side_effect=fake_buy), \
+         patch.object(rt, "_poll_fill_strict", side_effect=fake_poll_fill_strict), \
+         patch.object(rt, "_load_long_pos", side_effect=store.load), \
+         patch.object(rt, "_save_long_pos", side_effect=store.save), \
+         patch.object(rt, "_append_log"), \
+         patch.object(rt.notify, "send_entry"):
+
+        rt.run_entry_321(trade_date=__import__("datetime").date(2026, 8, 25),
+                         dry_run=False)
+
+    check("ATUC (LTP == UC) bids AT the UC price (₹130.00), not 0.5% above LTP (₹130.65)",
+          order_prices["ATUC"] == 130.0, f"order_prices={order_prices}")
+    check("BELOWUC (LTP well under UC) still bids 0.5% above LTP as before (₹100.50)",
+          order_prices["BELOWUC"] == 100.5, f"order_prices={order_prices}")
+    check("NOUCDATA (UC fetch had no data for this symbol) falls back to 0.5% above LTP, "
+          "doesn't crash", order_prices["NOUCDATA"] == 100.5, f"order_prices={order_prices}")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -224,6 +272,7 @@ def test_entry_mtf_ineligible_retries_as_cnc():
          patch.object(rt, "security_id", lambda sym: "999"), \
          patch.object(rt, "_margin_check", lambda sym, qty, price: {"leverage": 3.0, "margin_required": qty * price / 3.0}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \
+         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "buy", side_effect=fake_buy), \
          patch.object(rt, "_poll_fill_strict", side_effect=fake_poll_fill_strict), \
          patch.object(rt, "_load_long_pos", side_effect=store.load), \
@@ -350,6 +399,7 @@ if __name__ == "__main__":
     test_rate_limiter_sliding_window()
     test_rate_limiter_thread_safe_shared_instance()
     test_entry_parallel_timing_and_resilience()
+    test_entry_at_uc_bids_at_uc_price()
     test_entry_mtf_ineligible_retries_as_cnc()
     test_exit_parallel_timing_and_resilience()
 

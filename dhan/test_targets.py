@@ -1292,6 +1292,7 @@ with patch.object(rt, "_RESULTS_DIR", tmp_root_bal), \
      patch.object(rt, "_available_balance", fake_available_balance_bal), \
      patch.object(rt, "buy", fake_buy_bal), \
      patch.object(rt, "_poll_fill_strict", lambda oid: (100.5, shares_bal, False, "")), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_entry", MagicMock()):
     rt.run_entry_321(capital=CAPITAL_BAL, dry_run=False)
 

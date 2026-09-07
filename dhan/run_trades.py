@@ -1430,6 +1430,15 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             "margin_required": margin_required, "capital_base": capital_base,
         })
 
+    # ── Upper circuit fetched HERE, right after Phase 1, well before the
+    # 15:20:57 hold -- unlike LTP, UC is a daily exchange-set band, not a
+    # continuously-moving price, so fetching it a few seconds earlier costs
+    # nothing in accuracy. Fetching it here instead of alongside LTP at
+    # 15:20:57 keeps that tight 3s pre-fire window down to a single Quote API
+    # call again (see the staging hold's own comment below) rather than two
+    # sequential ones sharing the same 1 req/1.5s _quote_rate_limiter.
+    uc_cache = _fetch_upper_circuit_batch([item["symbol"] for item in ready]) if ready else {}
+
     # ── Staging hold, part 1: block until 15:20:57 IST -- 3s ahead of fire
     # time, leaving just enough room for the LTP fetch + limit-price calc
     # below to finish before part 2's hold takes over for the final stretch.
@@ -1451,7 +1460,14 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     # Fetched fresh HERE, at 15:20:57, not earlier -- one batched call for
     # every ready symbol's LTP, not one call per symbol (see get_ltp_batch's
     # docstring: Quote APIs are 1 req/sec, N sequential single-symbol calls
-    # would 429 from the 2nd symbol on).
+    # would 429 from the 2nd symbol on). uc_cache was already fetched above,
+    # earlier, so this stays a single Quote API call here, same as before UC
+    # existed. A stock already circuit-locked at UC can never trade above
+    # that price, so LTP * 1.005 would place a LIMIT above the exchange's own
+    # ceiling and get rejected outright (this is exactly the SHANTIGEAR
+    # "Rate Not Within Ckt Limit 309.55 To 464.25" rejection, confirmed live
+    # 2026-08-21). For a stock at UC, bid AT the UC price instead -- that's
+    # the only price it can actually fill at.
     ltp_cache = get_ltp_batch([item["symbol"] for item in ready])
     for item in ready:
         sym, ref = item["symbol"], item["ref"]
@@ -1461,9 +1477,15 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             entry_ltp = ref
             print(f"[dhan]   {sym}: live LTP unavailable — using ref price ₹{ref:,.2f} "
                   f"as the limit-price anchor instead.")
-        item["limit_price"] = _tick_round(sym, entry_ltp * 1.005)
-        print(f"[dhan]   {sym}: LIMIT buy @ ₹{item['limit_price']:,.2f}  "
-              f"(0.5% above LTP ₹{entry_ltp:,.2f})")
+        uc = uc_cache.get(sym)
+        if uc is not None and entry_ltp >= uc:
+            item["limit_price"] = _tick_round(sym, uc)
+            print(f"[dhan]   {sym}: at upper circuit (₹{uc:,.2f}) — LIMIT buy @ UC price "
+                  f"₹{item['limit_price']:,.2f} (not 0.5% above LTP)")
+        else:
+            item["limit_price"] = _tick_round(sym, entry_ltp * 1.005)
+            print(f"[dhan]   {sym}: LIMIT buy @ ₹{item['limit_price']:,.2f}  "
+                  f"(0.5% above LTP ₹{entry_ltp:,.2f})")
 
     # ── Staging hold, part 2: block until exactly 15:21:00 IST, same as
     # zerodha/trade.py's stage_entry_orders() -- so this cron's dry-run test
@@ -1471,8 +1493,10 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     # moment as the real production entry, rather than ~a minute early. The
     # LTP fetch + limit-price calc above should only eat ~1s of the 2s left
     # after part 1's hold, so this is normally a short ~1s wait, not another
-    # full 2s one. Only sleeps if the wait is short (called mid-window as
-    # intended); a late or manual run skips the wait and fires immediately.
+    # full 2s one (UC was already fetched earlier, before part 1's hold, so
+    # it doesn't add to this window). Only sleeps if the wait is short
+    # (called mid-window as intended); a late or manual run skips the wait
+    # and fires immediately.
     if ready:
         hold2_s = _seconds_until(*_FIRE_AT)
         if 0 < hold2_s <= 60:

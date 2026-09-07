@@ -420,6 +420,7 @@ with patch.object(rt, "_RESULTS_DIR", tmp_root), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt, "buy", fake_buy_5), \
      patch.object(rt, "_poll_fill_strict", lambda oid: (100.5, 100, False, "")), \
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_entry", MagicMock()):
     rt.run_entry_321(dry_run=False)
 
