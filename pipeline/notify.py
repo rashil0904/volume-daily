@@ -254,35 +254,6 @@ def send_entry_failed(broker: str, symbol: str, error_msg: str,
     _send(text, topic="errors")
 
 
-def send_amo_placed(broker: str, symbol: str, rejected_price: float, shares: int,
-                    order_id: str, dry_run: bool = False) -> None:
-    tag  = "  [DRY RUN]" if dry_run else ""
-    text = "\n".join([
-        f"<b>&#128184; AMO QUEUED — {html_lib.escape(symbol)}{tag}</b>",
-        f"<b>Broker:</b> {html_lib.escape(broker)}",
-        "Today's entry was circuit-locked -- queued a MARKET After-Market "
-        "Order to retry when tomorrow's session opens.",
-        f"<b>Today's rejected limit price:</b> &#8377;{rejected_price:,.2f}",
-        f"<b>Shares:</b> {shares}",
-        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
-    ])
-    _send(text, topic="entries_exits")
-
-
-def send_amo_result(broker: str, symbol: str, filled: bool, detail: str,
-                    dry_run: bool = False) -> None:
-    tag  = "  [DRY RUN]" if dry_run else ""
-    icon = "&#9989;" if filled else "&#128308;"
-    text = "\n".join([
-        f"<b>{icon} AMO {'FILLED' if filled else 'NOT FILLED'} — {html_lib.escape(symbol)}{tag}</b>",
-        f"<b>Broker:</b> {html_lib.escape(broker)}",
-        "Last night's After-Market Order " + ("filled and was added as an open "
-        "position." if filled else "did not fill -- no position was opened."),
-        f"<b>Detail:</b> {html_lib.escape(str(detail))}",
-    ])
-    _send(text, topic="entries_exits" if filled else "errors")
-
-
 def send_exit_925(broker: str, symbol: str, exit_price: float,
                   return_pct: float, pnl: float, dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""

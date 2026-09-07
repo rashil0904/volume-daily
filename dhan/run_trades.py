@@ -855,42 +855,6 @@ def _circuit_cache_for(symbols: list[str]) -> dict[str, float]:
     return result
 
 
-# ── AMO pending list (circuit-locked entries -> place_amo_340 -> reconciled
-# into a position by the NEXT trading day's place_targets_915) ──────────────
-# One flat list, each entry self-contained and carrying its own
-# date_detected -- NOT keyed/overwritten by "today" like _UC_CACHE_FILE,
-# since an entry's lifecycle spans a day boundary (detected today, AMO
-# placed today, only resolved tomorrow morning) and a same-day overwrite
-# would destroy yesterday's still-unreconciled entries. Reconciled entries
-# are removed outright rather than flagged -- the resulting position row IS
-# the historical record, nothing needs to be kept here once resolved.
-_AMO_PENDING_FILE = _RESULTS_DIR / "dhan_amo_pending.json"
-
-
-def _load_amo_pending() -> list[dict]:
-    try:
-        return json.loads(_AMO_PENDING_FILE.read_text()).get("entries", [])
-    except Exception:
-        return []
-
-
-def _save_amo_pending(entries: list[dict]) -> None:
-    try:
-        _AMO_PENDING_FILE.write_text(json.dumps({"entries": entries}, indent=2))
-    except Exception as exc:
-        print(f"[dhan]   !! failed to persist AMO pending list: {exc}")
-
-
-def _add_amo_pending(new_entries: list[dict]) -> None:
-    """Appends to the existing pending list rather than overwriting -- see
-    the module note above on why this file isn't a same-day cache."""
-    if not new_entries:
-        return
-    entries = _load_amo_pending()
-    entries.extend(new_entries)
-    _save_amo_pending(entries)
-
-
 class _BalanceTracker:
     """Thread-safe shared balance pool for concurrent _open_short_core() calls
     within the same chunk -- lock around the check-and-decrement so two
@@ -1301,7 +1265,6 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     n_entered = 0
     n_skipped = 0
-    amo_candidates: list[dict] = []   # circuit-locked entries -> place_amo_340 tonight
 
     positions     = _load_long_pos()
     positions_today = {
@@ -1589,14 +1552,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                             "fill_price": cnc_fill_price, "fill_qty": cnc_fill_qty}
 
         if fill_qty == 0:
-            # A genuine circuit-lock rejection (the stock hit its band, no
-            # seller reachable at any price today) is worth an AMO retry
-            # tonight -- unlike a plain unconfirmed timeout or any other
-            # rejection reason, there's no reason to expect a LATER retry
-            # today would fare any better, but TOMORROW's circuit band (set
-            # fresh off tonight's close) may have room to trade.
-            uc_locked = rejected and "ckt limit" in reject_reason.lower()
-            return {**item, "order_id": order_id, "uc_locked": uc_locked,
+            return {**item, "order_id": order_id,
                     "error": "NOT FILLED — order rejected or unconfirmed "
                              "(check broker manually, e.g. a circuit-locked stock).",
                     "log_status": "not_filled"}
@@ -1637,18 +1593,6 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                                          error_msg=res["error"], dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] entry_failed failed: {exc}", file=sys.stderr)
-            if res.get("uc_locked") and not dry_run:
-                print(f"[dhan]   circuit-locked — queuing an AMO retry at 3:40pm tonight.")
-                amo_candidates.append({
-                    "date_detected": trade_date.isoformat(),
-                    "symbol":        sym,
-                    "product":       product,
-                    "quantity":      res["shares"],
-                    "limit_price":   res["limit_price"],
-                    "capital_base":  res["capital_base"],
-                    "amo_order_id":  None,
-                    "amo_placed_at": None,
-                })
             n_skipped += 1
             continue
 
@@ -1715,73 +1659,9 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
     if not dry_run and results:
         _save_long_pos(positions)   # single write for the whole batch
 
-    _add_amo_pending(amo_candidates)
-    if amo_candidates:
-        print(f"[dhan] {len(amo_candidates)} circuit-locked symbol(s) queued for "
-              f"place_amo_340: {[c['symbol'] for c in amo_candidates]}")
-
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
     _sync_pnl_workbook()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# AMO 3:40pm — places an After-Market Order for every symbol run_entry_321
-# genuinely couldn't buy today because it was circuit-locked (queued by
-# run_entry_321 into _AMO_PENDING_FILE, see the module note above it). Runs
-# after NSE's 15:30 close, once AMOs are accepted for the next session.
-# Filled/rejected AMOs are picked up and reconciled the following morning by
-# place_targets_915 (see its own reconciliation step) -- this stage only
-# places the order, never touches positions_dhan_long.json.
-# ══════════════════════════════════════════════════════════════════════════════
-
-def place_amo_340(dry_run: bool = False) -> None:
-    entries = _load_amo_pending()
-    todays  = [e for e in entries if e["amo_order_id"] is None]
-
-    print(f"\n{'='*60}")
-    print(f"[dhan] AMO 3:40pm{'  DRY RUN' if dry_run else ''}")
-    print(f"[dhan] {len(todays)} circuit-locked symbol(s) to queue")
-    print(f"{'='*60}")
-
-    if not todays:
-        print("[dhan] Nothing circuit-locked today — nothing to queue.")
-        return
-
-    n_placed = 0
-    for e in todays:
-        sym, product, qty = e["symbol"], e["product"], e["quantity"]
-        rejected_price     = e["limit_price"]   # today's rejected attempt -- context only, not used as the order price
-        print(f"\n[dhan] {sym}  [{product}]  qty={qty}  MARKET  "
-              f"(today's rejected limit was ₹{rejected_price:,.2f})")
-        try:
-            # MARKET, not LIMIT -- yesterday's circuit-lock price is stale by
-            # tomorrow's open (fresh circuit band off tonight's close), so a
-            # carried-over limit could just as easily reject again for no
-            # reason; MARKET fills at whatever tomorrow's open actually is.
-            order_id = buy(sym, "NSE_EQ", qty, order_type="MARKET",
-                          product=product, after_market_order=True, amo_time="OPEN",
-                          dry_run=dry_run)
-        except Exception as exc:
-            print(f"[dhan]   !! AMO placement failed for {sym}: {exc}. Will retry next run.")
-            continue
-
-        if not dry_run:
-            e["amo_order_id"]  = order_id
-            e["amo_placed_at"] = _ts()
-        print(f"[dhan]   AMO queued — order {order_id}")
-        try:
-            notify.send_amo_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
-                                   rejected_price=rejected_price, shares=qty, order_id=order_id,
-                                   dry_run=dry_run)
-        except Exception as exc:
-            print(f"  [notify] amo_placed failed: {exc}", file=sys.stderr)
-        n_placed += 1
-
-    if not dry_run:
-        _save_amo_pending(entries)
-
-    print(f"\n[dhan] AMO queueing complete. Placed: {n_placed}.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1792,81 +1672,8 @@ def place_amo_340(dry_run: bool = False) -> None:
 # concerns long entry-side targets.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _reconcile_amo_fills(positions: list, dry_run: bool = False) -> bool:
-    """Checks every AMO placed by place_amo_340 last night (amo_order_id set)
-    against the broker's real order status, and either folds a genuine fill
-    into `positions` as a brand-new open position (same schema run_entry_321
-    itself writes) or drops the entry if it's a confirmed non-fill --
-    exactly the reconciliation TBZ needed manually (see the position note
-    below) but automatic, run at the start of every place_targets_915 before
-    targets are placed, so a same-morning fill is protected same as any
-    other entry. An order still PENDING (AMO not yet released, or genuinely
-    stuck) is left in the pending file for the next run to re-check rather
-    than guessed either way. Returns True if `positions` was mutated (caller
-    must save)."""
-    entries = _load_amo_pending()
-    placed  = [e for e in entries if e["amo_order_id"] is not None]
-    if not placed:
-        return False
-
-    resolved_order_ids: set[str] = set()   # placed entries to drop from `entries` below
-    dirty = False
-    for e in placed:
-        sym, product, order_id = e["symbol"], e["product"], e["amo_order_id"]
-        try:
-            status = _dhan_order_status(order_id)
-        except Exception as exc:
-            print(f"[dhan]   !! AMO status check failed for {sym}: {exc}. Will retry next run.")
-            continue
-
-        order_status = (status.get("orderStatus") or "").upper()
-        if order_status == "TRADED":
-            fill_price = float(status.get("averageTradedPrice") or 0)
-            fill_qty   = int(status.get("filledQty") or 0) or e["quantity"]
-            positions.append({
-                "broker":               _BROKER,
-                "symbol":               sym,
-                "entry_date":           date.today().isoformat(),
-                "reference_price":      e["limit_price"],
-                "shares_intended":      e["quantity"],
-                "actual_fill_price":    round(fill_price, 4),
-                "actual_fill_quantity": fill_qty,
-                "entry_order_id":       order_id,
-                "status":               "open",
-                "entry_timestamp":      _ts(),
-                "product":              product,
-                "entry_note":           f"AMO placed {e['date_detected']} after a circuit-lock "
-                                        f"rejection on that day's 3:21pm entry; filled at the next "
-                                        f"session's open and reconciled here automatically.",
-            })
-            dirty = True
-            print(f"[dhan]   AMO FILLED — {sym} ₹{fill_price:,.2f} × {fill_qty}, added as open position.")
-            try:
-                notify.send_amo_result(broker=_BROKER, symbol=f"{sym} [{product}]", filled=True,
-                                       detail=f"₹{fill_price:,.2f} × {fill_qty}", dry_run=dry_run)
-            except Exception as exc:
-                print(f"  [notify] amo_result failed: {exc}", file=sys.stderr)
-            resolved_order_ids.add(order_id)
-        elif order_status in ("REJECTED", "CANCELLED", "EXPIRED"):
-            print(f"[dhan]   AMO NOT FILLED — {sym} ({order_status}). No position opened.")
-            try:
-                notify.send_amo_result(broker=_BROKER, symbol=f"{sym} [{product}]", filled=False,
-                                       detail=order_status, dry_run=dry_run)
-            except Exception as exc:
-                print(f"  [notify] amo_result failed: {exc}", file=sys.stderr)
-            resolved_order_ids.add(order_id)
-        else:
-            print(f"[dhan]   AMO still {order_status or 'unknown'} for {sym} — will re-check next run.")
-
-    entries = [e for e in entries if e["amo_order_id"] not in resolved_order_ids]
-    _save_amo_pending(entries)
-    return dirty
-
-
 def place_targets_915(dry_run: bool = False) -> None:
     positions = _load_long_pos()
-    if _reconcile_amo_fills(positions, dry_run) and not dry_run:
-        _save_long_pos(positions)
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
@@ -1972,6 +1779,24 @@ def check_exit_925(dry_run: bool = False) -> None:
     # get_ltp() raising -- falls into the existing no-data fallback branch.
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
+    # ── Target-status pre-check (single call): every open position's target
+    # order status now comes from ONE GET /orders (Order Book) call, not one
+    # GET /orders/{id} per position -- same pattern square_off_239 already
+    # uses for its cover/stop OCO check. If this one call itself fails,
+    # nothing about ANY position's target status can be trusted, so every
+    # position with a target_order_id is skipped for manual review in the
+    # loop below rather than guessed (matches square_off_239's exact
+    # fail-closed handling).
+    try:
+        order_by_id = {o.get("orderId"): o for o in _dhan_get_orders()}
+        orders_ok   = True
+    except Exception as exc:
+        print(f"[dhan]   !! Order Book fetch failed: {exc} -- cannot verify any target "
+              f"status this run. Positions with a resting target will be skipped — "
+              f"manual review required.")
+        order_by_id = {}
+        orders_ok   = False
+
     dirty = False   # any in-memory mutation this run -- decides whether to save at the end
 
     # ── Phase 1 (sequential): target-hit checks resolve immediately in place
@@ -1979,6 +1804,7 @@ def check_exit_925(dry_run: bool = False) -> None:
     # no-data/pnl-gate decision for everything else. Builds a list of
     # per-symbol exit tasks to run in parallel below; positions that hit
     # their target or are held for 11:59 never enter that list.
+    _phase1_start = time.monotonic()   # TEMP verification timing -- see module note near the top of this function's caller
     tasks: list[dict] = []
     for pos in open_ps:
         sym        = pos["symbol"]
@@ -1996,11 +1822,14 @@ def check_exit_925(dry_run: bool = False) -> None:
         # of this position's processing entirely -- no LTP check, no market sell.
         target_oid = pos.get("target_order_id")
         if target_oid:
-            try:
-                t_status = _dhan_order_status(target_oid)
-            except Exception as exc:
-                print(f"[dhan]   !! target status check failed for {sym}: {exc}. "
-                      f"Skipping {sym} — manual review required.")
+            if not orders_ok:
+                print(f"[dhan]   !! target status check failed for {sym}: Order Book fetch "
+                      f"failed this run. Skipping {sym} — manual review required.")
+                continue
+            t_status = order_by_id.get(target_oid)
+            if t_status is None:
+                print(f"[dhan]   !! target_order_id {target_oid} not found in today's Order "
+                      f"Book. Skipping {sym} — manual review required.")
                 continue
             if (t_status.get("orderStatus") or "").upper() == "TRADED":
                 ep  = float(t_status.get("averageTradedPrice") or 0)
@@ -2067,6 +1896,12 @@ def check_exit_925(dry_run: bool = False) -> None:
                          "sell_limit": sell_limit, "target_oid": target_oid})
         else:
             print(f"[dhan]   P&L ≤ 0 (₹{pnl_live:+,.2f}) — holding for 11:59am forced exit.")
+
+    # TEMP verification timing -- see this session's request to confirm
+    # actual before/after latency from the batched target-status lookup
+    # above. Remove once the before/after numbers are captured.
+    print(f"[dhan]   TIMING check_exit_925 Phase 1: {time.monotonic() - _phase1_start:.3f}s "
+          f"for {len(open_ps)} position(s)")
 
     # Phase 1's target-hit updates (if any) are complete now -- persist them
     # before any chunk work begins below, independent of whether `tasks` ends
@@ -2295,9 +2130,24 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # comment in check_exit_925.
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
+    # ── Target-status pre-check (single call) -- see the matching comment in
+    # check_exit_925. Same fail-closed handling: if the one Order Book call
+    # fails, every position with a target_order_id is skipped for manual
+    # review below rather than guessed.
+    try:
+        order_by_id = {o.get("orderId"): o for o in _dhan_get_orders()}
+        orders_ok   = True
+    except Exception as exc:
+        print(f"[dhan]   !! Order Book fetch failed: {exc} -- cannot verify any target "
+              f"status this run. Positions with a resting target will be skipped — "
+              f"manual review required.")
+        order_by_id = {}
+        orders_ok   = False
+
     # ── Phase 1 (sequential): target-hit checks resolve immediately in place;
     # everything else queues an unconditional force-sell task (no P&L gate at
     # this stage -- unlike 9:25, every remaining open position sells here).
+    _phase1_start = time.monotonic()   # TEMP verification timing -- see check_exit_925's matching note
     tasks: list[dict] = []
     for pos in open_ps:
         sym        = pos["symbol"]
@@ -2315,11 +2165,14 @@ def force_exit_1159(dry_run: bool = False) -> None:
         # branching needed here since 11:59 has no P&L gate to begin with).
         target_oid = pos.get("target_order_id")
         if target_oid:
-            try:
-                t_status = _dhan_order_status(target_oid)
-            except Exception as exc:
-                print(f"[dhan]   !! target status check failed for {sym}: {exc}. "
-                      f"Skipping {sym} — manual review required.")
+            if not orders_ok:
+                print(f"[dhan]   !! target status check failed for {sym}: Order Book fetch "
+                      f"failed this run. Skipping {sym} — manual review required.")
+                continue
+            t_status = order_by_id.get(target_oid)
+            if t_status is None:
+                print(f"[dhan]   !! target_order_id {target_oid} not found in today's Order "
+                      f"Book. Skipping {sym} — manual review required.")
                 continue
             if (t_status.get("orderStatus") or "").upper() == "TRADED":
                 ep = float(t_status.get("averageTradedPrice") or 0)
@@ -2368,6 +2221,10 @@ def force_exit_1159(dry_run: bool = False) -> None:
         tasks.append({"pos": pos, "sym": sym, "product": product, "fill_price": fill_price,
                       "qty": qty, "is_partial": is_partial, "sell_limit": sell_limit,
                       "target_oid": target_oid})
+
+    # TEMP verification timing -- see check_exit_925's matching note.
+    print(f"[dhan]   TIMING force_exit_1159 Phase 1: {time.monotonic() - _phase1_start:.3f}s "
+          f"for {len(open_ps)} position(s)")
 
     # Phase 1's target-hit updates (if any) are complete now -- persist them
     # before any chunk work begins, independent of whether `tasks` ends up
@@ -2820,8 +2677,6 @@ if __name__ == "__main__":
                      help="Square off shorts opened from 925/1159 exits (unconditional, 2:39pm)")
     grp.add_argument("--place-targets", action="store_true",
                      help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
-    grp.add_argument("--place-amo",     action="store_true",
-                     help="Queue AMO retries for today's circuit-locked entries (3:40pm)")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
@@ -2853,8 +2708,6 @@ if __name__ == "__main__":
             force_exit_1159(dry_run=args.dry_run)
         elif args.square_off_239:
             square_off_239(dry_run=args.dry_run)
-        elif args.place_amo:
-            place_amo_340(dry_run=args.dry_run)
         else:
             place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:

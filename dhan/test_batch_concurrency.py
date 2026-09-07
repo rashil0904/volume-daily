@@ -302,8 +302,9 @@ def test_quote_batching_call_counts():
             balance_calls.append(1)
             return 10_000_000.0
 
-        def fake_order_status(oid):
-            return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+        def fake_get_orders():
+            return [{"orderId": f"TGT-{s}", "orderStatus": "PENDING",
+                     "filledQty": 0, "averageTradedPrice": 0} for s in symbols]
 
         def fake_sell(sym, exch, qty, **kw):
             return f"SELL-{sym}-{kw.get('product')}"
@@ -322,7 +323,7 @@ def test_quote_batching_call_counts():
              patch.object(rt, "get_ltp", lambda sym: 105.0), \
              patch.object(rt, "_fetch_upper_circuit_batch", fake_circuit_batch), \
              patch.object(rt, "_available_balance", fake_available_balance), \
-             patch.object(rt, "_dhan_order_status", fake_order_status), \
+             patch.object(rt, "_dhan_get_orders", fake_get_orders), \
              patch.object(rt, "_dhan_cancel_order", lambda oid: oid), \
              patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
              patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
@@ -397,8 +398,9 @@ def test_combined_exit_and_short_budget():
         finally:
             exit_call()
 
-    def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+    def fake_get_orders():
+        return [{"orderId": f"TGT-{s}", "orderStatus": "PENDING",
+                 "filledQty": 0, "averageTradedPrice": 0} for s in symbols]
 
     def fake_poll_fill_safe(oid, fallback_price, fallback_qty):
         return 105.0, fallback_qty
@@ -411,7 +413,7 @@ def test_combined_exit_and_short_budget():
          patch.object(rt, "get_ltp", lambda sym: 105.0), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {s: 130.0 for s in syms}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_dhan_order_status", fake_order_status), \
+         patch.object(rt, "_dhan_get_orders", fake_get_orders), \
          patch.object(rt, "_dhan_cancel_order", lambda oid: oid), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
@@ -505,6 +507,7 @@ def test_one_write_per_wave_no_lost_writes():
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
+         patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
@@ -560,6 +563,7 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
+         patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "_broker_qty", fake_broker_qty), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", lambda sym, exch, qty, **kw: f"SELL-{sym}"), \
@@ -678,6 +682,7 @@ def test_short_anchor_uses_batched_ltp_cache():
          patch.object(rt, "get_ltp", fake_get_ltp), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {s: 200.0 for s in syms}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
+         patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "_broker_qty", lambda s, product: (10, "NSE_EQ")), \
          patch.object(rt, "_intraday_margin_check", lambda s, qty, ltp: {"margin_required": 1.0}), \
          patch.object(rt, "sell", fake_sell), \
@@ -719,8 +724,9 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
     short_store = FakeStore(positions=[])
     events = TaggedEvents()
 
-    def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+    def fake_get_orders():
+        return [{"orderId": f"TGT-{s}", "orderStatus": "PENDING",
+                 "filledQty": 0, "averageTradedPrice": 0} for s in symbols]
 
     def fake_cancel(oid):
         events.add("cancel", oid)
@@ -760,7 +766,7 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
         patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}),
         patch.object(rt, "_fetch_upper_circuit", lambda sym: 200.0),
         patch.object(rt, "_available_balance", lambda: 10_000_000.0),
-        patch.object(rt, "_dhan_order_status", fake_order_status),
+        patch.object(rt, "_dhan_get_orders", fake_get_orders),
         patch.object(rt, "_dhan_cancel_order", fake_cancel),
         patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")),
         patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}),
@@ -858,8 +864,10 @@ def test_wave1_mixed_fallback_and_full_same_batch():
     short_store = FakeStore(positions=[])
     events = TaggedEvents()
 
-    def fake_order_status(oid):
-        return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}
+    def fake_get_orders():
+        return [{"orderId": "TGT-FULLA", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
+                {"orderId": "TGT-FULLB", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0},
+                {"orderId": "TGT-NODATA", "orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0}]
 
     def fake_cancel(oid):
         events.add("cancel", oid)
@@ -885,7 +893,7 @@ def test_wave1_mixed_fallback_and_full_same_batch():
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt, "_dhan_order_status", fake_order_status), \
+         patch.object(rt, "_dhan_get_orders", fake_get_orders), \
          patch.object(rt, "_dhan_cancel_order", fake_cancel), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
