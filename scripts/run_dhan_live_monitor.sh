@@ -29,5 +29,13 @@ fi
 UC_FLAGS="--enable-uc-staged-entry --dry-run"
 echo "$LOG_PREFIX  UC-based staged entry: DRY-RUN enabled"
 
-nohup python3.11 -u -m dhan.live_monitor $UC_FLAGS >> /root/dhan_live_monitor.log 2>&1 &
+# Order Update feed -- Phase 1 shadow-mode observation only (see
+# dhan/order_update_feed.py). Opens a second, independent WebSocket
+# connection to Dhan's Live Order Update feed and logs [WS_VALIDATION]
+# comparisons against the existing polling path; places no orders and
+# changes no decision. Safe to run alongside everything above.
+ORDER_UPDATE_FLAGS="--enable-order-update-feed"
+echo "$LOG_PREFIX  Order Update feed: shadow-mode ENABLED"
+
+nohup python3.11 -u -m dhan.live_monitor $UC_FLAGS $ORDER_UPDATE_FLAGS >> /root/dhan_live_monitor.log 2>&1 &
 echo "$LOG_PREFIX  Started dhan/live_monitor.py (PID $!)"

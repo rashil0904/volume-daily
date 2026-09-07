@@ -228,6 +228,50 @@ def _seconds_until(hh: int, mm: int, ss: int, now: datetime | None = None) -> fl
     return (target - now).total_seconds()
 
 
+# ── Exit-stage staging holds (check_exit_925 / force_exit_1159 /
+# square_off_239) -- same _seconds_until mechanism as run_entry_321's own
+# staging hold above, reused as-is, not reimplemented. Each stage's cron now
+# fires one minute earlier than its actual decision point, giving runway for
+# two pinned wall-clock instants instead of running prep + price-dependent
+# work back-to-back at whatever moment cron happened to invoke the process:
+#   :50 -- prep-check: load positions, GET /orders snapshot, UC-cache read --
+#          none of this is price-dependent, safe to resolve up to 10s early.
+#   :00 -- fire: fresh LTP fetch, then the actual decision/sell/cover logic.
+# The 10s gap is deliberate slack for a slow GET /orders call on a bad-network
+# day -- see _hold_until's own docstring for what happens if prep still runs
+# past the fire point despite that buffer.
+_EXIT_925_PREP_AT   = (9, 24, 50)
+_EXIT_925_FIRE_AT   = (9, 25, 0)
+_EXIT_1159_PREP_AT  = (11, 58, 50)
+_EXIT_1159_FIRE_AT  = (11, 59, 0)
+_SQUAREOFF_PREP_AT  = (14, 38, 50)
+_SQUAREOFF_FIRE_AT  = (14, 39, 0)
+
+
+def _hold_until(hh: int, mm: int, ss: int, label: str) -> None:
+    """Sleeps until exactly hh:mm:ss IST, via the same _seconds_until(...)
+    math as run_entry_321's own staging hold -- reused, not reinvented.
+    Same "don't wait more than a minute" guard as run_entry_321 (a call more
+    than 60s ahead of its target means this was invoked well outside its
+    normal window, not a normal mid-window call -- e.g. a manual/late run).
+
+    UNLIKE run_entry_321's hold (which silently skips a wait that's already
+    zero or negative), this logs an explicit warning when the target instant
+    has already passed -- a slow GET /orders call eating into the :50->:00
+    buffer should leave a visible trace that the fire point was hit late,
+    not silently fire later than intended with no record of why."""
+    hold_s = _seconds_until(hh, mm, ss)
+    if hold_s > 60:
+        return
+    if hold_s <= 0:
+        print(f"[dhan]   !! {label} target {hh:02d}:{mm:02d}:{ss:02d} IST already passed "
+              f"({-hold_s:.3f}s late) — prep ran long this run, firing immediately "
+              f"instead of waiting.")
+        return
+    print(f"[dhan]   holding {hold_s:.3f}s until {hh:02d}:{mm:02d}:{ss:02d} IST ({label})…")
+    time.sleep(hold_s)
+
+
 # ── Order fill polling ─────────────────────────────────────────────────────────
 
 class OrderRejected(RuntimeError):
@@ -839,15 +883,21 @@ def _load_uc_cache() -> dict[str, float]:
         return {}
 
 
-def _circuit_cache_for(symbols: list[str]) -> dict[str, float]:
+def _circuit_cache_for(symbols: list[str], prefetched: dict[str, float] | None = None) -> dict[str, float]:
     """UC lookup for check_exit_925/force_exit_1159's mirrored-short protect
     step: reads today's persisted cache first (see _load_uc_cache -- normally
     covers every symbol, since place_targets_915 fetches UC for every open
     position at 9:15am and a short only ever opens on a symbol that was
     already an open long). Only live-fetches whatever's actually missing
     (e.g. the cache file wasn't written this run for some reason) instead of
-    unconditionally re-fetching everything on demand."""
-    cached  = _load_uc_cache()
+    unconditionally re-fetching everything on demand.
+
+    prefetched: an already-loaded UC dict, read at check_exit_925/
+    force_exit_1159's 09:24:50/11:58:50 prep-check instant (see _hold_until)
+    instead of doing that file read here, at the fire instant. None (the
+    default) preserves the original behavior of reading the file itself,
+    for any other/manual caller."""
+    cached  = prefetched if prefetched is not None else _load_uc_cache()
     result  = {sym: cached[sym] for sym in symbols if sym in cached}
     missing = [sym for sym in symbols if sym not in cached]
     if missing:
@@ -1791,25 +1841,24 @@ def place_targets_915(dry_run: bool = False) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def check_exit_925(dry_run: bool = False) -> None:
-    positions = _load_long_pos()
-    open_ps   = _open_pos(positions)
-
     print(f"\n{'='*60}")
     print(f"[dhan] Exit check 9:25am{'  DRY RUN' if dry_run else ''}")
-    print(f"[dhan] {len(open_ps)} open position(s)")
     print(f"{'='*60}")
+
+    _hold_until(*_EXIT_925_PREP_AT, "check_exit_925 prep")
+
+    # ── Prep step, pinned to 09:24:50: position load + Order Book snapshot +
+    # UC-cache read. None of this is price-dependent -- safe to resolve up to
+    # 10s before the fire instant below (see _hold_until's module note).
+    print(f"[dhan]   TIMING check_exit_925 prep-step start: {_ts()}")   # TEMP verification timing
+    positions = _load_long_pos()
+    open_ps   = _open_pos(positions)
+    print(f"[dhan] {len(open_ps)} open position(s)")
 
     if not open_ps:
         print("[dhan] No open positions — nothing to check.")
         _sync_pnl_workbook()
         return
-
-    # One batched call for every open position's LTP, not one call per symbol
-    # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
-    # single-symbol calls reliably 429 on the 2nd+ symbol (see get_ltp's
-    # docstring). A symbol missing from this dict is treated identically to
-    # get_ltp() raising -- falls into the existing no-data fallback branch.
-    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     # ── Target-status pre-check (single call): every open position's target
     # order status now comes from ONE GET /orders (Order Book) call, not one
@@ -1828,6 +1877,26 @@ def check_exit_925(dry_run: bool = False) -> None:
               f"manual review required.")
         order_by_id = {}
         orders_ok   = False
+
+    # UC cache read here too (see _circuit_cache_for's prefetched param) --
+    # same file place_targets_915 wrote at 9:15am, read once now instead of
+    # again at the fire instant below.
+    uc_cache_prefetched = _load_uc_cache()
+
+    _hold_until(*_EXIT_925_FIRE_AT, "check_exit_925 fire")
+
+    # ── Fire step, pinned to 09:25:00: fresh LTP, then the actual
+    # decision/sell/short logic -- unchanged from here down except for what
+    # now reads from the prep step's already-fetched values instead of
+    # fetching them itself.
+    print(f"[dhan]   TIMING check_exit_925 fire-step start: {_ts()}")   # TEMP verification timing
+
+    # One batched call for every open position's LTP, not one call per symbol
+    # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
+    # single-symbol calls reliably 429 on the 2nd+ symbol (see get_ltp's
+    # docstring). A symbol missing from this dict is treated identically to
+    # get_ltp() raising -- falls into the existing no-data fallback branch.
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     dirty = False   # any in-memory mutation this run -- decides whether to save at the end
 
@@ -1945,15 +2014,16 @@ def check_exit_925(dry_run: bool = False) -> None:
     # Circuit-limit lookup (Part 1) for every task candidate -- not every task
     # will actually reach the mirrored-short step below, but we don't know
     # which will until each chunk's exit fires, so every candidate is covered
-    # now rather than guessing. Reads today's persisted cache first (see
-    # _circuit_cache_for) -- place_targets_915 already fetched every open
-    # position's UC at 9:15am, so this is normally a pure file read with zero
-    # live Quote-API calls, not a fresh fetch racing the same 1/sec budget
-    # every other quote call in this run needs.
+    # now rather than guessing. Resolves from the prep step's already-loaded
+    # uc_cache_prefetched (see _hold_until/_circuit_cache_for's prefetched
+    # param) instead of re-reading the file here -- place_targets_915 already
+    # fetched every open position's UC at 9:15am, so this is normally a pure
+    # in-memory lookup with zero live Quote-API calls, not a fresh fetch
+    # racing the same 1/sec budget every other quote call in this run needs.
     circuit_cache: dict[str, float] = {}
     short_balance = _BalanceTracker(None)
     if tasks:
-        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks])
+        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks], prefetched=uc_cache_prefetched)
         # One-time INTRADAY-short balance fetch for this whole stage-run,
         # tracked thread-safely across every chunk below (Part 3) -- the
         # concurrent equivalent of the old sequential available_balance
@@ -2023,6 +2093,8 @@ def check_exit_925(dry_run: bool = False) -> None:
         except Exception as exc:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
+    print(f"[dhan]   TIMING check_exit_925 first order-affecting API call (Wave 1 start): "
+          f"{_ts()}")   # TEMP verification timing
     wave1_results: list[dict] = []
     for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
@@ -2137,13 +2209,17 @@ def check_exit_925(dry_run: bool = False) -> None:
 
 
 def force_exit_1159(dry_run: bool = False) -> None:
-    positions = _load_long_pos()
-    open_ps   = _open_pos(positions)
-
     print(f"\n{'='*60}")
     print(f"[dhan] Force exit 11:59am{'  DRY RUN' if dry_run else ''}")
-    print(f"[dhan] {len(open_ps)} position(s) still open")
     print(f"{'='*60}")
+
+    _hold_until(*_EXIT_1159_PREP_AT, "force_exit_1159 prep")
+
+    # ── Prep step, pinned to 11:58:50 -- see check_exit_925's matching note.
+    print(f"[dhan]   TIMING force_exit_1159 prep-step start: {_ts()}")   # TEMP verification timing
+    positions = _load_long_pos()
+    open_ps   = _open_pos(positions)
+    print(f"[dhan] {len(open_ps)} position(s) still open")
 
     if not open_ps:
         print("[dhan] All positions already exited — nothing to force-close.")
@@ -2154,13 +2230,6 @@ def force_exit_1159(dry_run: bool = False) -> None:
         _daily_summary(positions, 0, dry_run)
         _sync_pnl_workbook()
         return
-
-    n_force = 0
-    dirty   = False
-
-    # One batched call for every still-open position's LTP -- see the matching
-    # comment in check_exit_925.
-    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     # ── Target-status pre-check (single call) -- see the matching comment in
     # check_exit_925. Same fail-closed handling: if the one Order Book call
@@ -2175,6 +2244,21 @@ def force_exit_1159(dry_run: bool = False) -> None:
               f"manual review required.")
         order_by_id = {}
         orders_ok   = False
+
+    # UC cache read here too -- see check_exit_925's matching note.
+    uc_cache_prefetched = _load_uc_cache()
+
+    _hold_until(*_EXIT_1159_FIRE_AT, "force_exit_1159 fire")
+
+    # ── Fire step, pinned to 11:59:00 -- see check_exit_925's matching note.
+    print(f"[dhan]   TIMING force_exit_1159 fire-step start: {_ts()}")   # TEMP verification timing
+
+    n_force = 0
+    dirty   = False
+
+    # One batched call for every still-open position's LTP -- see the matching
+    # comment in check_exit_925.
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     # ── Phase 1 (sequential): target-hit checks resolve immediately in place;
     # everything else queues an unconditional force-sell task (no P&L gate at
@@ -2265,12 +2349,12 @@ def force_exit_1159(dry_run: bool = False) -> None:
         _save_long_pos(positions)
 
     # Circuit-limit lookup (Part 1) + one-time INTRADAY-short balance fetch
-    # (Part 3), same reasoning as check_exit_925 -- _circuit_cache_for reads
-    # today's persisted 9:15am values first, only live-fetching a gap.
+    # (Part 3), same reasoning as check_exit_925 -- resolves from the prep
+    # step's already-loaded uc_cache_prefetched, only live-fetching a gap.
     circuit_cache: dict[str, float] = {}
     short_balance = _BalanceTracker(None)
     if tasks:
-        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks])
+        circuit_cache = _circuit_cache_for([t["sym"] for t in tasks], prefetched=uc_cache_prefetched)
         short_balance = _BalanceTracker(_available_balance())
 
     # ── Wave 1 (batched-concurrent): cancel every task's stale target (one
@@ -2314,6 +2398,8 @@ def force_exit_1159(dry_run: bool = False) -> None:
         except Exception as exc:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
+    print(f"[dhan]   TIMING force_exit_1159 first order-affecting API call (Wave 1 start): "
+          f"{_ts()}")   # TEMP verification timing
     wave1_results: list[dict] = []
     for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
         wave1_results.extend(batch_results)
@@ -2432,13 +2518,22 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def square_off_239(dry_run: bool = False) -> None:
-    positions   = _load_short_pos()
-    open_shorts = _open_short_pos(positions)
-
     print(f"\n{'='*60}")
     print(f"[dhan] Short square-off 2:39pm{'  DRY RUN' if dry_run else ''}")
-    print(f"[dhan] {len(open_shorts)} open short position(s)")
     print(f"{'='*60}")
+
+    _hold_until(*_SQUAREOFF_PREP_AT, "square_off_239 prep")
+
+    # ── Prep step, pinned to 14:38:50: position load + Order Book snapshot +
+    # classification (cover_filled/stop_filled/neither_filled) from that
+    # snapshot -- pure in-memory, no live price needed for classification
+    # itself (only the neither_filled force-cover path below needs LTP,
+    # which is fetched at the fire instant). See check_exit_925/
+    # force_exit_1159's matching prep-step note.
+    print(f"[dhan]   TIMING square_off_239 prep-step start: {_ts()}")   # TEMP verification timing
+    positions   = _load_short_pos()
+    open_shorts = _open_short_pos(positions)
+    print(f"[dhan] {len(open_shorts)} open short position(s)")
 
     if not open_shorts:
         print("[dhan] No open shorts — nothing to square off.")
@@ -2446,12 +2541,6 @@ def square_off_239(dry_run: bool = False) -> None:
         return
 
     n_closed = 0
-
-    # One batched call for every open short's cover LTP -- see the matching
-    # comment in check_exit_925. Not every short necessarily needs this (only
-    # the neither-order-filled fallback path below does), but fetching once
-    # up front for all of them is still a single call either way.
-    ltp_cache = get_ltp_batch([p["symbol"] for p in open_shorts])
 
     # ── Pre-check (single call): the whole run's cover-target/stop-loss OCO
     # status now comes from ONE GET /orders (Order Book) call, not one
@@ -2531,6 +2620,17 @@ def square_off_239(dry_run: bool = False) -> None:
                            "qty": qty, "cover_oid": cover_oid, "stop_oid": stop_oid,
                            "cover_status": cover_status, "stop_status": stop_status})
 
+    _hold_until(*_SQUAREOFF_FIRE_AT, "square_off_239 fire")
+
+    # ── Fire step, pinned to 14:39:00: fresh LTP (only the neither_filled
+    # force-cover path below actually needs it, but fetching once up front
+    # for every open short is still a single call either way -- unchanged
+    # from before this restructuring, just moved to fire time instead of
+    # running immediately after cron-start), then the cancel/force-cover
+    # sequence.
+    print(f"[dhan]   TIMING square_off_239 fire-step start: {_ts()}")   # TEMP verification timing
+    ltp_cache = get_ltp_batch([p["symbol"] for p in open_shorts])
+
     # ── Batches of MAX_ORDER_CALLS_PER_SECOND: cancel sub-step, then a
     # force-cover sub-step (only for whichever of THIS batch's positions were
     # neither_filled -- cover_filled/stop_filled resolve from the pre-fetched
@@ -2604,6 +2704,9 @@ def square_off_239(dry_run: bool = False) -> None:
 
     chunk_size = MAX_ORDER_CALLS_PER_SECOND
     for i in range(0, len(classified), chunk_size):
+        if i == 0:
+            print(f"[dhan]   TIMING square_off_239 first order-affecting API call "
+                  f"(batch 1 cancels): {_ts()}")   # TEMP verification timing
         batch = classified[i : i + chunk_size]
 
         _run_batch(batch, _cancel_fn)   # sub-step 1: cancels, non-fatal, printed inline
@@ -2729,6 +2832,21 @@ if __name__ == "__main__":
         sys.exit("[dhan] --shares requires --symbol")
 
     td = date.fromisoformat(args.date) if args.date else date.today()
+
+    # Cross-process shadow-mode validation logging (Phase 1, see
+    # dhan/order_update_feed.py) -- compares this stage's real
+    # _poll_fill_strict/_poll_fill_safe fill confirmations against Dhan's
+    # Order Update WebSocket feed (running in live_monitor.py's separate
+    # process, cache read from results/order_update_cache.json). Purely
+    # observational: does NOT change order execution behavior. Never allowed
+    # to block a real trading run -- see FileBackedOrderCache's own
+    # crash-safety on a torn read of that file.
+    try:
+        from dhan.order_update_feed import FileBackedOrderCache, enable_validation_logging
+        enable_validation_logging(FileBackedOrderCache())
+    except Exception as exc:
+        print(f"[dhan]   !! shadow-mode validation logging failed to enable: {exc} "
+              f"(non-fatal -- continuing without it)", file=sys.stderr)
 
     try:
         if args.entry:

@@ -713,7 +713,8 @@ def execute_case_b(sym: str, state: UCState, ltp: float,
 
 class LiveMonitor:
     def __init__(self, client_id: str, access_token: str,
-                enable_uc_staged_entry: bool = False, dry_run: bool = False):
+                enable_uc_staged_entry: bool = False, dry_run: bool = False,
+                enable_order_update_feed: bool = False):
         self._client_id    = client_id
         self._access_token = access_token
         self._states: dict[int, _SymState] = {}          # securityId -> state
@@ -739,6 +740,14 @@ class LiveMonitor:
         # qualification latch (update_case_a_qualification) runs on every
         # tick from market open, well before this snapshot exists.
         self._per_stock_capital: float | None = None
+
+        # Order Update feed (Phase 1, shadow mode -- see
+        # dhan/order_update_feed.py) -- off by default, and independent of
+        # enable_uc_staged_entry: a completely separate WebSocket connection,
+        # own thread, own reconnect logic, never sharing the market-feed
+        # connection's thread/loop or the UC-staged-entry executor above.
+        self._enable_order_update_feed = enable_order_update_feed
+        self._order_update_feed = None   # set in run() if enabled
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -996,6 +1005,21 @@ class LiveMonitor:
         hb = threading.Thread(target=self._heartbeat_loop, daemon=True)
         hb.start()
 
+        if self._enable_order_update_feed:
+            # Own thread, own reconnect loop, own lock -- see
+            # dhan/order_update_feed.py's module docstring for why this
+            # never shares the market-feed thread/loop or the UC-staged-
+            # entry executor above. Phase 1: shadow mode only -- logs and
+            # persists a cache, never influences any decision here.
+            from dhan.order_update_feed import OrderUpdateFeed, enable_validation_logging
+            self._order_update_feed = OrderUpdateFeed(self._client_id, self._access_token)
+            threading.Thread(target=self._order_update_feed.run, daemon=True).start()
+            enable_validation_logging(self._order_update_feed)
+            print("[order_update_feed] Enabled (shadow mode) -- see [WS_VALIDATION] log lines. "
+                  "NOTE: this only observes polling calls made from THIS process -- see "
+                  "FileBackedOrderCache's docstring for why cron-triggered "
+                  "run_entry_321/check_exit_925/force_exit_1159/square_off_239 aren't covered yet.")
+
         print("Starting Dhan MarketFeed…")
         # Outer retry loop: MarketFeed.run() only auto-retries reconnects that
         # happen AFTER a successful first connect (see module docstring) -- a
@@ -1037,13 +1061,20 @@ if __name__ == "__main__":
     _parser.add_argument("--dry-run", action="store_true",
                          help="With --enable-uc-staged-entry: simulate staged-entry "
                               "orders (log, don't place) instead of real ones.")
+    _parser.add_argument("--enable-order-update-feed", action="store_true",
+                         help="Enable Dhan's Live Order Update WebSocket feed as a "
+                              "Phase 1 shadow-mode observation layer (see "
+                              "dhan/order_update_feed.py) -- logs [WS_VALIDATION] "
+                              "comparisons against the existing polling path, changes "
+                              "no real decision. Default off.")
     _args = _parser.parse_args()
 
     try:
         client_id, access_token = _get_dhan_credentials()
         LiveMonitor(client_id, access_token,
                    enable_uc_staged_entry=_args.enable_uc_staged_entry,
-                   dry_run=_args.dry_run).run()
+                   dry_run=_args.dry_run,
+                   enable_order_update_feed=_args.enable_order_update_feed).run()
     except Exception as exc:
         print(f"dhan/live_monitor.py failed to start: {exc}", file=sys.stderr)
         try:
