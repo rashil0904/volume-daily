@@ -1514,18 +1514,23 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         # The /margincalculator pre-check above can't detect MTF-ineligible
         # scrips -- confirmed live 2026-08-21: KLBRENG-B/WELSPLSOL both
         # reported 4-5x leverage there, yet the real order came back
-        # REJECTED "Mtf Product Is Not Allowed For This Scrip". Only an
-        # actual order attempt surfaces this, so retry once as CNC -- but
-        # ONLY when the rejection is specifically MTF-ineligibility, not
-        # any genuine rejection: a circuit-limit breach (e.g. SHANTIGEAR,
-        # 2026-08-21, "Rate Not Within Ckt Limit 309.55 To 464.25") would
-        # reject a CNC retry at the same price identically, so retrying
-        # there just burns another order for nothing. Also not on a plain
-        # unfilled/timeout (no seller matched yet -- CNC wouldn't fix that
-        # either).
+        # REJECTED "Mtf Product Is Not Allowed For This Scrip". A second,
+        # distinct MTF-only rejection reaches the same conclusion: "Buy back
+        # is not allowed for delivery positions..." -- confirmed live
+        # 2026-09-07 (RML) -- MTF refuses to treat this as a fresh buy
+        # because the scrip already has a delivery (CNC) position on record,
+        # but CNC itself has no such restriction. Retry once as CNC for
+        # EITHER reason -- but ONLY these two specific, confirmed
+        # MTF-ineligibility rejections, not any genuine rejection: a
+        # circuit-limit breach (e.g. SHANTIGEAR, 2026-08-21, "Rate Not
+        # Within Ckt Limit 309.55 To 464.25") would reject a CNC retry at
+        # the same price identically, so retrying there just burns another
+        # order for nothing. Also not on a plain unfilled/timeout (no seller
+        # matched yet -- CNC wouldn't fix that either).
+        _mtf_ineligible_reasons = ("mtf product is not allow", "buy back is not allowed")
         if (fill_qty == 0 and product == "MTF" and rejected
-                and "mtf product is not allow" in reject_reason.lower()):
-            print(f"[dhan]   MTF-INELIGIBLE — retrying as CNC.")
+                and any(r in reject_reason.lower() for r in _mtf_ineligible_reasons)):
+            print(f"[dhan]   MTF REJECTED ({reject_reason.strip()}) — retrying as CNC.")
             if manual_mode:
                 cnc_capital_base = capital
                 cnc_shares       = shares
@@ -1588,6 +1593,9 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             # and silently dropped -- 5 of 6 signals got an entry
             # notification, RML got none, with no way to tell from Telegram
             # alone that a signal was skipped rather than just slow to fill.
+            # That specific rejection is now retried once as CNC above (see
+            # _mtf_ineligible_reasons in _place_and_poll) -- this branch is
+            # only reached now if the CNC retry itself also failed/0-filled.
             try:
                 notify.send_entry_failed(broker=_BROKER, symbol=f"{sym} [{product}]",
                                          error_msg=res["error"], dry_run=dry_run)

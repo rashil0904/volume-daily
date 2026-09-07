@@ -187,6 +187,77 @@ def test_entry_parallel_timing_and_resilience():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# 4a. run_entry_321 -- confirmed MTF-ineligibility rejections retry once as CNC
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_entry_mtf_ineligible_retries_as_cnc():
+    print("\n[4a] run_entry_321 -- MTF-ineligible rejection retries as CNC")
+    symbols = ["KLBRENG", "RML"]
+    # Two DISTINCT confirmed-live rejection reasons that both mean "this
+    # scrip can't be bought as MTF, but CNC has no such restriction" --
+    # KLBRENG-B/WELSPLSOL, 2026-08-21 ("Mtf Product Is Not Allowed For This
+    # Scrip") and RML, 2026-09-07 ("Buy back is not allowed for delivery
+    # positions..."). Both must trigger the exact same CNC retry.
+    reject_reason_by_sym = {
+        "KLBRENG": "Mtf Product Is Not Allowed For This Scrip",
+        "RML":     "Buy back is not allowed for delivery positions.",
+    }
+
+    buy_calls = []
+
+    def fake_buy(sym, exch, qty, **kw):
+        product = kw.get("product")
+        buy_calls.append((sym, product, qty))
+        return f"{product}-{sym}"
+
+    def fake_poll_fill_strict(order_id):
+        product, sym = order_id.split("-", 1)
+        if product == "MTF":
+            return 0.0, 0, True, reject_reason_by_sym[sym]
+        return 105.0, 1000, False, ""   # CNC retry fills in full at the resized qty
+
+    store = FakeStore(positions=[])
+
+    with patch.object(rt, "_load_symbols", return_value=list(symbols)), \
+         patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
+         patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
+         patch.object(rt, "security_id", lambda sym: "999"), \
+         patch.object(rt, "_margin_check", lambda sym, qty, price: {"leverage": 3.0, "margin_required": qty * price / 3.0}), \
+         patch.object(rt, "_available_balance", return_value=10_000_000.0), \
+         patch.object(rt, "buy", side_effect=fake_buy), \
+         patch.object(rt, "_poll_fill_strict", side_effect=fake_poll_fill_strict), \
+         patch.object(rt, "_load_long_pos", side_effect=store.load), \
+         patch.object(rt, "_save_long_pos", side_effect=store.save), \
+         patch.object(rt, "_append_log"), \
+         patch.object(rt.notify, "send_entry"), \
+         patch.object(rt.notify, "send_entry_failed"):
+
+        rt.run_entry_321(trade_date=__import__("datetime").date(2026, 8, 25),
+                         dry_run=False, capital=800_000.0)
+
+    check("each symbol was bought exactly twice (rejected MTF attempt, then CNC retry)",
+          sorted(s for s, p, q in buy_calls) == sorted(symbols * 2), f"buy_calls={buy_calls}")
+    check("both symbols' second attempt was placed as product=CNC",
+          {s for s, p, q in buy_calls if p == "CNC"} == set(symbols), f"buy_calls={buy_calls}")
+
+    mtf_qty = {s: q for s, p, q in buy_calls if p == "MTF"}
+    cnc_qty = {s: q for s, p, q in buy_calls if p == "CNC"}
+    check("CNC retry sizes off half the capital (smaller qty than the rejected MTF attempt)",
+          all(cnc_qty[s] < mtf_qty[s] for s in symbols), f"mtf={mtf_qty} cnc={cnc_qty}")
+
+    saved = {p["symbol"]: p for p in store.positions}
+    check("both symbols ended up as open positions despite the initial MTF rejection",
+          set(saved) == set(symbols), f"saved={set(saved)}")
+    check("both saved positions record product=CNC (the retry that actually filled)",
+          all(saved[s]["product"] == "CNC" for s in symbols),
+          f"products={[saved[s]['product'] for s in symbols]}")
+    check("both saved positions use the CNC retry's fill price/qty, not the rejected MTF attempt",
+          all(saved[s]["actual_fill_price"] == 105.0 and saved[s]["actual_fill_quantity"] == 1000
+              for s in symbols),
+          f"saved={saved}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # 4. check_exit_925 -- parallel timing + one-failure-doesn't-block-others
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -231,6 +302,7 @@ def test_exit_parallel_timing_and_resilience():
     with patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}), \
          patch.object(rt, "get_ltp", lambda sym: 110.0), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
+         patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "sell", side_effect=fake_sell), \
          patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
@@ -278,6 +350,7 @@ if __name__ == "__main__":
     test_rate_limiter_sliding_window()
     test_rate_limiter_thread_safe_shared_instance()
     test_entry_parallel_timing_and_resilience()
+    test_entry_mtf_ineligible_retries_as_cnc()
     test_exit_parallel_timing_and_resilience()
 
     print()
