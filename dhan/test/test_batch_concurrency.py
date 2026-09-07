@@ -39,7 +39,7 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
@@ -64,6 +64,11 @@ patch.object(rt, "_load_uc_cache", lambda: {}).start()
 # concurrency-measurement holds a couple of tests below rely on (e.g. test 3's
 # "hold the in-flight window" pattern). So sleep is mocked LOCALLY, per test,
 # only in tests that don't need a real wall-clock window of their own.
+# check_exit_925/force_exit_1159/square_off_239's own _hold_until (real
+# wall-clock pinning, see dhan/run_trades.py) is a different matter --
+# nothing in this file exercises that staging behavior itself, so it's
+# stubbed out globally here, same reasoning as _sync_pnl_workbook above.
+patch.object(rt, "_hold_until", lambda *a, **kw: None).start()
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"

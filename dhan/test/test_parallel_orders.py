@@ -49,7 +49,7 @@ import types
 from pathlib import Path
 from unittest.mock import patch
 
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
@@ -61,6 +61,11 @@ import dhan.run_trades as rt        # noqa: E402
 
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
+# check_exit_925's own _hold_until (real wall-clock pinning, see
+# dhan/run_trades.py) isn't what this file's timing tests measure -- they
+# measure the parallel-phase wall-clock, not the staging holds around it.
+# Stubbed out globally, same reasoning as _sync_pnl_workbook above.
+patch.object(rt, "_hold_until", lambda *a, **kw: None).start()
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"

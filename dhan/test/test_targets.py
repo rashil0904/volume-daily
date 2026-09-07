@@ -28,7 +28,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-_ROOT = Path(__file__).resolve().parent.parent
+_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "pipeline"))
 
@@ -68,6 +68,17 @@ patch.object(rt, "_save_uc_cache", lambda circuits: None).start()
 # Forcing a cache miss here keeps that fallback path exercised exactly as
 # before, instead of reading whatever's in the REAL results/dhan_uc_cache.json.
 patch.object(rt, "_load_uc_cache", lambda: {}).start()
+
+# check_exit_925/force_exit_1159/square_off_239 now hold at two pinned
+# wall-clock instants each (see _hold_until) before/around their real work --
+# real wall-clock timing has no place in this suite (it would either sleep
+# for real, or -- far more likely -- print a spurious "target already passed"
+# warning on every single call, since the real moment a test happens to run
+# almost never falls inside one of the narrow :50-:00 windows). Stubbed out
+# globally, same reasoning as _sync_pnl_workbook above. dhan/
+# test_exit_stage_timing.py is the one place that tests _hold_until's own
+# behavior directly, with its own local patching.
+patch.object(rt, "_hold_until", lambda *a, **kw: None).start()
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"

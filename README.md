@@ -444,13 +444,22 @@ Saved to `dhan/.token.json` (gitignored) and reused for the rest of the day by e
 
 ### Testing
 
+All Dhan tests live in `dhan/test/` — standalone, fully mocked scripts (no pytest, no real network/file I/O, no real token file ever touched).
+
 ```bash
-python dhan/test_targets.py            # Profit targets, OCO short stop-loss, every exit-reason branch
-python dhan/test_uc_staged_entry.py    # Case A/B qualification, legs, tie-break, capital snapshot, 3:21 priority
-python dhan/test_auth_renew.py         # Token renewal: success, renew failure, verify failure, GET-not-POST
+python dhan/test/test_all.py           # runs all 7 below, one consolidated pass/fail report
+python dhan/test/test_all.py -v        #   ...same, but streams every file's full output live
+
+python dhan/test/test_targets.py             # Profit targets, OCO short stop-loss, every exit-reason branch
+python dhan/test/test_uc_staged_entry.py     # Case A/B qualification, legs, tie-break, capital snapshot, 3:21 priority
+python dhan/test/test_auth_renew.py          # Token renewal: success, renew failure, verify failure, GET-not-POST
+python dhan/test/test_batch_concurrency.py   # Wave-based batching, OCO status resolution from one Order Book snapshot
+python dhan/test/test_parallel_orders.py     # RateLimiter sliding window, entry/exit parallel-phase timing
+python dhan/test/test_exit_stage_timing.py   # 925/1159/239's :50-prep / :00-fire staging holds
+python dhan/test/test_order_update_feed.py   # Order Update WebSocket shadow-mode validation layer
 ```
 
-All three are standalone, fully mocked (no pytest, no real network/file I/O, no real token file ever touched).
+`test_all.py` runs each file as its own fresh subprocess rather than importing them together — several files apply process-wide mocks at import time that are only safe in isolation (see `test_all.py`'s own docstring).
 
 ---
 
@@ -715,7 +724,7 @@ python dhan/run_trades.py --exit-1159
 python dhan/run_trades.py --square-off-239
 
 # Self-test (mocked, no real orders)
-python dhan/test_targets.py
+python dhan/test/test_all.py
 ```
 
 ### Trade Book
@@ -813,13 +822,15 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 | 8:00 AM & 8:00 PM (every day) | `0 8,20 * * *` | `python -m dhan.auth --renew` — access-token auto-renewal (see [Auth](#auth-automated-daily-renewal-manual-fallback)) |
 | 9:13 AM | `10 9 * * 1-5` | `scripts/run_dhan_live_monitor.sh` |
 | 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
-| 9:25 AM | `25 9 * * 1-5` | `dhan/run_trades.py --exit-925` |
-| 11:59 AM | `59 11 * * 1-5` | `dhan/run_trades.py --exit-1159` |
-| 2:39 PM | `39 14 * * 1-5` | `dhan/run_trades.py --square-off-239` |
+| 9:24 AM | `24 9 * * 1-5` | `dhan/run_trades.py --exit-925` — one minute earlier than the actual decision point; the script itself holds internally at 09:24:50 (prep) and 09:25:00 (fire) — see the note below the table |
+| 11:58 AM | `58 11 * * 1-5` | `dhan/run_trades.py --exit-1159` — holds internally at 11:58:50 (prep) and 11:59:00 (fire) |
+| 2:38 PM | `38 14 * * 1-5` | `dhan/run_trades.py --square-off-239` — holds internally at 14:38:50 (prep) and 14:39:00 (fire) |
 | 3:21 PM | `21 15 * * 1-5` | `dhan/run_trades.py --entry` |
 | 3:40 PM | `40 15 * * 1-5` | `pkill -f 'dhan\.live_monitor'` |
 
 > The token-renewal job runs **every day of the week**, not just Mon–Fri (see [Auth](#auth-automated-daily-renewal-manual-fallback) for why). Every other Dhan cron line stays Mon–Fri only. UC-based staged entry (`--enable-uc-staged-entry`) is **not** in any cron line above — `scripts/run_dhan_live_monitor.sh` still launches plain `python3.11 -u -m dhan.live_monitor` with no flags; the feature is tested manually (see [UC-Based Staged Entry](#uc-based-staged-entry-case-ab--off-by-default)) until explicitly wired in.
+>
+> **`--exit-925`/`--exit-1159`/`--square-off-239` cron times moved one minute earlier** (was 9:25/11:59/2:39) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). The stage names/flags/position-file field names (`exit_925`, `exit_1159`, `square_off_239`) are unchanged — only the cron trigger time and internal timing moved, not the decision logic itself.
 
 ---
 
