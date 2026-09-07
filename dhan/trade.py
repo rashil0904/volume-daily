@@ -239,13 +239,19 @@ def place_order(
     validity: str    = "DAY",
     tag: str         = "",          # correlationId, max 30 chars
     disclosed_pct: float = 0.20,    # fraction of quantity shown on the book (LIMIT only); rest hidden
+    after_market_order: bool = False,  # AMO -- queues for the NEXT session instead of NOW
+    amo_time: str    = "OPEN",      # PRE_OPEN | OPEN | OPEN_30 | OPEN_60 -- only used when after_market_order
     dry_run: bool    = False,       # print payload only, no real order
 ) -> str:
     """
     Places an order and returns the orderId.
     Pass dry_run=True to validate params and print the payload without sending.
     Raises RuntimeError on failure with the exact error from Dhan.
-    """
+
+    after_market_order=True places an AMO instead of a regular order -- valid
+    outside NSE's 9:15-15:30 trading window, held by Dhan and released into
+    the order book at the next session's amo_time slot rather than sent to
+    the exchange immediately."""
     transaction_type = transaction_type.upper()
     exchange_segment = exchange_segment.upper()
     order_type       = order_type.upper()
@@ -280,6 +286,9 @@ def place_order(
     }
     if tag:
         payload["correlationId"] = tag[:30]
+    if after_market_order:
+        payload["afterMarketOrder"] = True
+        payload["amoTime"]          = amo_time
 
     if dry_run:
         print("[trade] ── DRY RUN — no real order placed ──────────────────")

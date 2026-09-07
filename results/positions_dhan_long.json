@@ -18,7 +18,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623472+05:30",
     "realized_return_pct": 0.6605,
     "realized_pnl": 1650.92,
-    "exit_note": "9:25 no-data fallback sold 269 @ ₹466.2611; remainder 270 manually sold @ ₹467.2896 (order 221260819155809)"
+    "exit_note": "9:25 no-data fallback sold 269 @ \u20b9466.2611; remainder 270 manually sold @ \u20b9467.2896 (order 221260819155809)"
   },
   {
     "broker": "dhan",
@@ -39,7 +39,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623514+05:30",
     "realized_return_pct": 2.1309,
     "realized_pnl": 2660.3,
-    "exit_note": "9:25 no-data fallback sold 102 @ ₹624.6000; remainder 102 manually sold @ ₹625.4426 (order 241260819164809)"
+    "exit_note": "9:25 no-data fallback sold 102 @ \u20b9624.6000; remainder 102 manually sold @ \u20b9625.4426 (order 241260819164809)"
   },
   {
     "broker": "dhan",
@@ -60,7 +60,7 @@
     "exit_timestamp_925": "2026-08-19T18:06:09.199095+05:30",
     "realized_return_pct": -0.7024,
     "realized_pnl": -1755.86,
-    "exit_note": "9:25 no-data fallback sold 192 @ ₹656.5651; remainder 192 manually sold @ ₹636.2896 (order 321260819458209)"
+    "exit_note": "9:25 no-data fallback sold 192 @ \u20b9656.5651; remainder 192 manually sold @ \u20b9636.2896 (order 321260819458209)"
   },
   {
     "broker": "dhan",
@@ -100,7 +100,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623531+05:30",
     "realized_return_pct": 1.0596,
     "realized_pnl": 2644.35,
-    "exit_note": "9:25 no-data fallback sold 643 @ ₹195.2740; remainder 644 manually sold @ ₹196.6343 (order 33126081991909)"
+    "exit_note": "9:25 no-data fallback sold 643 @ \u20b9195.2740; remainder 644 manually sold @ \u20b9196.6343 (order 33126081991909)"
   },
   {
     "broker": "dhan",
@@ -1079,11 +1079,12 @@
     "product": "MTF",
     "target_order_id": "23126090711309",
     "target_price": 29.51,
-    "exit_price_1159": 25.2263,
+    "exit_price_1159": 24.6576,
     "exit_order_id_1159": "23126090735009",
-    "exit_timestamp_1159": "2026-09-07T11:59:20.794127+05:30",
-    "realized_return_pct": 0.0,
-    "realized_pnl": 0.0
+    "exit_timestamp_1159": "2026-09-07T12:15:18+05:30",
+    "realized_return_pct": -2.2546,
+    "realized_pnl": -7914.68,
+    "exit_note": "Wave 1 force-exit sell (order 23126090735009) was still PART_TRADED (3670/13916 @ 24.678638) when _poll_fill_safe gave up after its 12s window and used fallback values (entry fill price, full qty) -- the order kept filling for real and was fully TRADED 13916/13916 @ 24.657553 at 12:15:18 (confirmed via live order-book lookup 2026-09-07). Manually corrected exit price/timestamp/P&L to the real fill; originally recorded as a phantom breakeven (24.6576==entry fill, pnl=0.00)."
   },
   {
     "broker": "dhan",
@@ -1149,5 +1150,19 @@
     "status": "open",
     "entry_timestamp": "2026-09-07T15:21:04.743669+05:30",
     "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "RML",
+    "entry_date": "2026-09-07",
+    "reference_price": 1396.0,
+    "shares_intended": 167,
+    "actual_fill_price": 1397.9,
+    "actual_fill_quantity": 167,
+    "entry_order_id": "211260907540809",
+    "status": "open",
+    "entry_timestamp": "2026-09-07T15:27:17+05:30",
+    "product": "CNC",
+    "entry_note": "Automated 3:21pm MTF entry (order 34126090769609) was rejected by RMS -- 'Buy back is not allowed for delivery positions. To buy back shares, please convert position to Intraday.' (RML had a same-day short-cover round-trip earlier via the 9:25 exit's mirrored short, squared off at 2:39pm). User placed this CNC buy manually at 15:27; reconciled here so 9:15/9:25/11:59 pick it up like any other open position."
   }
 ]

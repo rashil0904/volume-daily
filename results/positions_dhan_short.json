@@ -1018,7 +1018,7 @@
     "product": "INTRADAY",
     "source_exit_stage": "1159",
     "entry_date": "2026-09-07",
-    "entry_price": 24.77,
+    "entry_price": 24.65,
     "quantity": 13916,
     "entry_order_id": "34126090734409",
     "cover_target_order_id": "321260907507509",
@@ -1027,11 +1027,12 @@
     "stop_trigger_price": 30.18,
     "stop_limit_price": 30.33,
     "status": "short_closed",
-    "entry_timestamp": "2026-09-07T11:59:35.462602+05:30",
+    "entry_timestamp": "2026-09-07T12:15:18+05:30",
     "exit_price_239": 25.2993,
     "exit_order_id_239": "321260907714409",
     "exit_timestamp_239": "2026-09-07T14:39:09.679387+05:30",
-    "realized_return_pct": -2.1368,
-    "realized_pnl": -7365.38
+    "realized_return_pct": -2.6341,
+    "realized_pnl": -9035.66,
+    "entry_note": "Wave 2 short-open sell (order 34126090734409) was still PENDING when _poll_fill_safe gave up after its 12s window and used fallback values (the long exit's sell_limit price, full qty) -- the order kept filling for real and was fully TRADED 13916/13916 @ 24.65 at 12:15:18 (confirmed via live order-book lookup 2026-09-07). Manually corrected entry price/timestamp/P&L to the real fill (was recorded as 24.77)."
   }
 ]

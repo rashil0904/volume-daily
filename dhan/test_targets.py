@@ -68,6 +68,13 @@ patch.object(rt, "_save_uc_cache", lambda circuits: None).start()
 # before, instead of reading whatever's in the REAL results/dhan_uc_cache.json.
 patch.object(rt, "_load_uc_cache", lambda: {}).start()
 
+# place_targets_915() now starts with _reconcile_amo_fills(), which reads the
+# REAL results/dhan_amo_pending.json and, if it has any placed entries, makes
+# a REAL _dhan_order_status() network call to check them. Empty today, but
+# forced empty here regardless so this suite never depends on -- or would
+# start making live calls because of -- real operational state on disk.
+patch.object(rt, "_load_amo_pending", lambda: []).start()
+
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 failures = 0

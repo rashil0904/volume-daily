@@ -9,6 +9,7 @@ data/instruments/dhan_scrip_master.csv
 
 # Per-day operational state (regenerated fresh each trading day)
 results/dhan_uc_cache.json
+results/dhan_amo_pending.json
 
 
 # Python cache
