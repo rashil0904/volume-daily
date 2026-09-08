@@ -1115,11 +1115,16 @@
     "actual_fill_price": 114.89,
     "actual_fill_quantity": 1019,
     "entry_order_id": "23126090769809",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-07T15:21:02.550543+05:30",
     "product": "CNC",
     "target_order_id": "23126090811309",
-    "target_price": 134.42
+    "target_price": 134.42,
+    "exit_price_1159": 107.5603,
+    "exit_order_id_1159": "321260908416309",
+    "exit_timestamp_1159": "2026-09-08T11:59:35.754706+05:30",
+    "realized_return_pct": -6.3798,
+    "realized_pnl": -7468.99
   },
   {
     "broker": "dhan",
@@ -1150,11 +1155,16 @@
     "actual_fill_price": 1174.901,
     "actual_fill_quantity": 198,
     "entry_order_id": "23126090769709",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-07T15:21:04.015185+05:30",
     "product": "MTF",
     "target_order_id": "34126090811409",
-    "target_price": 1374.6
+    "target_price": 1374.6,
+    "exit_price_1159": 1155.7843,
+    "exit_order_id_1159": "23126090834409",
+    "exit_timestamp_1159": "2026-09-08T11:59:36.823566+05:30",
+    "realized_return_pct": -1.6271,
+    "realized_pnl": -3785.11
   },
   {
     "broker": "dhan",
@@ -1165,11 +1175,16 @@
     "actual_fill_price": 433.5513,
     "actual_fill_quantity": 538,
     "entry_order_id": "321260907804109",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-07T15:21:04.743669+05:30",
     "product": "MTF",
     "target_order_id": "34126090811509",
-    "target_price": 507.25
+    "target_price": 507.25,
+    "exit_price_1159": 424.0808,
+    "exit_order_id_1159": "34126090836709",
+    "exit_timestamp_1159": "2026-09-08T11:59:37.504246+05:30",
+    "realized_return_pct": -2.1844,
+    "realized_pnl": -5095.11
   },
   {
     "broker": "dhan",
@@ -1186,5 +1201,70 @@
     "entry_note": "Automated 3:21pm MTF entry (order 34126090769609) was rejected by RMS -- 'Buy back is not allowed for delivery positions. To buy back shares, please convert position to Intraday.' (RML had a same-day short-cover round-trip earlier via the 9:25 exit's mirrored short, squared off at 2:39pm). User placed this CNC buy manually at 15:27; reconciled here so 9:15/9:25/11:59 pick it up like any other open position.",
     "target_order_id": "34126090811709",
     "target_price": 1635.5
+  },
+  {
+    "broker": "dhan",
+    "symbol": "ANTELOPUS",
+    "entry_date": "2026-09-08",
+    "reference_price": 1097.05,
+    "shares_intended": 91,
+    "actual_fill_price": 1102.5764,
+    "actual_fill_quantity": 91,
+    "entry_order_id": "34126090862909",
+    "status": "open",
+    "entry_timestamp": "2026-09-08T15:21:15.082502+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "BCG",
+    "entry_date": "2026-09-08",
+    "reference_price": 10.56,
+    "shares_intended": 9469,
+    "actual_fill_price": 10.548,
+    "actual_fill_quantity": 9469,
+    "entry_order_id": "221260908659309",
+    "status": "open",
+    "entry_timestamp": "2026-09-08T15:21:15.999822+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "NOVARTIND",
+    "entry_date": "2026-09-08",
+    "reference_price": 1823.4,
+    "shares_intended": 54,
+    "actual_fill_price": 1830.287,
+    "actual_fill_quantity": 54,
+    "entry_order_id": "34126090863109",
+    "status": "open",
+    "entry_timestamp": "2026-09-08T15:21:17.715476+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SYMPHONY",
+    "entry_date": "2026-09-08",
+    "reference_price": 617.2,
+    "shares_intended": 324,
+    "actual_fill_price": 614.0,
+    "actual_fill_quantity": 324,
+    "entry_order_id": "23126090859209",
+    "status": "open",
+    "entry_timestamp": "2026-09-08T15:21:18.477369+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "VENUSPIPES",
+    "entry_date": "2026-09-08",
+    "reference_price": 1953.0,
+    "shares_intended": 102,
+    "actual_fill_price": 1954.9,
+    "actual_fill_quantity": 102,
+    "entry_order_id": "23126090859309",
+    "status": "open",
+    "entry_timestamp": "2026-09-08T15:21:19.199310+05:30",
+    "product": "MTF"
   }
 ]
