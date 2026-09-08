@@ -1544,8 +1544,8 @@ check("(safe-4) returns the original order_id", result_s4 == "ORD-MTF", result_s
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (safe-5) — _sell_margin_safe: CNC/INTRADAY sells are never "
-      "status-checked or retried -- no known ledger-lag quirk for them\n")
+print("\nScenario (safe-5) — _sell_margin_safe: INTRADAY sells are never "
+      "status-checked or retried -- no known ledger-lag quirk for same-day positions\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 sell_calls_s5 = []
@@ -1554,21 +1554,75 @@ def fake_sell_s5(sym, exch, qty, **kw):
     return f"ORD-{kw.get('product')}"
 
 def fail_if_called_s5(oid):
-    raise AssertionError("_dhan_order_status must not be called for CNC/INTRADAY")
+    raise AssertionError("_dhan_order_status must not be called for INTRADAY")
 
 with patch.object(rt, "sell", fake_sell_s5), \
      patch.object(rt, "_dhan_order_status", fail_if_called_s5), \
      patch.object(rt.time, "sleep", lambda secs: (_ for _ in ()).throw(
-         AssertionError("must not sleep for CNC/INTRADAY -- no retry path taken"))):
-    result_s5_cnc = rt._sell_margin_safe("TARSONS", "NSE_EQ", 3, 350.0, "CNC", dry_run=False)
+         AssertionError("must not sleep for INTRADAY -- no retry path taken"))):
     result_s5_intraday = rt._sell_margin_safe("SIGMA", "NSE_EQ", 10, 200.0, "INTRADAY", dry_run=False)
 
-check("(safe-5) CNC sell returns immediately, no status check, no sleep",
-      result_s5_cnc == "ORD-CNC")
 check("(safe-5) INTRADAY sell returns immediately, no status check, no sleep",
       result_s5_intraday == "ORD-INTRADAY")
-check("(safe-5) exactly the two original orders placed, nothing retried",
-      sell_calls_s5 == [("TARSONS", "CNC"), ("SIGMA", "INTRADAY")], str(sell_calls_s5))
+check("(safe-5) exactly the one original order placed, nothing retried",
+      sell_calls_s5 == [("SIGMA", "INTRADAY")], str(sell_calls_s5))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (safe-6) — _sell_margin_safe: CNC rejected with the settlement-lag "
+      "message -> waits 30s, retries as CNC again (confirmed live 2026-09-08, RML)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sell_calls_s6 = []
+def fake_sell_s6(sym, exch, qty, **kw):
+    sell_calls_s6.append((sym, kw.get("product")))
+    return f"ORD-{kw.get('product')}"
+
+def fake_order_status_s6(oid):
+    return {"orderStatus": "REJECTED",
+            "omsErrorDescription": "RMS:34126090811709:You are trying to sell more "
+                                   "than the quantity you currently hold."}
+
+sleep_calls_s6 = []
+def fake_sleep_s6(secs):
+    sleep_calls_s6.append(secs)
+
+with patch.object(rt, "sell", fake_sell_s6), \
+     patch.object(rt, "_dhan_order_status", fake_order_status_s6), \
+     patch.object(rt.time, "sleep", fake_sleep_s6):
+    result_s6 = rt._sell_margin_safe("RML", "NSE_EQ", 167, 1635.5, "CNC", dry_run=False)
+
+check("(safe-6) CNC order placed first, then a CNC retry",
+      sell_calls_s6 == [("RML", "CNC"), ("RML", "CNC")], str(sell_calls_s6))
+check("(safe-6) returns the retry's order_id", result_s6 == "ORD-CNC", result_s6)
+check("(safe-6) waited 30s before the retry (after the initial 2s status-check wait)",
+      sleep_calls_s6 == [2, 30], str(sleep_calls_s6))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (safe-7) — _sell_margin_safe: CNC rejected for an UNRELATED reason "
+      "(circuit limit) -> does NOT retry -- specificity guard\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sell_calls_s7 = []
+def fake_sell_s7(sym, exch, qty, **kw):
+    sell_calls_s7.append((sym, kw.get("product")))
+    return f"ORD-{kw.get('product')}"
+
+def fake_order_status_s7(oid):
+    return {"orderStatus": "REJECTED",
+            "omsErrorDescription": "Rate Not Within Ckt Limit 309.55 To 464.25"}
+
+with patch.object(rt, "sell", fake_sell_s7), \
+     patch.object(rt, "_dhan_order_status", fake_order_status_s7), \
+     patch.object(rt.time, "sleep", lambda secs: None):
+    result_s7 = rt._sell_margin_safe("DOLPHIN", "NSE_EQ", 5, 400.0, "CNC", dry_run=False)
+
+check("(safe-7) only ONE sell attempted -- a circuit-limit rejection isn't the "
+      "settlement-lag pattern, so no pointless retry", sell_calls_s7 == [("DOLPHIN", "CNC")],
+      str(sell_calls_s7))
+check("(safe-7) returns the ORIGINAL (rejected) order_id, not a fabricated retry",
+      result_s7 == "ORD-CNC", result_s7)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

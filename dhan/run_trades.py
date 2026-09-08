@@ -355,17 +355,31 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
         unconditionally, by the 11:59am force exit -- the real safety net
         for whatever this 30s retry doesn't catch.
 
-    Gated on the SPECIFIC rejection text for MTF (unlike MARGIN, which
-    retries on any REJECTED/CANCELLED) -- an MTF sell can also legitimately
-    fail for unrelated reasons (e.g. a circuit-limit breach), and blindly
+      - product == "CNC": the SAME "...You are trying to sell more than the
+        quantity you currently hold" text, confirmed live 2026-09-08 (RML's
+        9:15am target sell -- entered CNC the prior afternoon at 15:27,
+        rejected the next morning). No pledge is involved for a plain CNC
+        holding, so this is the T+1 settlement/reporting-lag version of the
+        same root cause rather than the pledge-linkage one: the position was
+        bought too recently for Dhan's real-time RMS holdings check to have
+        caught up yet. Retries as CNC again after the same 30s wait, for the
+        same reason the MTF branch doesn't switch products -- there's no
+        other product this could route through anyway (a genuine CNC
+        holding, not MTF-collateralized), so waiting for the same account
+        to self-reconcile is the only lever available.
+
+    Gated on the SPECIFIC rejection text for MTF/CNC (unlike MARGIN, which
+    retries on any REJECTED/CANCELLED) -- a sell can also legitimately fail
+    for unrelated reasons (e.g. a circuit-limit breach), and blindly
     retrying THOSE would be pointless and could mask a real issue.
 
     Returns the order_id actually used (original, or the retry's). Not used
-    for CNC/INTRADAY sells -- no known ledger-lag quirk there, and a blind
-    retry could mask a real problem."""
+    for INTRADAY sells -- no known ledger-lag quirk there (same-day
+    positions were never subject to a settlement/pledge lag in the first
+    place), and a blind retry could mask a real problem."""
     order_id = sell(sym, exch, qty, order_type=order_type, price=price,
                     product=product, dry_run=dry_run)
-    if dry_run or product not in ("MARGIN", "MTF"):
+    if dry_run or product not in ("MARGIN", "MTF", "CNC"):
         return order_id
     time.sleep(2)
     try:
@@ -379,14 +393,15 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
         return sell(sym, exch, qty, order_type=order_type, price=price,
                    product="CNC", dry_run=dry_run)
 
-    if product == "MTF" and status in ("REJECTED", "CANCELLED"):
+    if product in ("MTF", "CNC") and status in ("REJECTED", "CANCELLED"):
         reason = (o.get("omsErrorDescription") or "").lower()
         if "trying to sell more than" in reason:
-            print(f"[dhan]   MTF SELL REJECTED (pledge-ledger lag) — waiting 30s "
-                  f"then retrying as MTF again (CNC would hit the same pledge block).")
+            lag_kind = "pledge-ledger lag" if product == "MTF" else "settlement lag"
+            print(f"[dhan]   {product} SELL REJECTED ({lag_kind}) — waiting 30s "
+                  f"then retrying as {product} again.")
             time.sleep(30)
             return sell(sym, exch, qty, order_type=order_type, price=price,
-                       product="MTF", dry_run=dry_run)
+                       product=product, dry_run=dry_run)
 
     return order_id
 

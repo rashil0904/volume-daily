@@ -322,10 +322,12 @@ def make_long(sym, **overrides):
         "actual_fill_price": 100.0, "actual_fill_quantity": 10,
         "entry_order_id": f"E-{sym}", "status": "open",
         "entry_timestamp": "2026-08-25T15:21:00+05:30",
-        # CNC: _sell_margin_safe returns immediately after sell() for this
-        # product (no 2s status-check wait, no retry path) -- keeps this
-        # timing test isolated to the parallel sell() calls themselves,
-        # exactly the same reasoning as test_targets.py's scenario (safe-5).
+        # CNC: _sell_margin_safe now also does a post-sell status check for
+        # this product (confirmed live 2026-09-08, RML -- see test_targets.py
+        # scenarios safe-6/safe-7), so this test mocks _dhan_order_status to
+        # TRADED below to keep that check fast and side-effect-free; the
+        # real 2s pre-check wait still genuinely happens (unmocked -- it uses
+        # the real time module) and is accounted for in expected_ceiling.
         "product": "CNC",
     }
     row.update(overrides)
@@ -358,6 +360,7 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "sell", side_effect=fake_sell), \
+         patch.object(rt, "_dhan_order_status", lambda oid: {"orderStatus": "TRADED"}), \
          patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -378,8 +381,12 @@ def test_exit_parallel_timing_and_resilience():
     # between chunks in EACH wave now (two separate re-chunked passes, not
     # one flat per-position cascade anymore -- see the wave-based redesign).
     # _open_short_place is mocked to return None (no shorts open), so Wave 3
-    # never runs and adds no further delay.
-    expected_ceiling = 2 * _CALL_DELAY + 2 * rt.BATCH_SLEEP_SECONDS + 1.0
+    # never runs and adds no further delay. +2s per Wave-1 chunk (2 chunks)
+    # for _sell_margin_safe's real, unmocked post-sell status-check wait --
+    # genuinely happens concurrently within each chunk, not per-symbol, but
+    # budgeted per-chunk here rather than trying to defeat the real time
+    # module (see make_long's comment on why this is now unmocked).
+    expected_ceiling = 2 * _CALL_DELAY + 2 * rt.BATCH_SLEEP_SECONDS + 2 * 2.0 + 1.0
     check(f"8-symbol exit batch, chunked at {rt.MAX_ORDER_CALLS_PER_SECOND}, "
           f"completes well under 8x{_CALL_DELAY}s sequential time",
           elapsed < expected_ceiling,
