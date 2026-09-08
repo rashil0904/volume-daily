@@ -2855,10 +2855,18 @@ if __name__ == "__main__":
     # process, cache read from results/order_update_cache.json). Purely
     # observational: does NOT change order execution behavior. Never allowed
     # to block a real trading run -- see FileBackedOrderCache's own
-    # crash-safety on a torn read of that file.
+    # crash-safety on a torn read of that file. target_module=sys.modules
+    # [__name__] is required here, not optional -- this script is invoked
+    # directly by cron (python3.11 dhan/run_trades.py ...), so it runs as
+    # sys.modules["__main__"], a SEPARATE module object from what a plain
+    # `import dhan.run_trades` would return from inside enable_validation_
+    # logging. Patching that separate copy has zero effect on the functions
+    # check_exit_925/force_exit_1159/etc. actually call -- confirmed live
+    # 2026-09-08/09 this silently no-opped in every cron-triggered run since
+    # Phase 1 was wired in (see enable_validation_logging's own docstring).
     try:
         from dhan.order_update_feed import FileBackedOrderCache, enable_validation_logging
-        enable_validation_logging(FileBackedOrderCache())
+        enable_validation_logging(FileBackedOrderCache(), target_module=sys.modules[__name__])
     except Exception as exc:
         print(f"[dhan]   !! shadow-mode validation logging failed to enable: {exc} "
               f"(non-fatal -- continuing without it)", file=sys.stderr)
@@ -2878,3 +2886,14 @@ if __name__ == "__main__":
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Best-effort final flush of any still-in-flight [WS_VALIDATION]
+    # comparison threads (see join_pending_validations' own docstring) --
+    # runs AFTER all real trading work above is already done, so the bounded
+    # wait here costs nothing real. Wrapped so a logging-only problem can
+    # never fail or delay a real trading run's exit status.
+    try:
+        from dhan.order_update_feed import join_pending_validations
+        join_pending_validations()
+    except Exception:
+        pass

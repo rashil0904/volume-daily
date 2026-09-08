@@ -336,6 +336,164 @@ def test_enable_validation_logging_restore():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# [5] _pending_validation_threads / join_pending_validations (Fix B)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_pending_threads_tracked_and_joined():
+    print("\n[5] _pending_validation_threads / join_pending_validations -- threads are "
+          "tracked and actually waited on, not lost to daemon-thread teardown")
+
+    class FakeModule:
+        pass
+    fake_module = FakeModule()
+    fake_module._poll_fill_strict = lambda oid: (100.0, 10, False, "")
+    fake_module._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+
+    feed = ouf.OrderUpdateFeed("CID", "TOKEN")
+    # No cache entry for this order_id -- forces the deferred thread to run
+    # out its full grace window before concluding WEBSOCKET_MISSED, giving
+    # this test real, measurable in-flight thread work to check
+    # join_pending_validations against (rather than a thread that's already
+    # finished by the time we check it).
+    with patch.object(ouf, "_VALIDATION_GRACE_SECONDS", 0.3), \
+         patch.object(ouf, "_VALIDATION_POLL_INTERVAL", 0.02), \
+         patch.object(ouf, "_pending_validation_threads", []):
+        restore = ouf.enable_validation_logging(feed, target_module=fake_module)
+        try:
+            result = fake_module._poll_fill_strict("PENDTEST")
+            check("(5) wrapped call still returns the real result unchanged",
+                  result == (100.0, 10, False, ""), str(result))
+
+            with ouf._pending_lock:
+                pending_snapshot = list(ouf._pending_validation_threads)
+            check("(5) the validation thread was appended to _pending_validation_threads",
+                  len(pending_snapshot) == 1, str(pending_snapshot))
+            check("(5) the tracked thread is genuinely still alive right after the call "
+                  "(so join_pending_validations below has real work to wait for)",
+                  pending_snapshot[0].is_alive(), "thread already finished before check")
+
+            start = time.monotonic()
+            ouf.join_pending_validations(timeout=2.0)
+            elapsed = time.monotonic() - start
+
+            check("(5) join_pending_validations waited for the thread to actually finish",
+                  not pending_snapshot[0].is_alive(), "thread still alive after join")
+            check("(5) it did NOT return early -- elapsed roughly matches the thread's own "
+                  "grace window, not near-zero",
+                  elapsed >= 0.25, f"elapsed={elapsed:.3f}s (expected >= ~0.3s grace window)")
+        finally:
+            restore()
+
+
+def test_join_pending_validations_bounded_by_timeout():
+    print("\n[5b] join_pending_validations -- bounded by its own timeout, never hangs "
+          "on a stuck thread")
+
+    class FakeModule:
+        pass
+    fake_module = FakeModule()
+    fake_module._poll_fill_strict = lambda oid: (100.0, 10, False, "")
+    fake_module._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+
+    feed = ouf.OrderUpdateFeed("CID", "TOKEN")
+    with patch.object(ouf, "_VALIDATION_GRACE_SECONDS", 10.0), \
+         patch.object(ouf, "_VALIDATION_POLL_INTERVAL", 0.02), \
+         patch.object(ouf, "_pending_validation_threads", []):
+        restore = ouf.enable_validation_logging(feed, target_module=fake_module)
+        try:
+            fake_module._poll_fill_strict("SLOWTEST")   # spawns a thread with a 10s grace window
+            start = time.monotonic()
+            ouf.join_pending_validations(timeout=0.2)
+            elapsed = time.monotonic() - start
+            check("(5b) returns close to its own timeout, not the thread's much longer grace window",
+                  elapsed < 1.0, f"elapsed={elapsed:.3f}s")
+        finally:
+            restore()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# [3f] target_module -- the actual module-identity bug (Fix A), tested directly
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_target_module_patches_the_actually_running_module():
+    print("\n[3f] enable_validation_logging(target_module=sys.modules[__name__]) patches "
+          "the ACTUAL running module, not a separately-imported copy -- this is the exact "
+          "bug that made every cron-triggered run_trades.py invocation silently no-op")
+
+    # sys.modules["__main__"] here IS this test file's own module object -- a real,
+    # already-loaded module, not a mock -- which is exactly the situation
+    # run_trades.py is in when cron runs `python3.11 dhan/run_trades.py ...`
+    # directly (loaded as sys.modules["__main__"], NOT as sys.modules["dhan.run_trades"]).
+    main_mod = sys.modules["__main__"]
+
+    def fake_poll_fill_strict(order_id):
+        return (0.0, 0, True, "REJECTED")
+
+    had_strict = hasattr(main_mod, "_poll_fill_strict")
+    had_safe   = hasattr(main_mod, "_poll_fill_safe")
+    orig_strict = getattr(main_mod, "_poll_fill_strict", None)
+    orig_safe   = getattr(main_mod, "_poll_fill_safe", None)
+
+    # Simulate run_trades.py's own top-level _poll_fill_strict/_poll_fill_safe --
+    # functions defined directly in the module that's executing as __main__.
+    main_mod._poll_fill_strict = fake_poll_fill_strict
+    main_mod._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+
+    feed = ouf.OrderUpdateFeed("CID", "TOKEN")
+    printed = []
+    real_print = print
+    def spy_print(*a, **kw):
+        printed.append(" ".join(str(x) for x in a))
+        real_print(*a, **kw)
+
+    try:
+        with patch("builtins.print", spy_print):
+            # This is the exact call run_trades.py's __main__ block now makes:
+            # enable_validation_logging(FileBackedOrderCache(), target_module=sys.modules[__name__])
+            restore = ouf.enable_validation_logging(feed, target_module=main_mod)
+            try:
+                check("(3f) target_module's own _poll_fill_strict got wrapped in place",
+                      main_mod._poll_fill_strict is not fake_poll_fill_strict)
+
+                # Call it the way code DEFINED IN run_trades.py actually calls it --
+                # a bare global-name lookup (e.g. `_poll_fill_strict(order_id)` inside
+                # check_exit_925), which resolves via THIS module's own __dict__, not
+                # via any "rt." prefix.
+                result = main_mod._poll_fill_strict("SIM1")
+                check("(3f) calling it via the module's own namespace returns the real "
+                      "result unchanged", result == (0.0, 0, True, "REJECTED"), str(result))
+
+                line = next((l for l in printed if "[WS_VALIDATION]" in l and "SIM1" in l), None)
+                check("(3f) the wrapped call actually logged -- proves target_module was "
+                      "the one patched, not a phantom `import dhan.run_trades` copy that "
+                      "nothing calls",
+                      line is not None and "polling=NOT_FILLED" in line, str(printed))
+
+                # The failure mode this fixes: the OLD code (target_module=None, always
+                # `import dhan.run_trades as rt`) would have patched THIS object instead --
+                # confirm it's genuinely a different object from what got patched above,
+                # proving the old default would have missed every call made from a script
+                # executing as __main__.
+                check("(3f) a separately-imported dhan.run_trades module is a DIFFERENT "
+                      "object from target_module -- confirms why target_module=None would "
+                      "have patched the wrong thing here",
+                      rt is not main_mod)
+                check("(3f) ...and its own _poll_fill_strict was never touched by this call",
+                      rt._poll_fill_strict is not main_mod._poll_fill_strict)
+            finally:
+                restore()
+    finally:
+        if had_strict:
+            main_mod._poll_fill_strict = orig_strict
+        else:
+            delattr(main_mod, "_poll_fill_strict")
+        if had_safe:
+            main_mod._poll_fill_safe = orig_safe
+        else:
+            delattr(main_mod, "_poll_fill_safe")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # [4] FileBackedOrderCache
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -415,6 +573,9 @@ if __name__ == "__main__":
     test_validation_websocket_missed()
     test_validation_not_filled_logs_immediately()
     test_enable_validation_logging_restore()
+    test_target_module_patches_the_actually_running_module()
+    test_pending_threads_tracked_and_joined()
+    test_join_pending_validations_bounded_by_timeout()
     test_file_backed_cache_reads_persisted_data()
     test_file_backed_cache_torn_write()
 

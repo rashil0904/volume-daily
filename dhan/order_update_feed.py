@@ -64,6 +64,14 @@ _PERSIST_EVERY_SECONDS     = 5     # throttle for the periodic cache-file flush
 _VALIDATION_GRACE_SECONDS = 5.0
 _VALIDATION_POLL_INTERVAL = 0.25
 
+# Every validation-comparison thread enable_validation_logging spawns gets
+# tracked here so join_pending_validations() can give them a final, bounded
+# chance to finish at the end of a short-lived CLI run instead of being
+# silently killed by daemon-thread teardown when the process exits (see
+# join_pending_validations' own docstring).
+_pending_validation_threads: list[threading.Thread] = []
+_pending_lock = threading.Lock()
+
 
 class OrderUpdateFeed:
     """Independent WebSocket connection to Dhan's Live Order Update feed.
@@ -309,13 +317,72 @@ def _log_validation_deferred(feed: OrderUpdateFeed, order_id: str,
           f"delta_seconds={delta:+.3f} faster={faster}")
 
 
-def enable_validation_logging(feed: OrderUpdateFeed):
-    """Monkeypatches dhan.run_trades._poll_fill_strict/_poll_fill_safe with
-    pass-through wrappers that add a [WS_VALIDATION] log comparison as a
-    side effect, without touching dhan/run_trades.py's source or altering
-    either function's return value/timing as seen by their callers -- see
-    the module note above for exactly why the comparison itself runs off
-    the critical path in a background thread.
+def _spawn_validation_thread(feed: OrderUpdateFeed, order_id: str,
+                             poll_wall_after: datetime, poll_fn: str) -> None:
+    """Creates and starts one _log_validation_deferred thread, registering it
+    in _pending_validation_threads BEFORE starting it -- so a caller that
+    checks the list right after this returns can never race the thread's own
+    startup and see it missing."""
+    t = threading.Thread(target=_log_validation_deferred,
+                         args=(feed, order_id, poll_wall_after, poll_fn),
+                         daemon=True)
+    with _pending_lock:
+        _pending_validation_threads.append(t)
+    t.start()
+
+
+def join_pending_validations(timeout: float = _VALIDATION_GRACE_SECONDS + 1.0) -> None:
+    """Call ONCE, at the very end of a short-lived CLI run (see
+    run_trades.py's __main__), after all real trading work is already done.
+    Gives every still-in-flight validation-comparison thread a bounded
+    chance to finish and print its [WS_VALIDATION] line, instead of letting
+    normal daemon-thread teardown kill it silently mid-wait when the process
+    exits -- confirmed live 2026-09-08 that this silently dropped every
+    comparison for the day, not just a trailing few. Deliberately NOT called
+    mid-run (daemon=True stays -- see module note on never blocking a real
+    trading run); this only runs after the stage function has already
+    returned, when waiting up to `timeout` costs nothing real.
+
+    Bounded by a single shared deadline across ALL pending threads (not
+    `timeout` per thread) -- a run with several still-pending threads can't
+    make the process wait longer than `timeout` in total, it just gives
+    later threads in the list less of the remaining budget."""
+    deadline = time.monotonic() + timeout
+    with _pending_lock:
+        threads = list(_pending_validation_threads)
+    for t in threads:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        t.join(timeout=remaining)
+
+
+def enable_validation_logging(feed: OrderUpdateFeed, target_module=None):
+    """Monkeypatches _poll_fill_strict/_poll_fill_safe with pass-through
+    wrappers that add a [WS_VALIDATION] log comparison as a side effect,
+    without touching dhan/run_trades.py's source or altering either
+    function's return value/timing as seen by their callers -- see the
+    module note above for exactly why the comparison itself runs off the
+    critical path in a background thread.
+
+    target_module=None (the default) patches `dhan.run_trades` via a fresh
+    `import dhan.run_trades as rt` -- correct for live_monitor.py, which is
+    always run via `-m dhan.live_monitor` and so genuinely gets the one
+    canonical dhan.run_trades module object. It is WRONG for run_trades.py's
+    own __main__ block: when a file is executed directly
+    (`python3.11 dhan/run_trades.py ...`, which is how every cron entry
+    invokes it), Python loads that file as sys.modules["__main__"] -- a
+    SEPARATE module object from what `import dhan.run_trades` returns from
+    inside it, even though it's the exact same file on disk. Patching the
+    latter has zero effect on the former's own global names, which is what
+    check_exit_925/force_exit_1159/etc. actually call. Confirmed live
+    2026-09-08/09: this silently no-opped in EVERY cron-triggered
+    run_trades.py invocation since Phase 1 was wired in -- not one
+    [WS_VALIDATION] line, including the synchronous not-filled path, which
+    doesn't even depend on thread timing. run_trades.py's own __main__ now
+    passes target_module=sys.modules[__name__] (which IS sys.modules
+    ["__main__"] in that context) specifically to patch the module that's
+    actually executing.
 
     Returns a restore() callable that puts the two original functions back
     -- production code (live_monitor.py) can ignore it (this only ever gets
@@ -324,7 +391,10 @@ def enable_validation_logging(feed: OrderUpdateFeed):
 
     Call this ONCE per process, after `feed` has started connecting --
     calling it twice double-wraps and double-logs."""
-    import dhan.run_trades as rt
+    if target_module is None:
+        import dhan.run_trades as rt
+    else:
+        rt = target_module
 
     real_strict = rt._poll_fill_strict
     real_safe   = rt._poll_fill_safe
@@ -336,9 +406,7 @@ def enable_validation_logging(feed: OrderUpdateFeed):
         if qty <= 0:
             _log_not_filled(feed, order_id, "strict")
         else:
-            threading.Thread(target=_log_validation_deferred,
-                             args=(feed, order_id, poll_wall_after, "strict"),
-                             daemon=True).start()
+            _spawn_validation_thread(feed, order_id, poll_wall_after, "strict")
         return result
 
     def wrapped_safe(order_id, fallback_price, fallback_qty):
@@ -348,9 +416,7 @@ def enable_validation_logging(feed: OrderUpdateFeed):
         if qty <= 0:
             _log_not_filled(feed, order_id, "safe")
         else:
-            threading.Thread(target=_log_validation_deferred,
-                             args=(feed, order_id, poll_wall_after, "safe"),
-                             daemon=True).start()
+            _spawn_validation_thread(feed, order_id, poll_wall_after, "safe")
         return result
 
     rt._poll_fill_strict = wrapped_strict
