@@ -1034,5 +1034,41 @@
     "realized_return_pct": -2.6341,
     "realized_pnl": -9035.66,
     "entry_note": "Wave 2 short-open sell (order 34126090734409) was still PENDING when _poll_fill_safe gave up after its 12s window and used fallback values (the long exit's sell_limit price, full qty) -- the order kept filling for real and was fully TRADED 13916/13916 @ 24.65 at 12:15:18 (confirmed via live order-book lookup 2026-09-07). Manually corrected entry price/timestamp/P&L to the real fill (was recorded as 24.77)."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "CHEMPLASTS",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-09-08",
+    "entry_price": 184.8514,
+    "quantity": 1261,
+    "entry_order_id": "23126090817409",
+    "cover_target_order_id": "34126090817909",
+    "cover_target_price": 175.61,
+    "stop_order_id": "23126090817609",
+    "stop_trigger_price": 221.52,
+    "stop_limit_price": 222.63,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-08T09:25:10.519253+05:30"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "HIKAL",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "925",
+    "entry_date": "2026-09-08",
+    "entry_price": 250.9033,
+    "quantity": 959,
+    "entry_order_id": "23126090817509",
+    "cover_target_order_id": "221260908104809",
+    "cover_target_price": 238.36,
+    "stop_order_id": "34126090818009",
+    "stop_trigger_price": 290.14,
+    "stop_limit_price": 291.6,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-08T09:25:09.344497+05:30"
   }
 ]
