@@ -184,17 +184,26 @@ def _position_to_trade_row(position: dict) -> dict | None:
     }
 
 
-def _live_cost(position: dict) -> float | None:
+def _live_cost(position: dict, trade_index: dict[str, dict],
+               interest_index: dict[str, float]) -> float | None:
     """Real per-position charges -- brokerage/STT/exchange/SEBI/stamp/GST on
     the entry (and exit, once closed) leg, plus DP/pledge and MTF interest
-    where applicable -- fetched live via dhan.charges.position_charge_
-    summary(), which itself calls Dhan's trade-book API. Returns None on
-    ANY failure (expired token, Dhan API outage, no matching trade record
-    yet) rather than raising -- a None here means build_trade_log writes 0,
-    not a guessed/stale number, so a blank Costs cell always means "no live
-    charge data yet," never "possibly out of date"."""
+    where applicable -- via dhan.charges.position_charge_summary(), which
+    now prefers Dhan's actual figures over formula estimates wherever
+    that's actually possible: trade_index for entry/exit legs (Dhan's real
+    trade-book) and interest_index for MTF interest (a real-ledger-period
+    allocation, see mtf_interest_allocation_index) -- both built ONCE for
+    the whole run, see load_trades_from_positions. DP/pledge stay the fixed
+    estimate always -- Dhan's ledger only exposes those as one combined
+    daily total with no way to attribute it back to a single position (see
+    dhan.charges.dp_ledger_total's docstring). Returns None on ANY failure
+    (expired token, Dhan API outage) rather than raising -- a None here
+    means build_trade_log writes 0, not a guessed/stale number, so a blank
+    Costs cell always means "no charge data yet," never "possibly out of
+    date"."""
     try:
-        return dhan_charges.position_charge_summary(position)["total_charges"]
+        return dhan_charges.position_charge_summary(
+            position, trade_index, interest_index)["total_charges"]
     except Exception:
         return None
 
@@ -219,12 +228,27 @@ def load_trades_from_positions() -> list[dict]:
     side, rather than failing the whole sync."""
     positions = _load_json_list(DHAN_POSITIONS_LONG_PATH) + _load_json_list(DHAN_POSITIONS_SHORT_PATH)
 
+    # One trade-book fetch and one MTF-interest-allocation pass for the
+    # WHOLE run, not one per position -- see dhan.charges.charges_index and
+    # mtf_interest_allocation_index. Both fall back to {} (every leg/
+    # position then estimated) on an outright API/auth failure rather than
+    # raising -- a workbook sync shouldn't fail outright just because live
+    # charge data isn't reachable.
+    try:
+        trade_index = dhan_charges.charges_index(PNL_START_DATE)
+    except Exception:
+        trade_index = {}
+    try:
+        interest_index = dhan_charges.mtf_interest_allocation_index(positions, PNL_START_DATE)
+    except Exception:
+        interest_index = {}
+
     trades = []
     for pos in positions:
         row = _position_to_trade_row(pos)
         if row is None:
             continue
-        row["cost"] = _live_cost(pos)
+        row["cost"] = _live_cost(pos, trade_index, interest_index)
         trades.append(row)
 
     trades.sort(key=lambda t: (t["entry_date"], t["symbol"]))

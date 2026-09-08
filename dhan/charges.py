@@ -73,9 +73,10 @@ from datetime import date
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import re
 import json
 from zoneinfo import ZoneInfo
-from datetime import datetime
+from datetime import datetime, timedelta
 from dhan.auth import BASE_URL, get_session
 from dhan.trade import security_id
 
@@ -307,6 +308,58 @@ def trade_by_order_id_since(order_id: str, since_date_str: str) -> dict | None:
     return None
 
 
+def _aggregate_trade_records(trades: list[dict]) -> dict[str, dict]:
+    """Collapses get_trades()'s flat list into one order_id -> synthetic
+    trade dict, summing every charge field (and tradedQuantity) across ALL
+    trade records sharing that orderId -- an order can print as more than
+    one trade record on a partial/multi-price fill, and summing only the
+    first/last would silently under-report that order's real total charge.
+    tradedPrice on the synthetic record is a quantity-weighted average
+    (only used for display; charge fields are the real per-record sums, not
+    recomputed from this average)."""
+    by_order: dict[str, dict] = {}
+    for t in trades:
+        oid = t.get("orderId")
+        if not oid:
+            continue
+        agg = by_order.get(oid)
+        if agg is None:
+            agg = {k: t.get(k) for k in ("transactionType", "productType", "customSymbol")}
+            agg["tradedQuantity"] = 0
+            agg["_turnover"] = 0.0
+            for field, _ in _CHARGE_FIELDS:
+                agg[field] = 0.0
+            by_order[oid] = agg
+        qty = t.get("tradedQuantity", 0) or 0
+        price = t.get("tradedPrice", 0.0) or 0.0
+        agg["tradedQuantity"] += qty
+        agg["_turnover"] += qty * price
+        for field, _ in _CHARGE_FIELDS:
+            agg[field] += t.get(field, 0.0) or 0.0
+    for agg in by_order.values():
+        agg["tradedPrice"] = (agg["_turnover"] / agg["tradedQuantity"]) if agg["tradedQuantity"] else 0.0
+        del agg["_turnover"]
+    return by_order
+
+
+def charges_index(since_date: str, to_date: str | None = None) -> dict[str, dict]:
+    """Builds one order_id -> trade dict covering [since_date, to_date]
+    (to_date defaults to today), via a SINGLE get_trades() call -- the
+    caller-facing entry point for looking up many positions' real charges
+    without re-fetching the whole historical trade-book once per position
+    (see position_charge_summary's trade_index param). Returns {} on an
+    outright API failure rather than raising -- callers already treat a
+    missing order_id in this dict identically to "not found yet," so a
+    total outage just means everything falls back to the estimate, same as
+    any other gap in trade-book coverage (see _has_charge_fields)."""
+    to_date = to_date or datetime.now(_IST).date().isoformat()
+    try:
+        trades = get_trades(since_date, to_date)
+    except RuntimeError:
+        return {}
+    return _aggregate_trade_records(trades)
+
+
 def tracked_order_ids() -> set[str]:
     """Every order ID this pipeline placed, per both position files --
     not just entry_order_id. A position can carry up to 7 different
@@ -326,6 +379,74 @@ def tracked_order_ids() -> set[str]:
             if "order_id" in key and val:
                 ids.add(val)
     return ids
+
+
+_MTF_INTEREST_PERIOD_RE = re.compile(
+    r"MTF Interest for Period\s+(\d{2}/\d{2}/\d{4})\s+To\s+(\d{2}/\d{2}/\d{4})")
+
+
+def ledger_entries(from_date: str, to_date: str) -> list[dict]:
+    """Every ledger line in [from_date, to_date] (inclusive) via GET
+    /ledger -- real account-level debits/credits, dated by voucherdate
+    ("Mon DD, YYYY"). Unlike the trade-book, this is NOT per-order: DP
+    charges post as ONE combined daily total across every Sell/Pledge/
+    Unpledge that account had that day (confirmed live 2026-09-08 --
+    narration "DP Transaction Charges", voucherdesc "Charges for Sell /
+    Pledge / Unpledge in your Demat Account"), and MTF interest posts as
+    ONE total per multi-day billing period across every MTF position held
+    during it (narration "MTF Interest"), not per position. See
+    dp_ledger_total/mtf_interest_periods for what can and can't be safely
+    derived from this."""
+    session, _ = get_session()
+    resp = session.get(f"{BASE_URL}/ledger",
+                       params={"from-date": from_date, "to-date": to_date}, timeout=15)
+    if not resp.ok:
+        raise RuntimeError(f"[dhan] ledger fetch failed: {resp.text}")
+    return resp.json()
+
+
+def dp_ledger_total(from_date: str, to_date: str) -> float:
+    """Real total DP/pledge/unpledge charges actually billed in
+    [from_date, to_date] -- an AGGREGATE cross-check against the sum of
+    every position's fixed _DP_CHARGE/_MTF_PLEDGE_UNPLEDGE_CHARGE estimate
+    over the same range, not a per-position figure. Deliberately not wired
+    into position_charge_summary()'s per-position DP/pledge numbers: a
+    least-squares fit of real daily totals against each day's known
+    MTF-entry/CNC-entry/delivery-exit counts (14 real trading days,
+    2026-08-18 to 2026-09-07) did NOT converge to a clean per-event rate
+    (mean residual ~₹46, max ~₹127 against actual daily totals of
+    ₹59-₹357) -- confirming the daily lump sum can't be reliably split
+    back down to individual positions/events from the ledger alone. The
+    fixed per-position constants stay the estimate for that reason; this
+    function exists so the aggregate can still be checked against reality
+    (see dhan.charges CLI's --dp-check)."""
+    entries = ledger_entries(from_date, to_date)
+    return sum(float(e.get("debit", 0.0) or 0.0)
+              for e in entries if e.get("narration") == "DP Transaction Charges")
+
+
+def mtf_interest_periods(from_date: str, to_date: str) -> list[dict]:
+    """Real MTF interest billing periods in [from_date, to_date], parsed
+    from ledger voucherdesc strings like "MTF Interest for Period
+    01/09/2026 To 03/09/2026 Clt " -- returns
+    [{"period_from": date, "period_to": date, "amount": float}, ...].
+    Entries whose voucherdesc doesn't match the expected pattern are
+    skipped rather than raising (a format change should degrade to "no
+    real periods found, everything falls back to the formula estimate,"
+    not crash a whole report)."""
+    entries = ledger_entries(from_date, to_date)
+    periods = []
+    for e in entries:
+        if e.get("narration") != "MTF Interest":
+            continue
+        m = _MTF_INTEREST_PERIOD_RE.search(e.get("voucherdesc", ""))
+        if not m:
+            continue
+        period_from = datetime.strptime(m.group(1), "%d/%m/%Y").date()
+        period_to   = datetime.strptime(m.group(2), "%d/%m/%Y").date()
+        periods.append({"period_from": period_from, "period_to": period_to,
+                        "amount": float(e.get("debit", 0.0) or 0.0)})
+    return periods
 
 
 def mtf_daily_rate_pct(funded_amount: float) -> float:
@@ -370,6 +491,70 @@ def calendar_days_held(entry_date_str: str, as_of: date) -> int:
     return max((as_of - entry).days, 0)
 
 
+def mtf_interest_allocation_index(positions: list[dict], from_date: str,
+                                  to_date: str | None = None) -> dict[str, float]:
+    """entry_order_id -> real MTF interest allocated to that position, built
+    from real ledger billing periods (see mtf_interest_periods) rather than
+    the pure formula estimate. Unlike DP/pledge (see dp_ledger_total's
+    docstring for why that one can't be split back to positions), MTF
+    interest genuinely IS proportional to (funded amount x days held x
+    slab rate) per position -- the existing formula's own model -- so
+    scaling every position's formula weight to make the period's positions
+    sum to the REAL billed total is a sound, non-fabricated allocation: any
+    systematic error in day-counting or a stale funded-amount snapshot
+    applies identically to every position sharing a period and cancels out
+    of the ratio, only the correctly-real GRAND TOTAL for the period
+    matters for where the money actually lands.
+
+    Only MTF long positions (never short -- shorts are always INTRADAY,
+    see position_charge_summary) are considered. A position with zero
+    overlap with a given period contributes nothing to that period's
+    allocation. A period whose positions all fail the funded_amount()
+    lookup (API outage) is skipped entirely -- those positions then fall
+    back to the formula estimate in position_charge_summary, same as if
+    this index were never built. Call ONCE per run across every position
+    (not once per position) -- same reasoning as charges_index."""
+    to_date = to_date or datetime.now(_IST).date().isoformat()
+    periods = mtf_interest_periods(from_date, to_date)
+    if not periods:
+        return {}
+
+    mtf_positions = [p for p in positions
+                     if p.get("direction") != "short" and p.get("product") == "MTF"
+                     and p.get("entry_order_id") and p.get("actual_fill_quantity")
+                     and p.get("actual_fill_price") and p.get("entry_date")]
+
+    allocation: dict[str, float] = {}
+    for period in periods:
+        p_from, p_to = period["period_from"], period["period_to"]
+        weights: dict[str, float] = {}
+        for pos in mtf_positions:
+            entry = date.fromisoformat(pos["entry_date"])
+            ts_field = _EXIT_TIMESTAMP_FIELD.get(pos.get("status", ""))
+            ts = pos.get(ts_field) if ts_field else None
+            as_of = datetime.fromisoformat(ts).date() if ts else datetime.now(_IST).date()
+
+            overlap_start = max(entry, p_from)
+            overlap_end   = min(as_of, p_to)
+            overlap_days  = (overlap_end - overlap_start).days + 1
+            if overlap_days <= 0:
+                continue
+            try:
+                funded = funded_amount(pos["symbol"], pos["actual_fill_quantity"], pos["actual_fill_price"])
+                rate   = mtf_daily_rate_pct(funded)
+            except (RuntimeError, EnvironmentError):
+                continue
+            weights[pos["entry_order_id"]] = funded * (rate / 100) * overlap_days
+
+        total_weight = sum(weights.values())
+        if total_weight <= 0:
+            continue
+        scale = period["amount"] / total_weight
+        for oid, w in weights.items():
+            allocation[oid] = allocation.get(oid, 0.0) + w * scale
+    return allocation
+
+
 _EXIT_ORDER_ID_FIELD = {
     "exited_925":   "exit_order_id_925",
     "exited_1159":  "exit_order_id_1159",
@@ -387,7 +572,27 @@ _EXIT_PRICE_FIELD = {
 }
 
 
-def position_charge_summary(pos: dict) -> dict:
+def _leg_charges(oid: str | None, qty, price, product: str, side: str,
+                 trade_index: dict[str, dict]) -> tuple[float, str]:
+    """Real API charges for one leg if trade_index has them, else the
+    rate-card estimate. Same-day fills routinely aren't in trade_index yet
+    (Dhan's historical trade-book endpoint doesn't index the current day --
+    confirmed live 2026-09-08), so falling through to the estimate for
+    those is the expected, common case, not an error path. Deliberately
+    takes an already-built index rather than looking the order up itself --
+    see position_charge_summary for why a per-leg fallback fetch here would
+    be actively dangerous, not just slower."""
+    if not (qty and price):
+        return 0.0, "none"
+    if oid:
+        trade = trade_index.get(oid)
+        if trade is not None and _has_charge_fields(trade):
+            return trade_api_charges(trade), "api"
+    return estimate_trade_charges(qty, price, product, side), "estimated"
+
+
+def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = None,
+                            interest_index: dict[str, float] | None = None) -> dict:
     """Full charge breakdown for one positions_dhan.json record -- entry leg,
     exit leg (once closed), fixed DP/pledge (delivery entries only, see
     is_delivery_buy's reasoning -- a short's entry/cover legs are always
@@ -396,44 +601,74 @@ def position_charge_summary(pos: dict) -> dict:
     date (closed -- interest stops accruing once covered/sold, so it's
     frozen there rather than keeping today's growing number).
 
-    Entry/exit leg charges always come from estimate_trade_charges() (Dhan's
-    published rate card), not the trade-book API -- deliberately, not as an
-    outage fallback. Verified live 2026-08-20 against a real BAJAJHIND fill:
-    the estimate matched the API's actual per-trade charges to within ₹0.05
-    on a ₹378.78 leg (~0.01%), and the trade-book API itself is unreliable
-    for this pipeline's purposes anyway (the historical range endpoint
-    doesn't index same-day trades, and the same-day single-order endpoint
-    doesn't carry charge fields at all) -- see git history for both. Given
-    the estimate is already accurate and doesn't depend on either flaky
-    endpoint, it's used unconditionally rather than treated as a fallback.
-    "entry_source"/"exit_source" stay in the returned dict for
-    forward-compatibility with anything that still branches on them; both
-    are now always "estimated" (or "none" if the position doesn't even have
-    enough data -- qty/price -- to estimate from)."""
+    Entry/exit leg charges prefer Dhan's real trade-book figures, looked up
+    from trade_index (see charges_index), falling back to
+    estimate_trade_charges() (Dhan's published rate card) only when the
+    real number isn't available yet -- same-day fills (the historical
+    trade-book endpoint doesn't index today, confirmed live 2026-09-08), or
+    an outright API outage. This reverses an earlier version of this
+    function that used the estimate unconditionally -- reopened 2026-09-08
+    after confirming per-symbol totals from the real API (94 legs, 47
+    fully-matched symbols) run the estimate ~3.7% high, on top of a
+    same-day same-symbol STT-netting quirk (see git history) that can
+    misattribute charges between two legs placed the same session -- the
+    shorting add-on's short-open SELL and the paired position's
+    delivery-exit SELL. That quirk is real Dhan/NSE behavior (STT nets per
+    client-scrip-day at settlement, not per order), not a data error, so
+    the real API figure for a given leg IS what was actually charged for
+    that specific order -- reporting it here is more truthful than a
+    synthetic estimate, even on the legs where the split looks lopsided.
+
+    trade_index=None (the default) builds ONE index here, covering
+    [entry_date, today] -- NOT a separate get_trades() call per leg. Doing
+    the entry and exit lookups as two independent fallback fetches was
+    tried and confirmed live to be actively dangerous, not just slower:
+    get_trades() paginates through the whole range on every call, and two
+    of those back-to-back (no delay) tripped Dhan's rate limit (DH-904,
+    confirmed live 2026-09-08) on the second call, which then silently
+    fell back to the estimate for the exit leg -- the wrong tradeoff, since
+    that failure mode is indistinguishable from "not in the trade-book
+    yet." One index build, reused for both legs, avoids the trap entirely.
+    A caller processing many positions in one run should still build its
+    own index once (via charges_index) and pass it in here, rather than
+    letting every position pay for its own [entry_date, today] fetch.
+    "entry_source"/"exit_source" say which path was actually used for that
+    leg ("api"/"estimated"/"none").
+
+    MTF interest similarly prefers a real-ledger-based allocation (via
+    interest_index -- see mtf_interest_allocation_index) over the funded x
+    rate x days formula, falling back to the formula for any position not
+    covered by interest_index (an ongoing billing period not posted yet,
+    or a caller that didn't build one). DP/pledge charges stay the fixed
+    _DP_CHARGE/_MTF_PLEDGE_UNPLEDGE_CHARGE estimate unconditionally --
+    unlike interest, Dhan's ledger only exposes those as one combined
+    daily total with no way to split it back to individual positions (see
+    dp_ledger_total's docstring for the regression evidence)."""
     is_short = pos.get("direction") == "short"
     product  = pos.get("product", "") or ("INTRADAY" if is_short else "")
     status   = pos.get("status", "")
+    entry_date_str = pos.get("entry_date")
+
+    if trade_index is None:
+        trade_index = charges_index(entry_date_str) if entry_date_str else {}
 
     entry_qty   = pos.get("quantity") if is_short else pos.get("actual_fill_quantity")
     entry_price = pos.get("entry_price") if is_short else pos.get("actual_fill_price")
     entry_side  = "SELL" if is_short else "BUY"
+    entry_oid   = pos.get("entry_order_id")
 
-    if entry_qty and entry_price:
-        entry_charges = estimate_trade_charges(entry_qty, entry_price, product, entry_side)
-        entry_source = "estimated"
-    else:
-        entry_charges, entry_source = 0.0, "none"
+    entry_charges, entry_source = _leg_charges(
+        entry_oid, entry_qty, entry_price, product, entry_side, trade_index)
 
     exit_field = _EXIT_ORDER_ID_FIELD.get(status)
     exit_price_field = _EXIT_PRICE_FIELD.get(status)
     exit_price = pos.get(exit_price_field) if exit_price_field else None
     exit_qty   = entry_qty  # exit leg estimate uses the same full position size as entry
     exit_side  = "BUY" if is_short else "SELL"
-    if exit_field and exit_qty and exit_price:
-        exit_charges = estimate_trade_charges(exit_qty, exit_price, product, exit_side)
-        exit_source = "estimated"
-    else:
-        exit_charges, exit_source = 0.0, "none"
+    exit_oid   = pos.get(exit_field) if exit_field else None
+
+    exit_charges, exit_source = _leg_charges(
+        exit_oid, exit_qty, exit_price, product, exit_side, trade_index)
 
     # DP charge applies to every delivery-style entry -- CNC, MTF, MARGIN
     # (T+5), or anything else not explicitly INTRADAY (same "not MTF/INTRADAY
@@ -448,32 +683,39 @@ def position_charge_summary(pos: dict) -> dict:
             pledge = _MTF_PLEDGE_UNPLEDGE_CHARGE
 
     interest = 0.0
+    interest_source = "none"
     if not is_short and product == "MTF":
-        qty   = pos.get("actual_fill_quantity") or 0
-        price = pos.get("actual_fill_price") or 0.0
-        entry_date_str = pos.get("entry_date")
-        if qty and price and entry_date_str:
-            ts_field = _EXIT_TIMESTAMP_FIELD.get(status)
-            ts = pos.get(ts_field) if ts_field else None
-            as_of = datetime.fromisoformat(ts).date() if ts else datetime.now(_IST).date()
-            days = calendar_days_held(entry_date_str, as_of)
-            try:
-                funded = funded_amount(pos["symbol"], qty, price)
-                rate   = mtf_daily_rate_pct(funded)
-                interest = funded * (rate / 100) * days
-            except (RuntimeError, EnvironmentError):
-                interest = 0.0  # non-fatal -- see docstring
+        entry_oid_for_interest = pos.get("entry_order_id")
+        if interest_index is not None and entry_oid_for_interest in interest_index:
+            interest = interest_index[entry_oid_for_interest]
+            interest_source = "api"
+        else:
+            qty   = pos.get("actual_fill_quantity") or 0
+            price = pos.get("actual_fill_price") or 0.0
+            if qty and price and entry_date_str:
+                ts_field = _EXIT_TIMESTAMP_FIELD.get(status)
+                ts = pos.get(ts_field) if ts_field else None
+                as_of = datetime.fromisoformat(ts).date() if ts else datetime.now(_IST).date()
+                days = calendar_days_held(entry_date_str, as_of)
+                try:
+                    funded = funded_amount(pos["symbol"], qty, price)
+                    rate   = mtf_daily_rate_pct(funded)
+                    interest = funded * (rate / 100) * days
+                    interest_source = "estimated"
+                except (RuntimeError, EnvironmentError):
+                    interest = 0.0  # non-fatal -- see docstring
 
     total = entry_charges + exit_charges + dp + pledge + interest
     return {
-        "entry_charges": round(entry_charges, 2),
-        "entry_source":  entry_source,
-        "exit_charges":  round(exit_charges, 2),
-        "exit_source":   exit_source,
-        "dp_charge":     round(dp, 2),
-        "pledge_charge": round(pledge, 2),
-        "mtf_interest":  round(interest, 2),
-        "total_charges": round(total, 2),
+        "entry_charges":   round(entry_charges, 2),
+        "entry_source":    entry_source,
+        "exit_charges":    round(exit_charges, 2),
+        "exit_source":     exit_source,
+        "dp_charge":       round(dp, 2),
+        "pledge_charge":   round(pledge, 2),
+        "mtf_interest":    round(interest, 2),
+        "interest_source": interest_source,
+        "total_charges":   round(total, 2),
     }
 
 
