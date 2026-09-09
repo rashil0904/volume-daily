@@ -159,7 +159,7 @@ def test_check_exit_925_ordering():
          patch.object(rt, "_load_uc_cache", fake_load_uc_cache), \
          patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
          patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -232,7 +232,7 @@ def test_force_exit_1159_ordering():
          patch.object(rt, "_load_uc_cache", fake_load_uc_cache), \
          patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
          patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -296,7 +296,7 @@ def test_square_off_239_ordering():
          patch.object(rt, "_dhan_get_orders", fake_get_orders), \
          patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
          patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_short_qty", lambda sym: 10), \
          patch.object(rt.notify, "send_square_off_239", MagicMock()):
         rt.square_off_239(dry_run=False)

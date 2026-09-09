@@ -125,6 +125,7 @@ class OrderUpdateFeed:
             now        = datetime.now(_IST)
             now_iso    = now.isoformat()
 
+            just_traded = False
             with self._lock:
                 entry = self._cache.setdefault(order_id, {
                     "status": None, "filled_qty": 0, "avg_price": 0.0,
@@ -138,26 +139,57 @@ class OrderUpdateFeed:
                 entry["last_updated_at_wallclock"] = now_iso
                 if status == "TRADED" and entry["first_traded_at_wallclock"] is None:
                     entry["first_traded_at_wallclock"] = now_iso
+                    just_traded = True
 
             print(f"[order_update_feed]   {order_id}  {status}  qty={filled_qty}  "
                   f"avg_price={avg_price}  at {now_iso}")
-            self._maybe_persist()
+            # A fresh TRADED transition bypasses the periodic-persist throttle --
+            # confirmed live 2026-09-09: FileBackedOrderCache readers (a separate
+            # process, e.g. run_trades.py's exit stages) only ever see this cache
+            # through the on-disk file, polling it for up to _VALIDATION_GRACE_
+            # SECONDS after their OWN poll confirms a fill. On a fast-filling
+            # order, that whole grace window can close before the routine
+            # _PERSIST_EVERY_SECONDS=5 throttle would have written the fill to
+            # disk at all -- logged as a false WEBSOCKET_MISSED even though this
+            # feed received the update well within the grace window (proved via
+            # dhan_live_monitor.log timestamps predating the "miss" by ~0.2-0.4s
+            # on 4/4 short-open orders that day). Every OTHER status (PENDING,
+            # PART-TRADED, etc.) still only needs the routine throttle -- those
+            # aren't what the validation comparison checks for.
+            if just_traded:
+                self._persist()
+            else:
+                self._maybe_persist()
         except Exception as exc:
             print(f"[order_update_feed]   !! failed to handle message: {exc} -- raw={message}",
                   file=sys.stderr)
 
     def _maybe_persist(self) -> None:
-        now = time.monotonic()
-        if now - self._last_persist_at < _PERSIST_EVERY_SECONDS:
+        if time.monotonic() - self._last_persist_at < _PERSIST_EVERY_SECONDS:
             return
-        self._last_persist_at = now
         self._persist()
 
     def _persist(self) -> None:
+        """Writes via a temp file + atomic rename (Path.replace), not a direct
+        write_text() -- a reader (FileBackedOrderCache, a separate process)
+        polling this file every 0.25s during its grace window would otherwise
+        have a real chance of landing mid-write and reading a truncated/torn
+        JSON body, especially now that a TRADED transition can trigger a
+        persist immediately instead of only every _PERSIST_EVERY_SECONDS.
+        FileBackedOrderCache already treats a parse failure as "no data" and
+        just retries on its next 0.25s tick, so this isn't fixing a crash --
+        it's removing an easy-to-hit, unnecessary source of exactly the kind
+        of false-miss tick that motivated this change in the first place.
+        Also updates _last_persist_at here (not just in _maybe_persist) so a
+        just_traded-triggered persist correctly resets the routine throttle's
+        own clock instead of leaving it stale."""
+        self._last_persist_at = time.monotonic()
         try:
             snap = self.snapshot()
             _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-            _CACHE_FILE.write_text(json.dumps(snap, indent=2))
+            tmp = _CACHE_FILE.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(snap, indent=2))
+            tmp.replace(_CACHE_FILE)
         except Exception as exc:
             print(f"[order_update_feed]   !! failed to persist cache: {exc}", file=sys.stderr)
 

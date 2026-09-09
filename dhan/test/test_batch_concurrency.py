@@ -334,7 +334,7 @@ def test_quote_batching_call_counts():
              patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
              patch.object(rt, "sell", fake_sell), \
              patch.object(rt, "buy", fake_buy), \
-             patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+             patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
              patch.object(rt.time, "sleep", lambda secs: None), \
              patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
              patch.object(rt.notify, "send_short_open", lambda **kw: None):
@@ -424,7 +424,7 @@ def test_combined_exit_and_short_budget():
          patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
         rt.check_exit_925(dry_run=False)
@@ -516,7 +516,7 @@ def test_one_write_per_wave_no_lost_writes():
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.time, "sleep", lambda secs: None), \
          patch.object(rt.notify, "send_exit_925", lambda **kw: None):
         rt.check_exit_925(dry_run=False)
@@ -572,7 +572,7 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "_broker_qty", fake_broker_qty), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", lambda sym, exch, qty, **kw: f"SELL-{sym}"), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_925", lambda **kw: None):
         rt.check_exit_925(dry_run=False)
 
@@ -614,7 +614,7 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "_broker_short_qty", fake_broker_short_qty_sq), \
          patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sq), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_sq), \
          patch.object(rt.notify, "send_square_off_239", lambda **kw: None):
         rt.square_off_239(dry_run=False)
 
@@ -692,7 +692,7 @@ def test_short_anchor_uses_batched_ltp_cache():
          patch.object(rt, "_intraday_margin_check", lambda s, qty, ltp: {"margin_required": 1.0}), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.time, "sleep", lambda secs: None), \
          patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
@@ -777,7 +777,7 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
         patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}),
         patch.object(rt, "sell", fake_sell),
         patch.object(rt, "buy", fake_buy),
-        patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe),
+        patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe),
         patch.object(rt.time, "sleep", lambda secs: None),
         patch.object(rt.notify, "send_exit_925", lambda **kw: None),
         patch.object(rt.notify, "send_force_exit_1159", lambda **kw: None),
@@ -903,7 +903,7 @@ def test_wave1_mixed_fallback_and_full_same_batch():
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
          patch.object(rt.notify, "send_exit_925_nodata", lambda **kw: None):
         rt.check_exit_925(dry_run=False)
@@ -983,7 +983,7 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
          patch.object(rt, "_broker_short_qty", lambda sym: 10), \
          patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "buy", fake_buy), \
-         patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_cover_target_hit", lambda **kw: None), \
          patch.object(rt.notify, "send_short_stoploss_hit", lambda **kw: None), \
          patch.object(rt.notify, "send_square_off_239", lambda **kw: None), \

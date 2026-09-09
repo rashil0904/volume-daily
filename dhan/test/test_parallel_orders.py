@@ -361,7 +361,7 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt, "_dhan_get_orders", lambda: []), \
          patch.object(rt, "sell", side_effect=fake_sell), \
          patch.object(rt, "_dhan_order_status", lambda oid: {"orderStatus": "TRADED"}), \
-         patch.object(rt, "_poll_fill_safe", side_effect=fake_poll_fill_safe), \
+         patch.object(rt, "_poll_fill_ws_first", side_effect=fake_poll_fill_safe), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \

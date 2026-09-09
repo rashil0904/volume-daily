@@ -340,7 +340,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "get_ltp", fake_get_ltp_c), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "sell", fake_sell_c), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_c), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_c), \
      patch.object(rt, "_broker_qty", fake_broker_qty_c), \
      patch.object(rt, "_open_short_place", fake_open_short_place_c), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -412,7 +412,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "get_ltp", fake_get_ltp_d), \
      patch.object(rt, "get_ltp_batch", lambda syms: {"EPSILON": 105.0}), \
      patch.object(rt, "sell", fake_sell_d), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_d), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_d), \
      patch.object(rt, "_broker_qty", fake_broker_qty_d), \
      patch.object(rt, "_open_short_place", fake_open_short_place_d), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -542,7 +542,7 @@ with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt, "get_ltp", lambda sym: 90.0), \
      patch.object(rt, "sell", fake_sell_f2), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_f2), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_f2), \
      patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
      patch.object(rt, "_open_short_place", fake_open_short_place_f2), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
@@ -599,7 +599,7 @@ with patch.object(rt, "_load_short_pos", store_g.load), \
      patch.object(rt, "sell", fake_sell_g), \
      patch.object(rt, "buy", fake_buy_g), \
      patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_g), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_g), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
     rt._open_short("IOTA", 10, "925", dry_run=False)
 
@@ -644,7 +644,7 @@ with patch.object(rt, "_load_short_pos", store_g3.load), \
      patch.object(rt, "sell", fake_sell_g), \
      patch.object(rt, "buy", fake_buy_g3), \
      patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_g3), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_g), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()), \
      patch.object(rt.notify, "send_circuit_fetch_failed", MagicMock()):
     rt._open_short("KAPPA", 10, "925", dry_run=False)
@@ -738,7 +738,7 @@ with patch.object(rt, "_load_short_pos", store_h2.load), \
                   lambda: orders_from_status(["COVERTGT-L"], fake_order_status_h2)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_h2), \
      patch.object(rt, "buy", fake_buy_h2), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_h2), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_h2), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
@@ -1063,7 +1063,7 @@ with patch.object(rt, "_load_short_pos", store_sle.load), \
                   lambda: orders_from_status(["COVERTGT-TAU", "STOPLOSS-TAU"], fake_order_status_sle)), \
      patch.object(rt, "_dhan_cancel_order", fake_cancel_sle), \
      patch.object(rt, "buy", fake_buy_sle), \
-     patch.object(rt, "_poll_fill_safe", fake_poll_fill_safe_sle), \
+     patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_sle), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
@@ -1404,7 +1404,7 @@ _bal_short_patches = [
     patch.object(rt.notify, "send_short_open", MagicMock()),
     patch.object(rt, "sell", routed_sell),
     patch.object(rt, "buy", lambda *a, **kw: "COVER-OR-STOP"),
-    patch.object(rt, "_poll_fill_safe",
+    patch.object(rt, "_poll_fill_ws_first",
                 lambda oid, fp, fq: (fake_poll_fill_safe_short_bs(oid, fp, fq)
                                     if oid.startswith("SHORT-")
                                     else fake_poll_fill_safe_bs(oid, fp, fq))),

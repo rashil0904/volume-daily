@@ -316,6 +316,63 @@ def _poll_fill_safe(order_id: str,
         return fallback_price, fallback_qty
 
 
+# WS-first fill confirmation -- TIME-BOXED TRIAL, 2026-09-09 through
+# 2026-09-13 IST inclusive (auto-reverts to plain _poll_fill_safe after that
+# date with zero further action needed). Motivated by [WS_VALIDATION] data
+# showing Dhan's real-time Order Update feed confirms a fill ~0.2-2.5s before
+# REST polling does (see dhan/order_update_feed.py) -- this only ever tries
+# to SAVE that time, never to replace _poll_fill_safe's own correctness:
+# every path below that doesn't get an explicit WS-confirmed TRADED within
+# _WS_FIRST_TIMEOUT seconds falls straight through to the exact same
+# _poll_fill_safe() call this trial is timing against, so a disconnected/
+# stale/empty feed can only ever cost a few wasted 0.15s checks -- it can
+# never produce a wrong fill price/qty or a worse outcome than not having
+# this trial at all.
+_WS_FIRST_TRIAL_UNTIL   = date(2026, 9, 13)
+_WS_FIRST_TIMEOUT       = 3.0
+_WS_FIRST_POLL_INTERVAL = 0.15
+
+
+def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int) -> tuple[float, int]:
+    """Drop-in replacement for _poll_fill_safe at exit/short-open/cover call
+    sites, for the trial window above. Checks dhan/order_update_feed.py's
+    FileBackedOrderCache (the on-disk snapshot of the REAL WebSocket
+    connection that lives in the separate, long-running live_monitor.py
+    process -- see that module's own docstring on why this process can't
+    reach live_monitor's in-memory cache directly) once every
+    _WS_FIRST_POLL_INTERVAL seconds, for up to _WS_FIRST_TIMEOUT seconds.
+
+    Only a WS-observed TRADED short-circuits the REST path -- a WS-observed
+    REJECTED/CANCELLED/EXPIRED breaks out of the wait early (no point
+    burning the rest of the timeout) but still defers to _poll_fill_safe for
+    the actual return value/rejection message, so rejection-handling
+    behavior is byte-for-byte unchanged from before this trial. Any other
+    outcome (no cache entry yet, ambiguous status, trial window expired,
+    cache file missing/stale) falls through to _poll_fill_safe exactly as if
+    this function didn't exist."""
+    if date.today() > _WS_FIRST_TRIAL_UNTIL:
+        return _poll_fill_safe(order_id, fallback_price, fallback_qty)
+
+    from dhan.order_update_feed import FileBackedOrderCache
+    cache = FileBackedOrderCache()
+    deadline = time.monotonic() + _WS_FIRST_TIMEOUT
+    while time.monotonic() < deadline:
+        entry = cache.get_cached(order_id)
+        if entry is not None:
+            status = (entry.get("status") or "").upper()
+            if status == "TRADED":
+                price = float(entry.get("avg_price") or fallback_price)
+                qty   = int(entry.get("filled_qty") or fallback_qty)
+                print(f"[dhan]   WS-FIRST: {order_id} confirmed via websocket "
+                      f"(avg_price={price}, filled_qty={qty}) — skipping REST poll.")
+                return price, qty
+            if status in ("REJECTED", "CANCELLED", "EXPIRED"):
+                break
+        time.sleep(_WS_FIRST_POLL_INTERVAL)
+
+    return _poll_fill_safe(order_id, fallback_price, fallback_qty)
+
+
 def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
                       dry_run: bool, order_type: str = "LIMIT") -> str:
     """Places a SELL order; retries once if the broker rejects it for a
@@ -1082,7 +1139,7 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
             print(f"[dhan]   SHORT FAILED — {sym}: {exc}")
             return None
 
-        ep, eq = (ltp, qty) if dry_run else _poll_fill_safe(oid, ltp, qty)
+        ep, eq = (ltp, qty) if dry_run else _poll_fill_ws_first(oid, ltp, qty)
         if eq == 0:
             print(f"[dhan]   SHORT NOT FILLED — {sym} short order rejected.")
             return None
@@ -2085,7 +2142,7 @@ def check_exit_925(dry_run: bool = False) -> None:
                 kind_label = "fallback sell" if task["kind"] == "fallback" else "sell"
                 return {**task, "error": f"{kind_label} failed: {exc}"}
 
-            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_ws_first(oid, fill_price, qty)
             if eq == 0:
                 err = ("NOT FILLED — fallback sell rejected, position left open." if task["kind"] == "fallback"
                        else "NOT FILLED — sell rejected, position left open.")
@@ -2404,7 +2461,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
             except Exception as exc:
                 return {**task, "error": f"sell failed: {exc}"}
 
-            ep, eq = (fill_price, qty) if dry_run else _poll_fill_safe(oid, fill_price, qty)
+            ep, eq = (fill_price, qty) if dry_run else _poll_fill_ws_first(oid, fill_price, qty)
             if eq == 0:
                 return {**task, "error": f"!! NOT FILLED — force-exit sell rejected for {sym}. "
                                           f"Position left as-is — manual review required."}
@@ -2706,7 +2763,7 @@ def square_off_239(dry_run: bool = False) -> None:
             except Exception as exc:
                 return {"pos": item["pos"], "sym": sym, "error": f"cover buy failed: {exc}"}
 
-            ep, eq = (entry_price, qty) if dry_run else _poll_fill_safe(oid, entry_price, qty)
+            ep, eq = (entry_price, qty) if dry_run else _poll_fill_ws_first(oid, entry_price, qty)
             if eq == 0:
                 return {"pos": item["pos"], "sym": sym,
                         "error": f"!! NOT FILLED — cover buy rejected for {sym}. "
