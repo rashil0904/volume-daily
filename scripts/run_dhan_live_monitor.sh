@@ -23,11 +23,13 @@ if [ -n "$OLD_PID" ]; then
     sleep 2
 fi
 
-# UC-based staged entry -- DRY-RUN only, every day. No orders are actually
-# placed (--dry-run); this just keeps generating real signal/fill logs so we
-# can evaluate the feature before ever turning it live.
-UC_FLAGS="--enable-uc-staged-entry --dry-run"
-echo "$LOG_PREFIX  UC-based staged entry: DRY-RUN enabled"
+# UC-based staged entry -- LIVE, real orders (--dry-run removed 2026-09-09).
+# Case A/B fires now place real MTF/CNC buys via _place_staged_buy, same
+# margin-check/CNC-retry path as run_entry_321. Ran dry-run-only since
+# 2026-08-27; went live before the day's first real fire could be verified
+# against real price action (explicit call, not a default).
+UC_FLAGS="--enable-uc-staged-entry"
+echo "$LOG_PREFIX  UC-based staged entry: LIVE (real orders)"
 
 # Order Update feed -- Phase 1 shadow-mode observation only (see
 # dhan/order_update_feed.py). Opens a second, independent WebSocket
