@@ -1211,8 +1211,14 @@
     "stop_order_id": "321260909103709",
     "stop_trigger_price": 2175.5,
     "stop_limit_price": 2186.4,
-    "status": "short_open",
-    "entry_timestamp": "2026-09-09T09:25:14.394161+05:30"
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-09T09:25:14.394161+05:30",
+    "exit_price_239": 2159.2258,
+    "exit_order_id_239": "321260909315209",
+    "exit_timestamp_239": "2026-09-09T10:35:16.467749+05:30",
+    "realized_return_pct": -8.9258,
+    "realized_pnl": -9554.49,
+    "exit_note": "UC-based stop-loss triggered mid-day, not at square-off: NOVARTIND ran to its upper circuit (₹2,186.40) by 10:35am, ~70 minutes after the short opened. The resting stop order (321260909103709, trigger ₹2,175.50) fired and filled as a separate broker order id (321260909315209, avg ₹2,159.2258, confirmed via the Order Update feed at 10:35:16) -- the original trigger order itself shows CANCELLED in the final order book, a known Dhan quirk where a triggered SL order surfaces under a new order id rather than updating the original. At 2:39pm square-off, both the cover target and this stop-loss showed as already-cancelled, and the real broker short quantity read back as 0 against a local record of 54 -- square_off_239 correctly refused to guess and skipped it for manual review instead of double-processing an already-closed position. Reconciled by hand 2026-09-09 evening from dhan_trades.log + dhan_live_monitor.log order-update timestamps."
   },
   {
     "broker": "dhan",
