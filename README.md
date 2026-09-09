@@ -329,7 +329,7 @@ A second live trading pipeline, entirely separate from everything above — own 
 | Parameter | Value |
 |---|---|
 | Broker / product type | Dhan, CNC or MTF (per-symbol leverage check, same as Zerodha) |
-| Live trading capital | ₹15,00,000 total (`TOTAL_CAPITAL` in `dhan/run_trades.py`) |
+| Live trading capital | ₹14,50,000 total (`TOTAL_CAPITAL` in `dhan/run_trades.py`) |
 | Entry order type | **LIMIT**, 0.75% above live LTP — not MARKET (see note below) |
 | Profit target | 17% LIMIT sell, placed at 9:15 AM for every open long |
 | Mirrored shorts | Opened on every 9:25/11:59 long exit — 5% cover target + UC-based stop-loss |
@@ -339,7 +339,7 @@ A second live trading pipeline, entirely separate from everything above — own 
 
 ### Entry — 3:21 PM (`--entry`)
 
-Same reference-price logic and `capital/4`-or-`n` allocation rule as the Zerodha side (see [Capital Allocation](#capital-allocation)), against the ₹15L Dhan capital base. Per symbol: checks live leverage via `POST /margincalculator` (`productType=MTF`) — `product="MTF"` if leverage ≥2x, otherwise falls back to `product="CNC"` at **half** the capital base (`capital/2`, resized allocation/shares). Places a LIMIT buy 0.75% above live LTP (falls back to the reference price as the limit anchor if LTP is momentarily unavailable), polls for a broker-confirmed fill (never records a phantom fill on an unconfirmed timeout), and writes the position to `results/positions_dhan.json`.
+Same reference-price logic and `capital/4`-or-`n` allocation rule as the Zerodha side (see [Capital Allocation](#capital-allocation)), against the ₹14.5L Dhan capital base. Per symbol: checks live leverage via `POST /margincalculator` (`productType=MTF`) — `product="MTF"` if leverage ≥2x, otherwise falls back to `product="CNC"` at **half** the capital base (`capital/2`, resized allocation/shares). Places a LIMIT buy 0.75% above live LTP (falls back to the reference price as the limit anchor if LTP is momentarily unavailable), polls for a broker-confirmed fill (never records a phantom fill on an unconfirmed timeout), and writes the position to `results/positions_dhan.json`.
 
 > **MTF-ineligibility CNC retry**: `/margincalculator`'s pre-check isn't fully reliable — it can return a plausible leverage figure for a scrip that Dhan then genuinely rejects at order-placement time (`"Mtf Product Is Not Allowed For This Scrip"`). When that specific rejection is confirmed (not just any rejection — a circuit-limit rejection, for instance, retries nothing, since CNC would hit the same price band), the order is retried as CNC automatically, at the same quantity (no re-halving). This applies to entries, the 9:15 AM targets, both 9:25/11:59 exit branches, and the forced exit. **`MARGIN`/T+5 is never used as a product anywhere in this pipeline** — a T+5-settlement-lag sell rejection (`"No eligible T+5 quantity found"`) also retries as CNC, same mechanism.
 

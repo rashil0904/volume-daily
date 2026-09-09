@@ -63,7 +63,7 @@ _POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
 _POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
 _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 _LOG_DIR      = _RESULTS_DIR / "trades"
-TOTAL_CAPITAL = 1_400_000
+TOTAL_CAPITAL = 1_450_000
 
 # ── Batched-concurrent execution for check_exit_925 / force_exit_1159 /
 # _open_short / square_off_239 ──────────────────────────────────────────────
