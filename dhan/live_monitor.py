@@ -530,7 +530,18 @@ def _capped_limit_price(sym: str, trigger_price: float, upper_circuit: float | N
     return limit_price
 
 
-def _place_staged_buy(sym: str, qty: int, limit_price: float, dry_run: bool) -> dict | None:
+# Sentinel _place_staged_buy returns instead of None for a rejection already
+# confirmed PERMANENT for the rest of today's session, as opposed to a
+# transient one worth retrying on the next qualifying tick -- see
+# _place_staged_buy's own docstring. A caller receiving this must latch
+# state.entry_status to "blocked_today" (a value uc_evaluate_tick's own
+# not_attempted/partially_filled checks never match) instead of reverting to
+# "not_attempted", or the same doomed order fires again on every subsequent
+# tick for the rest of the window.
+_BLOCKED_TODAY = "BLOCKED_TODAY"
+
+
+def _place_staged_buy(sym: str, qty: int, limit_price: float, dry_run: bool) -> dict | None | str:
     """One staged-entry BUY leg -- same MTF-then-CNC decision, and the same
     CNC-retry-on-genuine-MTF-ineligibility-rejection logic, as
     run_entry_321 (a Case A/B trigger can hit an MTF-ineligible scrip exactly
@@ -538,7 +549,19 @@ def _place_staged_buy(sym: str, qty: int, limit_price: float, dry_run: bool) -> 
     n-way path, this does NOT halve qty on a CNC fallback -- matches
     run_entry_321's own manual_mode behavior, which this feature's
     per-symbol trigger shape mirrors. Returns None (caller must not write a
-    position row, and must revert its state latch) if nothing filled."""
+    position row, and must revert its state latch to "not_attempted" --
+    retry-eligible, this failure could be transient) if nothing filled.
+
+    Returns _BLOCKED_TODAY instead of None for a rejection reason confirmed
+    to be a same-day delivery round-trip restriction, not a transient
+    failure -- confirmed live 2026-09-09 (NOVARTIND): "Buy back is not
+    allowed for delivery positions" fires identically regardless of product
+    (MTF or CNC both blocked) once a symbol's long has already been bought
+    AND delivery-sold earlier the SAME session, and does not clear until
+    the next trading day. Before this check existed, NOVARTIND alone
+    generated 86 real, identically-doomed order placements over ~4.5 hours
+    that day because nothing distinguished this from a worth-retrying
+    failure. Callers must NOT revert to "not_attempted" on this sentinel."""
     margin_info  = _margin_check(sym, qty, limit_price)
     has_leverage = margin_info is not None and margin_info["leverage"] >= 2
     product      = "MTF" if has_leverage else "CNC"
@@ -561,6 +584,11 @@ def _place_staged_buy(sym: str, qty: int, limit_price: float, dry_run: bool) -> 
                 "fill_price": limit_price, "fill_qty": qty}
 
     fill_price, fill_qty, rejected, reason = _poll_fill_strict(order_id)
+    if fill_qty == 0 and rejected and "buy back is not allowed" in reason.lower():
+        print(f"[uc_staged] {sym}: BLOCKED FOR TODAY -- same-day delivery "
+              f"round-trip restriction ({reason!r}). Not retrying again this session.")
+        return _BLOCKED_TODAY
+
     if (fill_qty == 0 and product == "MTF" and rejected
             and "mtf product is not allow" in reason.lower()):
         print(f"[uc_staged] {sym}: MTF-INELIGIBLE -- retrying as CNC.")
@@ -592,6 +620,9 @@ def execute_case_a_leg1(sym: str, state: UCState, ltp: float,
 
     limit_price = _capped_limit_price(sym, ltp, upper_circuit)
     result = _place_staged_buy(sym, leg_qty, limit_price, dry_run)
+    if result is _BLOCKED_TODAY:
+        state.entry_status = "blocked_today"   # permanent for today -- never retry again
+        return
     if result is None:
         state.entry_status = "not_attempted"   # retry-eligible on a later tick this window
         return
@@ -643,6 +674,14 @@ def execute_case_a_leg2(sym: str, state: UCState, ltp: float,
 
     limit_price = _capped_limit_price(sym, ltp, upper_circuit)
     result = _place_staged_buy(sym, leg_qty, limit_price, dry_run)
+    if result is _BLOCKED_TODAY:
+        # Permanent for today -- stop retrying leg2 in-process, but leave the
+        # ON-DISK position row exactly as leg1 left it (entry_status:
+        # "partially_filled"); run_entry_321's Step 1 at 3:21pm reads that
+        # file directly, independent of this in-memory state, and will still
+        # complete it normally.
+        state.entry_status = "blocked_today"
+        return
     if result is None:
         state.entry_status = "partially_filled"   # stay armed -- retry-eligible, or
         state.case_a_leg    = "leg1_filled_watching_retrace"  # Step 1 at 3:21pm completes it regardless
@@ -681,6 +720,9 @@ def execute_case_b(sym: str, state: UCState, ltp: float,
 
     limit_price = _capped_limit_price(sym, ltp, upper_circuit)
     result = _place_staged_buy(sym, qty, limit_price, dry_run)
+    if result is _BLOCKED_TODAY:
+        state.entry_status = "blocked_today"   # permanent for today -- never retry again
+        return
     if result is None:
         state.entry_status = "not_attempted"   # retry-eligible on a later tick this window
         return
