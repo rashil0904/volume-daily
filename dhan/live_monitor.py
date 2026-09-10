@@ -775,13 +775,15 @@ class LiveMonitor:
         self._dry_run                = dry_run
         self._uc_states: dict[int, UCState] = {}
         self._executor = ThreadPoolExecutor(max_workers=4) if enable_uc_staged_entry else None
-        # per_stock_capital = TOTAL_CAPITAL / qualified_count, snapshotted
-        # EXACTLY ONCE at the first tick observed at/after 14:30 -- not
-        # recomputed as more symbols qualify later in the day (confirmed).
-        # None until that snapshot happens. Independent of this: the Case A
+        # per_stock_capital = TOTAL_CAPITAL / qualified_count, recomputed
+        # FRESH every time a Case A/B trigger is about to actually fire (not
+        # a one-time snapshot -- changed 2026-09-09 after INDNIPPON's real
+        # Case B fire at 15:14:32 used a stale count of 5 taken at 14:30,
+        # when 7 symbols had already qualified by the time it actually
+        # fired). See _on_message's own note below and _fire_uc_staged for
+        # where this is computed and logged. Independent of this: the Case A
         # qualification latch (update_case_a_qualification) runs on every
-        # tick from market open, well before this snapshot exists.
-        self._per_stock_capital: float | None = None
+        # tick from market open regardless of whether this window is open yet.
 
         # Order Update feed (Phase 1, shadow mode -- see
         # dhan/order_update_feed.py) -- off by default, and independent of
@@ -878,22 +880,30 @@ class LiveMonitor:
                     update_case_a_qualification(
                         uc_state, ltp, state.upper_circuit, now=now)
 
-                # One-time capital snapshot: TOTAL_CAPITAL / qualified_count,
-                # taken at the first tick observed at/after 14:30 -- see
-                # __init__. Every UC-staged-entry call after this reads it
-                # back as a plain parameter, never recomputed later even as
-                # more symbols qualify.
-                if self._per_stock_capital is None and now.time() >= _CASE_A_START:
+                # per_stock_capital: TOTAL_CAPITAL / however many symbols are
+                # qualified RIGHT NOW -- recomputed fresh on every tick from
+                # 14:30 onward, not a one-time snapshot (changed 2026-09-09:
+                # the old frozen-at-14:30 snapshot gave INDNIPPON's real
+                # 15:14:32 Case B fire a stale divisor of 5, when 7 symbols
+                # had already qualified by the time it actually fired --
+                # RESPONIND/INDORAMA qualified at 14:40/14:42, well before
+                # INDNIPPON's own trigger). uc_evaluate_tick only reads/
+                # stores this at the instant it decides to fire, so passing
+                # a freshly-computed value every tick means each fire
+                # captures whichever qualified-count was true at ITS OWN
+                # moment, not a count frozen 45+ minutes earlier.
+                per_stock_capital = None
+                if now.time() >= _CASE_A_START:
                     n_qualified = sum(1 for s in self._states.values() if s.qualified)
-                    self._per_stock_capital = TOTAL_CAPITAL / max(n_qualified, 1)
-                    print(f"[uc_staged] per_stock_capital snapshot: "
-                          f"₹{TOTAL_CAPITAL:,.0f} / {n_qualified} qualified "
-                          f"= ₹{self._per_stock_capital:,.2f}")
+                    per_stock_capital = TOTAL_CAPITAL / max(n_qualified, 1)
 
-                if uc_state is not None and self._per_stock_capital is not None:
+                if uc_state is not None and per_stock_capital is not None:
                     uc_event = uc_evaluate_tick(
-                        uc_state, ltp, self._per_stock_capital, now=now)
+                        uc_state, ltp, per_stock_capital, now=now)
                     if uc_event is not None:
+                        print(f"[uc_staged] {uc_state.symbol}: firing {uc_event} -- "
+                              f"₹{TOTAL_CAPITAL:,.0f} / {n_qualified} qualified right now "
+                              f"= ₹{per_stock_capital:,.2f} per stock.")
                         self._fire_uc_staged(uc_event, uc_state, ltp, state.upper_circuit)
 
     # ── UC staged entry dispatch (called under self._lock; only submits to

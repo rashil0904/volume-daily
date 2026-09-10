@@ -2,8 +2,10 @@
 """
 test_uc_staged_entry.py -- standalone verifier for the UC-based staged entry
 (Case A/B, folded into dhan/live_monitor.py -- see its "UC-based staged
-entry" section), the per_stock_capital snapshot (also in dhan/live_monitor.py),
-and the Step 1/2/3 priority restructure in dhan/run_trades.py's run_entry_321.
+entry" section), the per-fire per_stock_capital computation (also in
+dhan/live_monitor.py -- recomputed fresh at every tick from 14:30 onward,
+not a one-time snapshot), and the Step 1/2/3 priority restructure in
+dhan/run_trades.py's run_entry_321.
 
 Mocks every broker-facing call (_margin_check/_available_balance/buy/
 _poll_fill_strict/_tick_round's underlying tick_size, plus get_reference_price/
@@ -443,8 +445,16 @@ check("(5) ETA row completely unchanged", eta_row == filled_row)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (6) — per_stock_capital snapshot: once at 14:30, never recomputed\n")
+print("\nScenario (6) — per_stock_capital recomputed fresh at every tick, not a one-time snapshot\n")
 # ─────────────────────────────────────────────────────────────────────────────
+# Changed 2026-09-09: the old design snapshotted per_stock_capital ONCE at the
+# first tick >=14:30 and never recomputed it. Real evidence it was wrong:
+# INDNIPPON's actual Case B fire at 15:14:32 used a stale divisor of 5 (the
+# 14:30 count), when 7 symbols had already qualified by the time it actually
+# fired -- RESPONIND/INDORAMA qualified at 14:40/14:42, well before
+# INDNIPPON's own 15:14 trigger, and should have counted. Now every call to
+# uc_evaluate_tick gets a freshly-computed value, so this spies on exactly
+# what value each tick actually receives.
 
 mon = lm.LiveMonitor("client1", "tok1", enable_uc_staged_entry=True, dry_run=True)
 mon._executor = MagicMock()   # never actually place an order in this scenario
@@ -461,32 +471,40 @@ mon._uc_states = {
     sid_b: lm.UCState(symbol="TAU", prev_close=100.0),
 }
 
-check("(6) per_stock_capital starts unset (constructor default)",
-      mon._per_stock_capital is None)
+seen_capitals = []
+_real_uc_evaluate_tick = lm.uc_evaluate_tick
+def _spy_uc_evaluate_tick(state, ltp, per_stock_capital, now=None):
+    seen_capitals.append(per_stock_capital)
+    return _real_uc_evaluate_tick(state, ltp, per_stock_capital, now=now)
 
 msg_1430 = {"type": "Quote Data", "security_id": str(sid_a), "LTP": "50.0", "volume": "0"}
-with patch.object(lm, "datetime") as mock_dt:
-    # A tick BEFORE 14:30 must NOT snapshot yet.
+with patch.object(lm, "uc_evaluate_tick", _spy_uc_evaluate_tick), \
+     patch.object(lm, "datetime") as mock_dt:
+    # A tick BEFORE 14:30 must not even compute/call uc_evaluate_tick yet.
     mock_dt.now.return_value = datetime(2026, 8, 25, 14, 20, tzinfo=lm._IST)
     mon._on_message(None, msg_1430)
-check("(6) a tick before 14:30 does not snapshot yet", mon._per_stock_capital is None)
+check("(6) a tick before 14:30 never calls uc_evaluate_tick (no capital computed yet)",
+      seen_capitals == [], str(seen_capitals))
 
-with patch.object(lm, "datetime") as mock_dt:
+with patch.object(lm, "uc_evaluate_tick", _spy_uc_evaluate_tick), \
+     patch.object(lm, "datetime") as mock_dt:
     mock_dt.now.return_value = datetime(2026, 8, 25, 14, 35, tzinfo=lm._IST)
     mon._on_message(None, msg_1430)
-check("(6) first tick at/after 14:30 snapshots per_stock_capital = TOTAL_CAPITAL/qualified(2)",
-      mon._per_stock_capital == lm.TOTAL_CAPITAL / 2, str(mon._per_stock_capital))
+check("(6) first tick at/after 14:30 computes per_stock_capital = TOTAL_CAPITAL/qualified(2)",
+      seen_capitals == [lm.TOTAL_CAPITAL / 2], str(seen_capitals))
 
-# A third symbol "qualifies" afterward -- the snapshot must NOT change.
+# A third symbol "qualifies" afterward -- the VERY NEXT tick must reflect it
+# immediately, not stay frozen at the earlier count.
 mon._states[333] = lm._SymState(symbol="UPSILON", vol_threshold=1, prev_vwap=100.0,
                                 upper_circuit=200.0, lower_circuit=50.0, qualified=True)
-with patch.object(lm, "datetime") as mock_dt2:
+with patch.object(lm, "uc_evaluate_tick", _spy_uc_evaluate_tick), \
+     patch.object(lm, "datetime") as mock_dt2:
     mock_dt2.now.return_value = datetime(2026, 8, 25, 14, 40, tzinfo=lm._IST)
     mon._on_message(None, {"type": "Quote Data", "security_id": str(sid_b),
                            "LTP": "50.0", "volume": "0"})
-check("(6) per_stock_capital UNCHANGED even though a 3rd symbol qualified afterward "
-      "(snapshot is one-time, not recomputed)",
-      mon._per_stock_capital == lm.TOTAL_CAPITAL / 2, str(mon._per_stock_capital))
+check("(6) a later tick recomputes per_stock_capital immediately once a 3rd symbol "
+      "qualifies -- TOTAL_CAPITAL/3, not the earlier TOTAL_CAPITAL/2",
+      seen_capitals[-1] == lm.TOTAL_CAPITAL / 3, str(seen_capitals))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
