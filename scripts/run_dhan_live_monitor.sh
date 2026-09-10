@@ -1,6 +1,7 @@
 #!/bin/bash
 # Daily launcher for dhan/live_monitor.py — called by cron at 9:13 AM IST Mon-Fri.
-# Mirrors scripts/run_live_monitor.sh (which launches the Zerodha version) --
+# (Zerodha had an equivalent launcher/live_monitor.py; that side's code was
+# removed 2026-09-10 pending a full rebuild -- see git history if reviving it.)
 # live_monitor.py blocks forever, so this script kills any leftover instance
 # from a prior day before starting a fresh one, to avoid stacking duplicate
 # WebSocket connections/alerts over time.
