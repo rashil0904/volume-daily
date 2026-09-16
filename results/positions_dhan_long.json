@@ -1692,5 +1692,83 @@
     "exit_timestamp_1159": "2026-09-15T11:59:09.389594+05:30",
     "realized_return_pct": -11.3863,
     "realized_pnl": -20589.72
+  },
+  {
+    "broker": "dhan",
+    "symbol": "EMUDHRA",
+    "entry_date": "2026-09-16",
+    "reference_price": 632.6,
+    "shares_intended": 395,
+    "actual_fill_price": 635.303,
+    "actual_fill_quantity": 395,
+    "entry_order_id": "23126091659109",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:01.317349+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "FOSECOIND",
+    "entry_date": "2026-09-16",
+    "reference_price": 6743.0,
+    "shares_intended": 37,
+    "actual_fill_price": 6778.811,
+    "actual_fill_quantity": 37,
+    "entry_order_id": "34126091663709",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:02.411795+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "IPL",
+    "entry_date": "2026-09-16",
+    "reference_price": 135.65,
+    "shares_intended": 1842,
+    "actual_fill_price": 136.1157,
+    "actual_fill_quantity": 1842,
+    "entry_order_id": "221260916649209",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:03.309732+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "NPST",
+    "entry_date": "2026-09-16",
+    "reference_price": 1848.2,
+    "shares_intended": 135,
+    "actual_fill_price": 1848.2214,
+    "actual_fill_quantity": 135,
+    "entry_order_id": "221260916649109",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:04.104419+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "ROSSTECH",
+    "entry_date": "2026-09-16",
+    "reference_price": 1340.8,
+    "shares_intended": 186,
+    "actual_fill_price": 1340.8882,
+    "actual_fill_quantity": 186,
+    "entry_order_id": "34126091663809",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:04.836818+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SAATVIKGL",
+    "entry_date": "2026-09-16",
+    "reference_price": 414.0,
+    "shares_intended": 603,
+    "actual_fill_price": 414.316,
+    "actual_fill_quantity": 603,
+    "entry_order_id": "221260916649309",
+    "status": "open",
+    "entry_timestamp": "2026-09-16T15:21:05.565375+05:30",
+    "product": "MTF"
   }
 ]
