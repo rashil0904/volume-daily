@@ -3,6 +3,7 @@
 zerodha/.token.json
 .zerodha_token.json
 dhan/.token.json
+client_secret_*.apps.googleusercontent.com.json
 
 # Downloaded instrument caches (regenerated on demand)
 data/instruments/dhan_scrip_master.csv
