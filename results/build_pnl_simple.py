@@ -188,19 +188,22 @@ def _live_cost(position: dict, trade_index: dict[str, dict],
                interest_index: dict[str, float]) -> float | None:
     """Real per-position charges -- brokerage/STT/exchange/SEBI/stamp/GST on
     the entry (and exit, once closed) leg, plus DP/pledge and MTF interest
-    where applicable -- via dhan.charges.position_charge_summary(), which
-    now prefers Dhan's actual figures over formula estimates wherever
-    that's actually possible: trade_index for entry/exit legs (Dhan's real
-    trade-book) and interest_index for MTF interest (a real-ledger-period
-    allocation, see mtf_interest_allocation_index) -- both built ONCE for
-    the whole run, see load_trades_from_positions. DP/pledge stay the fixed
-    estimate always -- Dhan's ledger only exposes those as one combined
-    daily total with no way to attribute it back to a single position (see
-    dhan.charges.dp_ledger_total's docstring). Returns None on ANY failure
-    (expired token, Dhan API outage) rather than raising -- a None here
-    means build_trade_log writes 0, not a guessed/stale number, so a blank
-    Costs cell always means "no charge data yet," never "possibly out of
-    date"."""
+    where applicable -- via dhan.charges.position_charge_summary(). Entry/
+    exit leg charges are Dhan's real trade-book figures ONLY (trade_index) --
+    no rate-card estimate fallback (removed 2026-09-15); a leg not yet in
+    Dhan's trade-book (same-day fills, mainly) reads as 0 until a later run
+    picks it up. MTF interest still prefers a real-ledger allocation
+    (interest_index, see mtf_interest_allocation_index) over its own funded
+    x rate x days formula fallback -- that's a separate mechanism, not
+    covered by the leg-charge estimate removal. trade_index/interest_index
+    are both built ONCE for the whole run, see load_trades_from_positions.
+    DP/pledge stay the fixed estimate always -- Dhan's ledger only exposes
+    those as one combined daily total with no way to attribute it back to
+    a single position (see dhan.charges.dp_ledger_total's docstring).
+    Returns None on ANY failure (expired token, Dhan API outage) rather
+    than raising -- a None here means build_trade_log writes 0, not a
+    guessed/stale number, so a blank Costs cell always means "no charge
+    data yet," never "possibly out of date"."""
     try:
         return dhan_charges.position_charge_summary(
             position, trade_index, interest_index)["total_charges"]
@@ -230,10 +233,10 @@ def load_trades_from_positions() -> list[dict]:
 
     # One trade-book fetch and one MTF-interest-allocation pass for the
     # WHOLE run, not one per position -- see dhan.charges.charges_index and
-    # mtf_interest_allocation_index. Both fall back to {} (every leg/
-    # position then estimated) on an outright API/auth failure rather than
-    # raising -- a workbook sync shouldn't fail outright just because live
-    # charge data isn't reachable.
+    # mtf_interest_allocation_index. Both fall back to {} (every leg reads
+    # 0/"pending", every position's interest reads its own formula fallback)
+    # on an outright API/auth failure rather than raising -- a workbook sync
+    # shouldn't fail outright just because live charge data isn't reachable.
     try:
         trade_index = dhan_charges.charges_index(PNL_START_DATE)
     except Exception:

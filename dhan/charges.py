@@ -164,59 +164,6 @@ def trade_api_charges(trade: dict) -> float:
     return sum(trade.get(field, 0.0) or 0.0 for field, _ in _CHARGE_FIELDS)
 
 
-def estimate_trade_charges(quantity: int, price: float, product: str,
-                           transaction_type: str) -> float:
-    """Estimates the same 6 API charge fields (brokerage/STT/exchange/SEBI/
-    stamp/GST) for one trade leg from Dhan's PUBLISHED rate card, for use
-    ONLY when the real per-trade figures can't be pulled from the trade-book
-    API (outage, or a same-day trade not yet indexed there) -- see
-    position_charge_summary's api-then-estimate fallback. NSE only (this
-    pipeline never trades BSE). Rates verified live against
-    https://dhan.co/pricing/ on 2026-08-20:
-
-        CNC       brokerage 0; STT 0.1% both sides; stamp 0.015% buy-side only
-        INTRADAY  brokerage min(Rs20, 0.03% of turnover); STT 0.025%
-                  sell-side only; stamp 0.003% buy-side only
-        MTF       brokerage same formula as INTRADAY; STT/stamp same as CNC
-
-    Any product that isn't explicitly MTF or INTRADAY (CNC, MARGIN/T+5, or
-    anything else) is charged at CNC rates -- per explicit instruction
-    2026-08-24: MARGIN (T+5) positions were falling into this function's old
-    catch-all "else" branch and getting charged as INTRADAY, which is wrong
-    (T+5 is a delivery-style holding, not a same-day round-trip). INTRADAY
-    stays its own explicit branch since the mirrored-short entries genuinely
-    are same-day round-trips with real intraday charge treatment at Dhan --
-    only the *default* changed, from "assume intraday" to "assume CNC".
-
-    Exchange transaction charges (0.0030699%) and SEBI turnover fees
-    (0.0001%) are identical across all three products. GST is 18% on
-    (brokerage + exchange charges + SEBI charges) only -- STT and stamp
-    duty are government taxes, not GST-able fees, same convention Dhan's
-    own charge sheet uses."""
-    product          = product.upper()
-    transaction_type = transaction_type.upper()
-    turnover         = quantity * price
-
-    if product == "MTF":
-        brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
-        stt = turnover * 0.001                                    # 0.1%, both sides (same as CNC)
-        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only (same as CNC)
-    elif product == "INTRADAY":
-        brokerage = min(20.0, turnover * 0.0003)                  # Rs20 or 0.03%, whichever lower
-        stt = turnover * 0.00025 if transaction_type == "SELL" else 0.0    # 0.025%, sell-side only
-        stamp = turnover * 0.00003 if transaction_type == "BUY" else 0.0   # 0.003%, buy-side only
-    else:  # CNC, MARGIN (T+5), or anything else not explicitly MTF/INTRADAY
-        brokerage = 0.0
-        stt = turnover * 0.001                                    # 0.1%, both sides
-        stamp = turnover * 0.00015 if transaction_type == "BUY" else 0.0   # 0.015%, buy-side only
-
-    exchange_txn = turnover * 0.000030699   # NSE 0.0030699%
-    sebi         = turnover * 0.000001      # 0.0001%
-    gst          = (brokerage + exchange_txn + sebi) * 0.18
-
-    return brokerage + stt + exchange_txn + sebi + stamp + gst
-
-
 def fixed_charges(trade: dict, products: dict[str, str]) -> tuple[float, float]:
     """(dp_charge, pledge_unpledge_charge) for this trade -- both non-zero
     only on the genuine delivery entry BUY leg (see is_delivery_buy)."""
@@ -574,11 +521,15 @@ _EXIT_PRICE_FIELD = {
 
 def _leg_charges(oid: str | None, qty, price, product: str, side: str,
                  trade_index: dict[str, dict]) -> tuple[float, str]:
-    """Real API charges for one leg if trade_index has them, else the
-    rate-card estimate. Same-day fills routinely aren't in trade_index yet
-    (Dhan's historical trade-book endpoint doesn't index the current day --
-    confirmed live 2026-09-08), so falling through to the estimate for
-    those is the expected, common case, not an error path. Deliberately
+    """Real API charges for one leg if trade_index has them, else 0.0/"pending"
+    -- no rate-card estimate, real Dhan trade-book figures only (removed
+    2026-09-15, per explicit instruction: an estimate can be wrong, and this
+    codebase would rather show "no charge data yet" than a guessed number).
+    Same-day fills routinely aren't in trade_index yet (Dhan's historical
+    trade-book endpoint doesn't index the current day -- confirmed live
+    2026-09-08), so a same-day leg reads 0.0/"pending" until the NEXT day's
+    run, once that endpoint's range includes it -- this is the expected,
+    common case for a same-day position, not an error path. Deliberately
     takes an already-built index rather than looking the order up itself --
     see position_charge_summary for why a per-leg fallback fetch here would
     be actively dangerous, not just slower."""
@@ -588,7 +539,7 @@ def _leg_charges(oid: str | None, qty, price, product: str, side: str,
         trade = trade_index.get(oid)
         if trade is not None and _has_charge_fields(trade):
             return trade_api_charges(trade), "api"
-    return estimate_trade_charges(qty, price, product, side), "estimated"
+    return 0.0, "pending"
 
 
 def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = None,
@@ -601,23 +552,22 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
     date (closed -- interest stops accruing once covered/sold, so it's
     frozen there rather than keeping today's growing number).
 
-    Entry/exit leg charges prefer Dhan's real trade-book figures, looked up
-    from trade_index (see charges_index), falling back to
-    estimate_trade_charges() (Dhan's published rate card) only when the
-    real number isn't available yet -- same-day fills (the historical
-    trade-book endpoint doesn't index today, confirmed live 2026-09-08), or
-    an outright API outage. This reverses an earlier version of this
-    function that used the estimate unconditionally -- reopened 2026-09-08
-    after confirming per-symbol totals from the real API (94 legs, 47
-    fully-matched symbols) run the estimate ~3.7% high, on top of a
-    same-day same-symbol STT-netting quirk (see git history) that can
-    misattribute charges between two legs placed the same session -- the
-    shorting add-on's short-open SELL and the paired position's
-    delivery-exit SELL. That quirk is real Dhan/NSE behavior (STT nets per
-    client-scrip-day at settlement, not per order), not a data error, so
-    the real API figure for a given leg IS what was actually charged for
-    that specific order -- reporting it here is more truthful than a
-    synthetic estimate, even on the legs where the split looks lopsided.
+    Entry/exit leg charges come ONLY from Dhan's real trade-book figures,
+    looked up from trade_index (see charges_index) -- no rate-card estimate
+    fallback (removed 2026-09-15, per explicit instruction: real API data
+    only, even if that means a leg reads 0.0/"pending" until the trade-book
+    actually indexes it). That's the expected state for anything closed
+    today (the historical trade-book endpoint doesn't index today at all,
+    confirmed live 2026-09-08) or hit by an outright API outage -- it
+    resolves to a real number on a later run once Dhan's own trade-book has
+    it, never a guessed one in the meantime. There's also a real same-day
+    same-symbol STT-netting quirk (see git history) that can misattribute
+    charges between two legs placed the same session -- the shorting
+    add-on's short-open SELL and the paired position's delivery-exit SELL.
+    That quirk is real Dhan/NSE behavior (STT nets per client-scrip-day at
+    settlement, not per order), not a data error -- the real API figure for
+    a given leg IS what was actually charged for that specific order, even
+    on the legs where the split looks lopsided.
 
     trade_index=None (the default) builds ONE index here, covering
     [entry_date, today] -- NOT a separate get_trades() call per leg. Doing
@@ -626,16 +576,19 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
     get_trades() paginates through the whole range on every call, and two
     of those back-to-back (no delay) tripped Dhan's rate limit (DH-904,
     confirmed live 2026-09-08) on the second call, which then silently
-    fell back to the estimate for the exit leg -- the wrong tradeoff, since
+    read as 0.0/"pending" for the exit leg -- the wrong tradeoff, since
     that failure mode is indistinguishable from "not in the trade-book
     yet." One index build, reused for both legs, avoids the trap entirely.
     A caller processing many positions in one run should still build its
     own index once (via charges_index) and pass it in here, rather than
     letting every position pay for its own [entry_date, today] fetch.
     "entry_source"/"exit_source" say which path was actually used for that
-    leg ("api"/"estimated"/"none").
+    leg ("api"/"pending"/"none").
 
-    MTF interest similarly prefers a real-ledger-based allocation (via
+    MTF interest is the one remaining estimate in this file (the leg-charge
+    estimate above was removed 2026-09-15; this one wasn't -- it's a
+    different mechanism, not covered by that instruction, flag if you want
+    it removed too): it prefers a real-ledger-based allocation (via
     interest_index -- see mtf_interest_allocation_index) over the funded x
     rate x days formula, falling back to the formula for any position not
     covered by interest_index (an ongoing billing period not posted yet,
@@ -671,8 +624,9 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
         exit_oid, exit_qty, exit_price, product, exit_side, trade_index)
 
     # DP charge applies to every delivery-style entry -- CNC, MTF, MARGIN
-    # (T+5), or anything else not explicitly INTRADAY (same "not MTF/INTRADAY
-    # -> CNC-like" default as estimate_trade_charges). Only MTF additionally
+    # (T+5), or anything else not explicitly INTRADAY ("not MTF/INTRADAY ->
+    # CNC-like" default, same convention this module used for the now-removed
+    # leg-charge estimate). Only MTF additionally
     # gets the pledge/unpledge fee, since that's specific to MTF's lien
     # mechanism -- MARGIN/T+5 shares actually get delivered to demat, no
     # pledge involved.

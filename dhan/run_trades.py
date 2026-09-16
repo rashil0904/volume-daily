@@ -1334,10 +1334,9 @@ def _append_log(trade_date: date, row: dict) -> None:
 def _sync_pnl_workbook() -> None:
     """Regenerates results/strategy_pnl_simple.xlsx from the latest
     positions_dhan_long.json + positions_dhan_short.json -- called after
-    every pipeline stage (321/925/1159/239) so the workbook stays current.
-    Best-effort: loaded by file path (not a package import, results/ isn't
-    one) and wrapped so a sync failure never blocks the actual trading
-    stage that just ran."""
+    every pipeline stage (321/925/1159/239) so it stays current. Loaded by
+    file path (not a package import, neither results/ nor the repo root is
+    one)."""
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
