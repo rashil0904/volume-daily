@@ -502,17 +502,28 @@ def mtf_interest_allocation_index(positions: list[dict], from_date: str,
     return allocation
 
 
+# "exited_925" stays mapped alongside "exited_916" -- the 9:25 exit stage was
+# renamed to 9:16 on 2026-09-18 (see dhan/run_trades.py), but positions that
+# already closed under the OLD status/field names were deliberately left
+# un-migrated (historical data, not re-written). Dropping the "exited_925"
+# key here would silently zero out every one of those positions' exit-leg
+# charge (and, in mtf_interest_allocation_index below, misdate its interest
+# cutoff to "today" instead of its real exit date) -- confirmed live
+# 2026-09-18 as a real regression from the rename before this fix.
 _EXIT_ORDER_ID_FIELD = {
+    "exited_925":   "exit_order_id_925",
     "exited_916":   "exit_order_id_916",
     "exited_1159":  "exit_order_id_1159",
     "short_closed": "exit_order_id_239",
 }
 _EXIT_TIMESTAMP_FIELD = {
+    "exited_925":   "exit_timestamp_925",
     "exited_916":   "exit_timestamp_916",
     "exited_1159":  "exit_timestamp_1159",
     "short_closed": "exit_timestamp_239",
 }
 _EXIT_PRICE_FIELD = {
+    "exited_925":   "exit_price_925",
     "exited_916":   "exit_price_916",
     "exited_1159":  "exit_price_1159",
     "short_closed": "exit_price_239",
