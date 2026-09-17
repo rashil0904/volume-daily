@@ -319,43 +319,42 @@ def _poll_fill_safe(order_id: str,
         return fallback_price, fallback_qty
 
 
-# WS-first fill confirmation -- TIME-BOXED TRIAL, 2026-09-09 through
-# 2026-09-13 IST inclusive (auto-reverts to plain _poll_fill_safe after that
-# date with zero further action needed). Motivated by [WS_VALIDATION] data
-# showing Dhan's real-time Order Update feed confirms a fill ~0.2-2.5s before
-# REST polling does (see dhan/order_update_feed.py) -- this only ever tries
-# to SAVE that time, never to replace _poll_fill_safe's own correctness:
-# every path below that doesn't get an explicit WS-confirmed TRADED within
-# _WS_FIRST_TIMEOUT seconds falls straight through to the exact same
-# _poll_fill_safe() call this trial is timing against, so a disconnected/
-# stale/empty feed can only ever cost a few wasted 0.15s checks -- it can
-# never produce a wrong fill price/qty or a worse outcome than not having
-# this trial at all.
-_WS_FIRST_TRIAL_UNTIL   = date(2026, 9, 13)
+# WS-first fill confirmation -- PERMANENT as of 2026-09-18. Started as a
+# time-boxed trial (2026-09-09 through 2026-09-13 IST) that was left to
+# auto-revert to plain _poll_fill_safe after that date; the trial's own
+# [WS_VALIDATION] shadow-logging (dhan/order_update_feed.py) kept running
+# independently the whole time regardless, and by 2026-09-18 showed
+# Dhan's real-time Order Update feed confirmed EVERY one of 66/66 compared
+# fills before REST polling did (avg ~0.9s lead, up to ~5s) -- made
+# permanent on that data rather than extending the trial further. This only
+# ever tries to SAVE that time, never to replace _poll_fill_safe's own
+# correctness: every path below that doesn't get an explicit WS-confirmed
+# TRADED within _WS_FIRST_TIMEOUT seconds falls straight through to the
+# exact same _poll_fill_safe() call the validation data was timing against,
+# so a disconnected/stale/empty feed can only ever cost a few wasted 0.15s
+# checks -- it can never produce a wrong fill price/qty or a worse outcome
+# than not having this at all.
 _WS_FIRST_TIMEOUT       = 3.0
 _WS_FIRST_POLL_INTERVAL = 0.15
 
 
 def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int) -> tuple[float, int]:
     """Drop-in replacement for _poll_fill_safe at exit/short-open/cover call
-    sites, for the trial window above. Checks dhan/order_update_feed.py's
-    FileBackedOrderCache (the on-disk snapshot of the REAL WebSocket
-    connection that lives in the separate, long-running live_monitor.py
-    process -- see that module's own docstring on why this process can't
-    reach live_monitor's in-memory cache directly) once every
-    _WS_FIRST_POLL_INTERVAL seconds, for up to _WS_FIRST_TIMEOUT seconds.
+    sites. Checks dhan/order_update_feed.py's FileBackedOrderCache (the
+    on-disk snapshot of the REAL WebSocket connection that lives in the
+    separate, long-running live_monitor.py process -- see that module's own
+    docstring on why this process can't reach live_monitor's in-memory
+    cache directly) once every _WS_FIRST_POLL_INTERVAL seconds, for up to
+    _WS_FIRST_TIMEOUT seconds.
 
     Only a WS-observed TRADED short-circuits the REST path -- a WS-observed
     REJECTED/CANCELLED/EXPIRED breaks out of the wait early (no point
     burning the rest of the timeout) but still defers to _poll_fill_safe for
     the actual return value/rejection message, so rejection-handling
-    behavior is byte-for-byte unchanged from before this trial. Any other
-    outcome (no cache entry yet, ambiguous status, trial window expired,
-    cache file missing/stale) falls through to _poll_fill_safe exactly as if
-    this function didn't exist."""
-    if date.today() > _WS_FIRST_TRIAL_UNTIL:
-        return _poll_fill_safe(order_id, fallback_price, fallback_qty)
-
+    behavior is byte-for-byte unchanged from the pure-REST path. Any other
+    outcome (no cache entry yet, ambiguous status, cache file missing/stale)
+    falls through to _poll_fill_safe exactly as if this function didn't
+    exist."""
     from dhan.order_update_feed import FileBackedOrderCache
     cache = FileBackedOrderCache()
     deadline = time.monotonic() + _WS_FIRST_TIMEOUT

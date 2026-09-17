@@ -1,18 +1,22 @@
 """
-dhan/order_update_feed.py -- Phase 1 shadow-mode observation layer for Dhan's
-Live Order Update WebSocket feed (dhanhq.OrderUpdate, wss://api-order-update.
-dhan.co).
+dhan/order_update_feed.py -- shadow-mode observation layer for Dhan's Live
+Order Update WebSocket feed (dhanhq.OrderUpdate, wss://api-order-update.
+dhan.co), backing run_trades.py's _poll_fill_ws_first fast path.
 
-SCOPE (Phase 1 only): this module OBSERVES. It runs a second, independent
-WebSocket connection alongside live_monitor.py's existing MarketFeed
-connection, logs every order-update message it receives into an in-memory
-cache (periodically persisted to results/order_update_cache.json), and --
-when explicitly enabled -- logs a comparison between when this feed first
-saw an order go TRADED and when the EXISTING polling path
-(_poll_fill_strict/_poll_fill_safe in dhan/run_trades.py) confirmed the same
-fill. Nothing here changes what either poll function returns, how long they
-take to return, or any downstream order-placement/exit decision -- see
-enable_validation_logging()'s own docstring for exactly how that's kept true.
+SCOPE: this module OBSERVES only -- it never places, cancels, or confirms an
+order itself. It runs a second, independent WebSocket connection alongside
+live_monitor.py's existing MarketFeed connection, caches every order-update
+message it receives (periodically persisted to
+results/order_update_cache.json, read back by run_trades.py's
+FileBackedOrderCache), and -- when explicitly enabled -- logs a [WS_VALIDATION]
+comparison between when this feed first saw an order go TRADED and when the
+REST polling path (_poll_fill_strict/_poll_fill_safe in dhan/run_trades.py)
+confirmed the same fill. Nothing HERE changes what either poll function
+returns or takes -- see enable_validation_logging()'s own docstring for
+exactly how that's kept true; run_trades.py's _poll_fill_ws_first is the
+separate piece that actually acts on this feed's cache (made permanent
+2026-09-18, after its own trial period showed the WS feed confirmed 66/66
+compared fills before REST polling did -- see that function's docstring).
 
 Independence from the market-feed connection (per research on dhanhq's
 WebSocket clients): this runs its own thread, its own asyncio event loop
@@ -29,10 +33,13 @@ _on_connect_ok) specifically so that gap is visible in the validation data as
 a real WEBSOCKET_MISSED case, not silently absorbed into "the WS just never
 mentioned it."
 
-Phase 2 (NOT built here): actually wiring this feed's cache into
-_poll_fill_strict/_poll_fill_safe as a REST-fallback-backed primary source.
-That decision -- and what fallback timeout to use -- should be made from the
-[WS_VALIDATION] log data this phase produces, not guessed in advance.
+The actual wiring of this feed's cache into a fill-confirmation fast path
+(with a REST-fallback timeout) lives in run_trades.py's _poll_fill_ws_first,
+not here -- decided from the [WS_VALIDATION] data this module produces, not
+guessed in advance. This module keeps running unconditionally regardless of
+that decision, since the shadow comparison itself is zero-risk and still
+useful for spotting regressions (a sudden run of WEBSOCKET_MISSED entries,
+for instance) after the fact.
 """
 
 import json
