@@ -162,8 +162,8 @@ Live execution — own broker (Dhan, via `dhan/`), own capital pool, own positio
 | Broker / product type | Dhan, CNC or MTF (per-symbol leverage check) |
 | Live trading capital | ₹15,00,000 total (`TOTAL_CAPITAL` in `dhan/run_trades.py`) |
 | Entry order type | **LIMIT**, 0.75% above live LTP — not MARKET (see note below) |
-| Profit target | 17% LIMIT sell, placed at 9:15 AM for every open long |
-| Mirrored shorts | Opened on every 9:25/11:59 long exit — 5% cover target + UC-based stop-loss |
+| Profit target | 17% LIMIT sell, placed at 9:13 AM for every open long |
+| Mirrored shorts | Opened on every 9:16/11:59 long exit — 5% cover target + UC-based stop-loss |
 | Auth | Manual 24h access token paste — no OAuth handshake (see [Daily Operations](#daily-operations)) |
 
 > **Why LIMIT, not MARKET**: Dhan/NSE silently apply their own price-protection band to a `MARKET` order — every order this pipeline placed as `orderType: MARKET` came back from Dhan's own order records as `orderType: LIMIT` near the submission price (confirmed 2026-08-17). That band is tight enough that ordinary same-second price movement (no circuit lock involved) produced 0-fills. Placing an explicit LIMIT 0.75% above live LTP gives wider, predictable headroom instead of relying on Dhan's undocumented band. Dhan's order API has no exposed market-protection/collar parameter (unlike Kite's `market_protection`).
@@ -172,27 +172,27 @@ Live execution — own broker (Dhan, via `dhan/`), own capital pool, own positio
 
 Same `capital/4`-or-`n` allocation rule described in [Capital Allocation](#capital-allocation), against the ₹15L Dhan capital base. Per symbol: checks live leverage via `POST /margincalculator` (`productType=MTF`) — `product="MTF"` if leverage ≥2x, otherwise falls back to `product="CNC"` at **half** the capital base (`capital/2`, resized allocation/shares). Places a LIMIT buy 0.75% above live LTP (falls back to the reference price as the limit anchor if LTP is momentarily unavailable), polls for a broker-confirmed fill (never records a phantom fill on an unconfirmed timeout), and writes the position to `results/positions_dhan.json`.
 
-> **MTF-ineligibility CNC retry**: `/margincalculator`'s pre-check isn't fully reliable — it can return a plausible leverage figure for a scrip that Dhan then genuinely rejects at order-placement time (`"Mtf Product Is Not Allowed For This Scrip"`). When that specific rejection is confirmed (not just any rejection — a circuit-limit rejection, for instance, retries nothing, since CNC would hit the same price band), the order is retried as CNC automatically, at the same quantity (no re-halving). This applies to entries, the 9:15 AM targets, both 9:25/11:59 exit branches, and the forced exit. **`MARGIN`/T+5 is never used as a product anywhere in this pipeline** — a T+5-settlement-lag sell rejection (`"No eligible T+5 quantity found"`) also retries as CNC, same mechanism.
+> **MTF-ineligibility CNC retry**: `/margincalculator`'s pre-check isn't fully reliable — it can return a plausible leverage figure for a scrip that Dhan then genuinely rejects at order-placement time (`"Mtf Product Is Not Allowed For This Scrip"`). When that specific rejection is confirmed (not just any rejection — a circuit-limit rejection, for instance, retries nothing, since CNC would hit the same price band), the order is retried as CNC automatically, at the same quantity (no re-halving). This applies to entries, the 9:13 AM targets, both 9:16/11:59 exit branches, and the forced exit. **`MARGIN`/T+5 is never used as a product anywhere in this pipeline** — a T+5-settlement-lag sell rejection (`"No eligible T+5 quantity found"`) also retries as CNC, same mechanism.
 
-### Profit Targets — 9:15 AM (`--place-targets`)
+### Profit Targets — 9:13 AM (`--place-targets`)
 
-For every open long without one yet, places a resting LIMIT sell at **17% above the recorded fill price** (`target_order_id`/`target_price` saved on the position). This is live at the exchange one cron tick before the 9:25 exit check runs, so a target can fill on its own between checkpoints without the pipeline needing to be watching.
+For every open long without one yet, places a resting LIMIT sell at **17% above the recorded fill price** (`target_order_id`/`target_price` saved on the position). This runs a couple minutes ahead of the 9:16 exit check, so a target can fill on its own in that window without the pipeline needing to be watching.
 
-### Exit Check — 9:25 AM (`--exit-925`) / Forced Exit — 11:59 AM (`--exit-1159`)
+### Exit Check — 9:16 AM (`--exit-916`) / Forced Exit — 11:59 AM (`--exit-1159`)
 
 Three branches (P&L-based exit / hold / no-data half-sell fallback), with one addition checked first: if the resting 17% target already filled, the position closes from **the target's own fill**, skipping the LTP check entirely. Otherwise the resting target is cancelled before whichever branch below fires:
 
-- **Target already hit** → close from the target's fill, `status: exited_925` or `exited_1159`.
-- **Live P&L > 0** (925 only) → cancel the resting target, MARKET sell the full position.
-- **No LTP data** → cancel the resting target, sell half as a precaution (`partial_exit_925_nodata`), place a **fresh** target for the remainder at the same target price, remainder carries to 11:59.
-- **P&L ≤ 0** (925 only) → hold for the forced exit; target stays live and untouched.
-- **11:59 forced exit** → unconditional close of whatever's still open (blended P&L across any 925 partial + the 11:59 remainder).
+- **Target already hit** → close from the target's fill, `status: exited_916` or `exited_1159`.
+- **Live P&L > 0** (916 only) → cancel the resting target, MARKET sell the full position.
+- **No LTP data** → cancel the resting target, sell half as a precaution (`partial_exit_916_nodata`), place a **fresh** target for the remainder at the same target price, remainder carries to 11:59.
+- **P&L ≤ 0** (916 only) → hold for the forced exit; target stays live and untouched.
+- **11:59 forced exit** → unconditional close of whatever's still open (blended P&L across any 916 partial + the 11:59 remainder).
 
 Every long exit (full or partial) that actually fills — from any of the branches above — immediately opens a **mirrored intraday short** in the same symbol, same quantity (see below).
 
 ### Mirrored Intraday Shorts
 
-Every time a long exit fills (925 full-sell, 925 no-data half-sell, or 1159 force-sell), `_open_short()` opens a same-quantity `productType=INTRADAY` short in the same symbol — skipped (never raising) if the margin check or balance comes up short, since the long exit that triggered it has already happened and is never reversed. Two protective orders go live immediately:
+Every time a long exit fills (916 full-sell, 916 no-data half-sell, or 1159 force-sell), `_open_short()` opens a same-quantity `productType=INTRADAY` short in the same symbol — skipped (never raising) if the margin check or balance comes up short, since the long exit that triggered it has already happened and is never reversed. Two protective orders go live immediately:
 
 - **Cover target**: LIMIT buy at 5% below the short's entry price.
 - **Stop-loss**: `STOP_LOSS_MARKET` buy, trigger price 0.5% below the day's upper circuit limit (fetched on-demand via `/marketfeed/quote`) — protects against the short being run over on a genuine breakout, since Dhan has no market-protection collar to fall back on for this leg either.
@@ -221,9 +221,9 @@ Longs and shorts share one file, distinguished by `direction`:
 {
   "broker": "dhan", "symbol": "TVSSRICHAK", "entry_date": "2026-08-18",
   "actual_fill_price": 4836.00, "actual_fill_quantity": 3,
-  "entry_order_id": "...", "status": "exited_925", "product": "CNC",
+  "entry_order_id": "...", "status": "exited_916", "product": "CNC",
   "target_order_id": "...", "target_price": 5658.12,
-  "exit_price_925": 5658.12, "exit_order_id_925": "...",
+  "exit_price_916": 5658.12, "exit_order_id_916": "...",
   "realized_return_pct": 17.0, "realized_pnl": 2466.36
 }
 ```
@@ -232,7 +232,7 @@ Longs and shorts share one file, distinguished by `direction`:
 {
   "broker": "dhan", "symbol": "TVSSRICHAK", "direction": "short",
   "entry_price": 5658.12, "quantity": 3, "product": "INTRADAY",
-  "source_exit_stage": "925", "status": "short_closed",
+  "source_exit_stage": "916", "status": "short_closed",
   "cover_target_order_id": "...", "cover_target_price": 5375.21,
   "stop_order_id": "...", "stop_trigger_price": 5820.00,
   "exit_price_239": 5375.21, "exit_order_id_239": "...",
@@ -290,7 +290,7 @@ python dhan/test/test_uc_staged_entry.py     # Case A/B qualification, legs, tie
 python dhan/test/test_auth_renew.py          # Token renewal: success, renew failure, verify failure, GET-not-POST
 python dhan/test/test_batch_concurrency.py   # Wave-based batching, OCO status resolution from one Order Book snapshot
 python dhan/test/test_parallel_orders.py     # RateLimiter sliding window, entry/exit parallel-phase timing
-python dhan/test/test_exit_stage_timing.py   # 925/1159/239's :50-prep / :00-fire staging holds
+python dhan/test/test_exit_stage_timing.py   # 916/1159/239's :50-prep / :00-fire staging holds
 python dhan/test/test_order_update_feed.py   # Order Update WebSocket shadow-mode validation layer
 ```
 
@@ -326,7 +326,7 @@ volume-daily/
 │   ├── cron_renew_token.py     # Cron wrapper — renews the token 8AM+8PM, Telegram-alerts on failure
 │   ├── trade.py                 # buy(), sell(), place_order(), order_status(), cancel_order() via Dhan — CLI too
 │   ├── instruments.py           # symbol → securityId resolution
-│   ├── run_trades.py           # Entry / 17% targets / 925 & 1159 exits / mirrored shorts / 239 square-off
+│   ├── run_trades.py           # Entry / 17% targets / 916 & 1159 exits / mirrored shorts / 239 square-off
 │   ├── uc_staged_entry.py      # UC-based staged entry (Case A/B) — off by default, see Dhan Pipeline section
 │   ├── live_monitor.py         # MarketFeed WebSocket monitor, 9:13 AM–3:40 PM — Telegram-only
 │   ├── test_targets.py         # Self-test — profit targets, OCO short stop-loss, all exit-reason branches
@@ -505,11 +505,11 @@ python dhan/run_trades.py --entry --dry-run
 python dhan/run_trades.py --entry
 python dhan/run_trades.py --entry --symbol RELIANCE --capital 5000 --dry-run   # single stock
 
-# Profit targets, 9:15 AM
+# Profit targets, 9:13 AM
 python dhan/run_trades.py --place-targets
 
 # Exit check 9:25 AM / forced exit 11:59 AM
-python dhan/run_trades.py --exit-925
+python dhan/run_trades.py --exit-916
 python dhan/run_trades.py --exit-1159
 
 # Mirrored short square-off, 2:39 PM
@@ -575,8 +575,8 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 |---|---|---|
 | 8:00 AM & 8:00 PM (every day) | `0 8,20 * * *` | `python -m dhan.auth --renew` — access-token auto-renewal (see [Auth](#auth-automated-daily-renewal-manual-fallback)) |
 | 9:13 AM | `10 9 * * 1-5` | `scripts/run_dhan_live_monitor.sh` |
-| 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
-| 9:24 AM | `24 9 * * 1-5` | `dhan/run_trades.py --exit-925` — one minute earlier than the actual decision point; the script itself holds internally at 09:24:50 (prep) and 09:25:00 (fire) — see the note below the table |
+| 9:13 AM | `13 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
+| 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --exit-916` — one minute earlier than the actual decision point; the script itself holds internally at 09:15:50 (prep) and 09:16:00 (fire) — see the note below the table |
 | 11:58 AM | `58 11 * * 1-5` | `dhan/run_trades.py --exit-1159` — holds internally at 11:58:50 (prep) and 11:59:00 (fire) |
 | 2:38 PM | `38 14 * * 1-5` | `dhan/run_trades.py --square-off-239` — holds internally at 14:38:50 (prep) and 14:39:00 (fire) |
 | 3:21 PM | `21 15 * * 1-5` | `dhan/run_trades.py --entry` |
@@ -584,7 +584,7 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 
 > The token-renewal job runs **every day of the week**, not just Mon–Fri (see [Auth](#auth-automated-daily-renewal-manual-fallback) for why). Every other Dhan cron line stays Mon–Fri only. UC-based staged entry (`--enable-uc-staged-entry`) is **not** in any cron line above — `scripts/run_dhan_live_monitor.sh` still launches plain `python3.11 -u -m dhan.live_monitor` with no flags; the feature is tested manually (see [UC-Based Staged Entry](#uc-based-staged-entry-case-ab--off-by-default)) until explicitly wired in.
 >
-> **`--exit-925`/`--exit-1159`/`--square-off-239` cron times moved one minute earlier** (was 9:25/11:59/2:39) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). The stage names/flags/position-file field names (`exit_925`, `exit_1159`, `square_off_239`) are unchanged — only the cron trigger time and internal timing moved, not the decision logic itself.
+> **`--exit-916`/`--exit-1159`/`--square-off-239` cron times sit one minute earlier** than their actual decision point (9:15/11:58/2:38) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). `--place-targets` itself moved from 9:15am to 9:13am on 2026-09-18 (to keep a real buffer ahead of the now-earlier exit check), and the exit check moved from 9:25am (`--exit-925`) to 9:16am (`--exit-916`) the same day — the stage's own internal prep/fire mechanism is otherwise unchanged.
 
 ---
 

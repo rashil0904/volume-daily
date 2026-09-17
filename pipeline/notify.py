@@ -254,12 +254,12 @@ def send_entry_failed(broker: str, symbol: str, error_msg: str,
     _send(text, topic="errors")
 
 
-def send_exit_925(broker: str, symbol: str, exit_price: float,
+def send_exit_916(broker: str, symbol: str, exit_price: float,
                   return_pct: float, pnl: float, dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} EXIT 9:25am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} EXIT 9:16am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -268,12 +268,12 @@ def send_exit_925(broker: str, symbol: str, exit_price: float,
     _send(text, topic="entries_exits")
 
 
-def send_exit_925_nodata(broker: str, symbol: str, shares_exited: int,
+def send_exit_916_nodata(broker: str, symbol: str, shares_exited: int,
                          shares_remaining: int, exit_price: float,
                          dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#9888; NO-DATA FALLBACK 9:25am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#9888; NO-DATA FALLBACK 9:16am — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         "Live price unavailable from broker — sold half position as precaution.",
         f"<b>Shares sold:</b> {shares_exited}  |  <b>Still open:</b> {shares_remaining}",
@@ -408,12 +408,12 @@ def send_square_off_manual_review(broker: str, symbol: str, error_msg: str,
 def send_nothing_open_at_1159(broker: str) -> None:
     _send(
         f"<b>11:59am Exit — {html_lib.escape(broker)}</b>\n"
-        "All positions already exited at 9:25am — nothing to force-close.",
+        "All positions already exited at 9:16am — nothing to force-close.",
         topic="entries_exits",
     )
 
 
-def send_daily_summary(broker: str, n_opened: int, n_exited_925: int,
+def send_daily_summary(broker: str, n_opened: int, n_exited_916: int,
                        n_partial_nodata: int, n_force_1159: int,
                        total_pnl: float, dry_run: bool = False) -> None:
     pass  # PnL topic removed

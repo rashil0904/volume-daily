@@ -379,9 +379,9 @@ def evaluate_tick(state: "_SymState", ltp: float, cum_vol: float) -> set[str]:
 # Position-row fields this section adds are ADDITIVE, not a replacement for
 # the existing `status` field every other position row already uses --
 # `status` still flips to the ordinary "open" once a symbol is fully filled
-# (Case A leg 2, or Case B), so place_targets_915/check_exit_925/
+# (Case A leg 2, or Case B), so place_targets_913/check_exit_916/
 # force_exit_1159 need ZERO changes; they already only match status in
-# ("open", "partial_exit_925_nodata"). The new fields (`case`,
+# ("open", "partial_exit_916_nodata"). The new fields (`case`,
 # `case_a_qualified`, `entry_status`, `case_a_leg`, `filled_amount`,
 # `capital_base`) exist purely for this feature's own tracking and for
 # run_entry_321's Step 1/2/3 priority ordering.
@@ -520,7 +520,7 @@ def uc_evaluate_tick(state: UCState, ltp: float, per_stock_capital: float,
 
 def _capped_limit_price(sym: str, trigger_price: float, upper_circuit: float | None) -> float:
     """0.5% above the trigger, capped 0.5% below the day's upper circuit --
-    same fix already shipped for the sell-side 17% target (place_targets_915,
+    same fix already shipped for the sell-side 17% target (place_targets_913,
     GOPAL 2026-08-20). Buying right after a 19% pop is exactly the scenario
     where an uncapped limit can legally exceed a stock's circuit (e.g. a
     20%-band stock) and get rejected outright."""
@@ -1070,7 +1070,7 @@ class LiveMonitor:
             print("[order_update_feed] Enabled (shadow mode) -- see [WS_VALIDATION] log lines. "
                   "NOTE: this only observes polling calls made from THIS process -- see "
                   "FileBackedOrderCache's docstring for why cron-triggered "
-                  "run_entry_321/check_exit_925/force_exit_1159/square_off_239 aren't covered yet.")
+                  "run_entry_321/check_exit_916/force_exit_1159/square_off_239 aren't covered yet.")
 
         print("Starting Dhan MarketFeed…")
         # Outer retry loop: MarketFeed.run() only auto-retries reconnects that

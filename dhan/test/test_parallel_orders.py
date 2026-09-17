@@ -2,7 +2,7 @@
 """
 test_parallel_orders.py -- standalone verifier for the parallel order-placement
 work in dhan/trade.py's RateLimiter and dhan/run_trades.py's entry/exit batch
-stages (run_entry_321, check_exit_925).
+stages (run_entry_321, check_exit_916).
 
 Covers:
   1. RateLimiter is a true sliding window -- a batch of <=5 acquire() calls
@@ -17,7 +17,7 @@ Covers:
      get polled, still get written to the position file in the same
      single-pass save.
   4. Same two properties (parallel timing + one-failure-doesn't-block-others)
-     for check_exit_925's parallel sell phase.
+     for check_exit_916's parallel sell phase.
 
 Mocks every broker-facing call this touches (dhan/trade.py's buy/sell are
 never actually invoked -- run_trades.py's own module-level buy/sell/
@@ -28,7 +28,7 @@ in-memory store -- zero network calls, zero real file writes. Mirrors
 zerodha/test_parallel_orders.py's standalone script style (no pytest in this
 repo).
 
-Note on scope: unlike zerodha's equivalent, check_exit_925's mirrored-short
+Note on scope: unlike zerodha's equivalent, check_exit_916's mirrored-short
 opening is deliberately NOT part of the parallel phase here -- see
 run_trades.py's own comment on this. That sequential batch (with its
 available_balance threading, covered by dhan/test_targets.py's bal-short
@@ -61,7 +61,7 @@ import dhan.run_trades as rt        # noqa: E402
 
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
-# check_exit_925's own _hold_until (real wall-clock pinning, see
+# check_exit_916's own _hold_until (real wall-clock pinning, see
 # dhan/run_trades.py) isn't what this file's timing tests measure -- they
 # measure the parallel-phase wall-clock, not the staging holds around it.
 # Stubbed out globally, same reasoning as _sync_pnl_workbook above.
@@ -312,7 +312,7 @@ def test_entry_mtf_ineligible_retries_as_cnc():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# 4. check_exit_925 -- parallel timing + one-failure-doesn't-block-others
+# 4. check_exit_916 -- parallel timing + one-failure-doesn't-block-others
 # ══════════════════════════════════════════════════════════════════════════
 
 def make_long(sym, **overrides):
@@ -335,7 +335,7 @@ def make_long(sym, **overrides):
 
 
 def test_exit_parallel_timing_and_resilience():
-    print("\n[4] check_exit_925 -- parallel phase timing + one-failure resilience")
+    print("\n[4] check_exit_916 -- parallel phase timing + one-failure resilience")
     symbols = [f"SYM{i}" for i in range(8)]
     failing = "SYM5"
     long_store  = FakeStore(positions=[make_long(s) for s in symbols])
@@ -369,15 +369,17 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt, "_save_long_pos", side_effect=long_store.save), \
          patch.object(rt, "_load_short_pos", side_effect=short_store.load), \
          patch.object(rt, "_save_short_pos", side_effect=short_store.save), \
-         patch.object(rt.notify, "send_exit_925"):
+         patch.object(rt.notify, "send_exit_916"):
 
         start = time.monotonic()
-        rt.check_exit_925(dry_run=False)
+        rt.check_exit_916(dry_run=False)
         elapsed = time.monotonic() - start
 
-    # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND (5+3) for
-    # BOTH Wave 1 (cancel+sell) and Wave 2 (short-open, re-chunked over the 7
-    # successfully-sold tasks -- still 5+3) -- one BATCH_SLEEP_SECONDS pause
+    # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND for Wave 1
+    # (cancel+sell) -- currently 7+1, 2 chunks. Wave 2 (short-open) re-chunks
+    # over the 7 successfully-sold tasks -- at the current limit (7) that's
+    # a single chunk, so the ceiling below (computed for a worst-case 2
+    # chunks per wave) has slack built in rather than being tight -- one BATCH_SLEEP_SECONDS pause
     # between chunks in EACH wave now (two separate re-chunked passes, not
     # one flat per-position cascade anymore -- see the wave-based redesign).
     # _open_short_place is mocked to return None (no shorts open), so Wave 3
@@ -397,7 +399,7 @@ def test_exit_parallel_timing_and_resilience():
     check("the failing symbol's position is left untouched (still open)",
           by_sym[failing]["status"] == "open", f"status={by_sym[failing]['status']}")
     check("every OTHER symbol was exited despite the one failure",
-          all(by_sym[s]["status"] == "exited_925" for s in symbols if s != failing))
+          all(by_sym[s]["status"] == "exited_916" for s in symbols if s != failing))
     check("exactly ONE save() call for the whole run (one write per WAVE now, "
           "not one per chunk -- 2 chunks within Wave 1, still just 1 save)",
           long_store.save_count == 1, f"save_count={long_store.save_count}")

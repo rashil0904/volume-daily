@@ -259,7 +259,7 @@ class FileBackedOrderCache:
     processes that don't hold a live WebSocket connection of their own.
 
     IMPORTANT, read before wiring anything to this: run_entry_321/
-    check_exit_925/force_exit_1159/square_off_239 each run as their OWN
+    check_exit_916/force_exit_1159/square_off_239 each run as their OWN
     separate cron-triggered `python3.11 dhan/run_trades.py --...` process --
     NOT inside live_monitor.py's process. enable_validation_logging()
     monkeypatches dhan.run_trades's module-level names IN WHICHEVER PROCESS
@@ -407,7 +407,7 @@ def enable_validation_logging(feed: OrderUpdateFeed, target_module=None):
     SEPARATE module object from what `import dhan.run_trades` returns from
     inside it, even though it's the exact same file on disk. Patching the
     latter has zero effect on the former's own global names, which is what
-    check_exit_925/force_exit_1159/etc. actually call. Confirmed live
+    check_exit_916/force_exit_1159/etc. actually call. Confirmed live
     2026-09-08/09: this silently no-opped in EVERY cron-triggered
     run_trades.py invocation since Phase 1 was wired in -- not one
     [WS_VALIDATION] line, including the synchronous not-filled path, which

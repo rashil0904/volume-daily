@@ -8,7 +8,7 @@ responsibilities (per the dhan/ 4-file redesign, mirroring zerodha/trade.py):
   1. Order placement  — place_order()/buy()/sell()/cancel_order()/order_status()/
      get_orders(), same shapes as before.
   2. Rate limiting    — every order-placing/cancelling call goes through a single
-     process-wide sliding-window token bucket capped at 5 orders/sec (see
+     process-wide sliding-window token bucket capped at 7 orders/sec (see
      RateLimiter/rate_limiter below), so run_trades.py's parallel entry/exit
      batches (each symbol's order fired from its own thread-pool worker) never
      exceed Dhan's order-endpoint rate limit no matter how many threads import
@@ -64,7 +64,7 @@ _SOURCE_URL = "https://images.dhan.co/api-data/api-scrip-master.csv"
 _MAX_AGE    = timedelta(days=7)
 
 
-# ── Rate limiter (process-wide, 5 orders/sec, sliding window) ───────────────────
+# ── Rate limiter (process-wide, 7 orders/sec, sliding window) ───────────────────
 # A single token bucket that EVERY order-placing/cancelling call in this module
 # goes through -- run_trades.py's parallel entry/exit batches (each symbol's
 # order fired from its own ThreadPoolExecutor worker) all end up calling
@@ -74,12 +74,12 @@ _MAX_AGE    = timedelta(days=7)
 # `rate_limiter` instance (module-level singleton below), never one per call
 # site or per pool.
 #
-# True sliding window (deque of the last 5 call timestamps), not a flat
-# min-interval spacer: a batch of <=5 orders must fire back to back with NO
+# True sliding window (deque of the last 7 call timestamps), not a flat
+# min-interval spacer: a batch of <=7 orders must fire back to back with NO
 # artificial delay between them (that's the whole point of parallelizing the
 # entry/exit batches -- a fixed per-call spacing would silently re-serialize
-# them). Only the 6th-or-later acquire() within any trailing 1-second window
-# blocks, and only for as long as it takes the oldest of those 5 calls to age
+# them). Only the 8th-or-later acquire() within any trailing 1-second window
+# blocks, and only for as long as it takes the oldest of those 7 calls to age
 # out of the window. Thread-safe: every mutation of the deque happens under
 # `_lock`, held for the full check-or-wait-and-record sequence so two threads
 # can never both observe "room for one more" and both proceed.
@@ -117,7 +117,7 @@ class RateLimiter:
             # grabbed the freed slot in the meantime.
 
 
-rate_limiter = RateLimiter(max_per_sec=5)
+rate_limiter = RateLimiter(max_per_sec=7)  # raised from 5 on 2026-09-18, matching run_trades.py's MAX_ORDER_CALLS_PER_SECOND
 
 
 # ── Instrument resolution (symbol -> Dhan securityId / tick size) ──────────────

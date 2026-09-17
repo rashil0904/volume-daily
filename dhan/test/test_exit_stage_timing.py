@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 test_exit_stage_timing.py -- standalone verifier for the two-pinned-wall-clock-
-instant staging holds added to check_exit_925/force_exit_1159/square_off_239
+instant staging holds added to check_exit_916/force_exit_1159/square_off_239
 (_hold_until, reusing run_entry_321's own _seconds_until mechanism -- see
-run_trades.py's module note above _EXIT_925_PREP_AT).
+run_trades.py's module note above _EXIT_916_PREP_AT).
 
 Each of these three stages now has a prep-check hold (position load + Order
 Book snapshot + UC-cache read -- none of it price-dependent) followed by a
@@ -104,7 +104,7 @@ def make_long(**overrides):
 def make_short(**overrides):
     row = {
         "broker": "dhan", "symbol": "TIMECO", "direction": "short",
-        "product": "INTRADAY", "source_exit_stage": "925",
+        "product": "INTRADAY", "source_exit_stage": "916",
         "entry_date": "2026-08-17", "entry_price": 100.0, "quantity": 10,
         "entry_order_id": "S1", "status": "short_open",
         "entry_timestamp": "2026-08-17T09:25:00+05:30",
@@ -115,12 +115,12 @@ def make_short(**overrides):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# [1] check_exit_925 -- prep (09:24:50) strictly before fire (09:25:00),
+# [1] check_exit_916 -- prep (09:15:50) strictly before fire (09:16:00),
 #     no price-dependent call before the fire-hold
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_check_exit_925_ordering():
-    print("\n[1] check_exit_925 -- prep-hold -> prep work -> fire-hold -> fire work")
+def test_check_exit_916_ordering():
+    print("\n[1] check_exit_916 -- prep-hold -> prep work -> fire-hold -> fire work")
     log: list = []
 
     def fake_hold_until(hh, mm, ss, label):
@@ -164,20 +164,20 @@ def test_check_exit_925_ordering():
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
-         patch.object(rt.notify, "send_exit_925", MagicMock()):
-        rt.check_exit_925(dry_run=False)
+         patch.object(rt.notify, "send_exit_916", MagicMock()):
+        rt.check_exit_916(dry_run=False)
 
     kinds = [entry[0] for entry in log]
-    check("prep-hold (09:24:50) is the very first thing logged",
-          log[0] == ("hold", 9, 24, 50, "check_exit_925 prep"), str(log[:3]))
+    check("prep-hold (09:15:50) is the very first thing logged",
+          log[0] == ("hold", 9, 15, 50, "check_exit_916 prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     check("Order Book snapshot happens after the prep-hold, before any fire-hold",
           kinds.index("hold") < kinds.index("get_orders"), str(kinds))
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
-                        and e[1:4] == (9, 25, 0))
-    check("fire-hold (09:25:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 9, 25, 0, "check_exit_925 fire"))
+                        and e[1:4] == (9, 16, 0))
+    check("fire-hold (09:16:00) is logged, after the prep-hold",
+          log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916 fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     check("get_ltp_batch (price-dependent) happens AFTER the fire-hold, never before",
@@ -359,7 +359,7 @@ def test_hold_until_far_future_returns_without_warning():
 # ══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    test_check_exit_925_ordering()
+    test_check_exit_916_ordering()
     test_force_exit_1159_ordering()
     test_square_off_239_ordering()
     test_hold_until_late_warns_instead_of_silent()

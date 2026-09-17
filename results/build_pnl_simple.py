@@ -141,7 +141,7 @@ TL_HEADERS   = ["Trade ID", "Symbol", "Position", "Entry Date", "Entry Price",
 
 def _extract_exit(position: dict) -> tuple[str | None, float | None]:
     """Finds whichever exit_price_<stage>/exit_timestamp_<stage> pair is
-    present on a position record -- stage suffix varies by exit path (925,
+    present on a position record -- stage suffix varies by exit path (916,
     1159 for a long; 239 for a mirrored short's square-off). Returns
     (iso_date_str, price), or (None, None) if the position is still open
     (no exit fields yet)."""

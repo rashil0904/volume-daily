@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 test_targets.py -- standalone verifier for the profit-target mechanism added to
-dhan/run_trades.py: place_targets_915(), the target-status checks inserted into
-check_exit_925/force_exit_1159/square_off_239, and cover-target placement in
+dhan/run_trades.py: place_targets_913(), the target-status checks inserted into
+check_exit_916/force_exit_1159/square_off_239, and cover-target placement in
 _open_short().
 
 Mocks every broker-facing call this touches (buy/sell/order_status/cancel_order/
@@ -47,7 +47,7 @@ import dhan.run_trades as rt  # noqa: E402  (import after sys.path/stub setup)
 # throughout this file.
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 
-# _sync_pnl_workbook() (called at the end of every 925/1159/239 stage) loads
+# _sync_pnl_workbook() (called at the end of every 916/1159/239 stage) loads
 # results/build_pnl_simple.py by file path and regenerates the REAL
 # results/strategy_pnl_simple.xlsx from the REAL positions_dhan_long.json/
 # positions_dhan_short.json on disk -- neither goes through this suite's
@@ -55,21 +55,21 @@ patch.object(rt, "tick_size", lambda sym: 0.05).start()
 # files on every test run. Stubbed out globally, same as tick_size above.
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
 
-# place_targets_915() now persists its UC batch-fetch to the REAL
+# place_targets_913() now persists its UC batch-fetch to the REAL
 # results/dhan_uc_cache.json (see _save_uc_cache) so later stages can read it
 # back instead of re-fetching live. Left unpatched, every scenario below that
-# calls the real place_targets_915() would overwrite that real file. Stubbed
+# calls the real place_targets_913() would overwrite that real file. Stubbed
 # out globally, same reasoning as _sync_pnl_workbook above.
 patch.object(rt, "_save_uc_cache", lambda circuits: None).start()
 
-# check_exit_925/force_exit_1159 now read today's persisted UC cache first
+# check_exit_916/force_exit_1159 now read today's persisted UC cache first
 # (see _circuit_cache_for -> _load_uc_cache) before falling back to
 # _fetch_upper_circuit_batch, which this suite mocks directly per-scenario.
 # Forcing a cache miss here keeps that fallback path exercised exactly as
 # before, instead of reading whatever's in the REAL results/dhan_uc_cache.json.
 patch.object(rt, "_load_uc_cache", lambda: {}).start()
 
-# check_exit_925/force_exit_1159/square_off_239 now hold at two pinned
+# check_exit_916/force_exit_1159/square_off_239 now hold at two pinned
 # wall-clock instants each (see _hold_until) before/around their real work --
 # real wall-clock timing has no place in this suite (it would either sleep
 # for real, or -- far more likely -- print a spurious "target already passed"
@@ -125,7 +125,7 @@ def make_long(**overrides):
 def make_short(**overrides):
     row = {
         "broker": "dhan", "symbol": "TESTCO", "direction": "short",
-        "product": "INTRADAY", "source_exit_stage": "925",
+        "product": "INTRADAY", "source_exit_stage": "916",
         "entry_date": "2026-08-17", "entry_price": 100.0, "quantity": 10,
         "entry_order_id": "S1", "status": "short_open",
         "entry_timestamp": "2026-08-17T09:25:00+05:30",
@@ -150,7 +150,7 @@ def orders_from_status(order_ids, status_fn):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (a) — place_targets_915\n")
+print("\nScenario (a) — place_targets_913\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos_no_target  = make_long(symbol="ALPHA", actual_fill_price=100.0, actual_fill_quantity=10)
@@ -168,7 +168,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_a), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_915(dry_run=False)
+    rt.place_targets_913(dry_run=False)
 
 check("(a) ALPHA (no target yet) gets a target order placed",
       any(c[0] == "ALPHA" for c in sell_calls))
@@ -206,7 +206,7 @@ with patch.object(rt, "_load_long_pos", store_a2.load), \
      patch.object(rt, "sell", fake_sell_a2), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {"OMICRON": 110.0}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_915(dry_run=False)
+    rt.place_targets_913(dry_run=False)
 
 check("(a2) target capped to 109.45 (110 * 0.995), NOT the uncapped 117.0",
       sell_calls_a2 == [("OMICRON", "NSE_EQ", 10, "LIMIT", 109.45, "MTF")], str(sell_calls_a2))
@@ -228,14 +228,14 @@ with patch.object(rt, "_load_long_pos", store_a3.load), \
      patch.object(rt, "sell", fake_sell_a3), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_915(dry_run=False)
+    rt.place_targets_913(dry_run=False)
 
 check("(a3) UC unavailable -> falls back to uncapped 17% target (117.0)",
       sell_calls_a3 == [("PI", "NSE_EQ", 10, "LIMIT", 117.0)], str(sell_calls_a3))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (b) — 9:25, target already TRADED\n")
+print("\nScenario (b) — 9:16, target already TRADED\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos = make_long(symbol="GAMMA", actual_fill_price=100.0, actual_fill_quantity=10,
@@ -250,7 +250,7 @@ def fake_get_orders_b():
 
 def fail_if_called_order_status_b(oid):
     raise AssertionError("_dhan_order_status must not be called for the target check anymore "
-                          "-- check_exit_925 now resolves it from the batched _dhan_get_orders() snapshot")
+                          "-- check_exit_916 now resolves it from the batched _dhan_get_orders() snapshot")
 
 get_ltp_calls = []
 def fake_get_ltp_b(sym):
@@ -275,23 +275,23 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_b), \
      patch.object(rt, "_open_short", fake_open_short_b), \
      patch.object(rt.notify, "send_target_hit", MagicMock()):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(b) target status resolved from ONE batched _dhan_get_orders() call, not per-order",
       get_orders_calls_b == [1], str(get_orders_calls_b))
 check("(b) get_ltp was NEVER called (existing no_data/pnl_live logic skipped)", get_ltp_calls == [])
 check("(b) sell() was NEVER called (no market/half sell fired)", sell_calls_b == [])
 row = store.positions[0]
-check("(b) position marked exited_925", row["status"] == "exited_925")
-check("(b) exit_price_925 == target's averageTradedPrice", row["exit_price_925"] == 117.0)
-check("(b) exit_order_id_925 == target_order_id", row["exit_order_id_925"] == "TGT-GAMMA")
+check("(b) position marked exited_916", row["status"] == "exited_916")
+check("(b) exit_price_916 == target's averageTradedPrice", row["exit_price_916"] == 117.0)
+check("(b) exit_order_id_916 == target_order_id", row["exit_order_id_916"] == "TGT-GAMMA")
 check("(b) realized_pnl == (117-100)*10 == 170.0", row["realized_pnl"] == 170.0)
 check("(b) NO mirrored short on a target-hit exit (UC risk)",
       open_short_calls == [], str(open_short_calls))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (c) — 9:25, target not traded, no-LTP-data fallback\n")
+print("\nScenario (c) — 9:16, target not traded, no-LTP-data fallback\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos = make_long(symbol="DELTA", actual_fill_price=100.0, actual_fill_quantity=10,
@@ -346,9 +346,9 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.time, "sleep", lambda secs: None), \
-     patch.object(rt.notify, "send_exit_925_nodata", MagicMock()), \
+     patch.object(rt.notify, "send_exit_916_nodata", MagicMock()), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(c) cancel_order was called for the stale target", cancel_calls_c == ["TGT-DELTA"])
 half_sells_c = [c for c in sell_calls_c if c[4] != 117.0]
@@ -361,15 +361,15 @@ check("(c) fresh target qty == shares_remaining (5)", fresh_targets_c[0][2] == 5
 check("(c) fresh target price == SAME target_price (117.0), not recomputed",
       fresh_targets_c[0][4] == 117.0)
 row = store.positions[0]
-check("(c) row status partial_exit_925_nodata", row["status"] == "partial_exit_925_nodata")
+check("(c) row status partial_exit_916_nodata", row["status"] == "partial_exit_916_nodata")
 check("(c) row target_order_id updated to the fresh order", row["target_order_id"] == "TGT2-DELTA")
 check("(c) row target_price UNCHANGED (still 117.0)", row["target_price"] == 117.0)
 check("(c) mirrored short opened on the half sold (5 shares)",
-      open_short_calls_c == [("DELTA", 5, "925")], str(open_short_calls_c))
+      open_short_calls_c == [("DELTA", 5, "916")], str(open_short_calls_c))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (d) — 9:25, target not traded, pnl_live > 0\n")
+print("\nScenario (d) — 9:16, target not traded, pnl_live > 0\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos = make_long(symbol="EPSILON", actual_fill_price=100.0, actual_fill_quantity=10,
@@ -418,18 +418,18 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.time, "sleep", lambda secs: None), \
-     patch.object(rt.notify, "send_exit_925", MagicMock()):
-    rt.check_exit_925(dry_run=False)
+     patch.object(rt.notify, "send_exit_916", MagicMock()):
+    rt.check_exit_916(dry_run=False)
 
 check("(d) cancel_order called before the LIMIT sell, in that order",
       call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "LIMIT", 104.45)], str(call_order_d))
 row = store.positions[0]
-check("(d) row exited_925", row["status"] == "exited_925")
-check("(d) mirrored short opened", open_short_calls_d == [("EPSILON", 10, "925")])
+check("(d) row exited_916", row["status"] == "exited_916")
+check("(d) mirrored short opened", open_short_calls_d == [("EPSILON", 10, "916")])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (e) — 9:25, target not traded, pnl_live <= 0\n")
+print("\nScenario (e) — 9:16, target not traded, pnl_live <= 0\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos = make_long(symbol="ZETA", actual_fill_price=100.0, actual_fill_quantity=10,
@@ -460,7 +460,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "get_ltp", fake_get_ltp_e), \
      patch.object(rt, "get_ltp_batch", lambda syms: {"ZETA": 98.0}), \
      patch.object(rt, "sell", fake_sell_e):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(e) cancel_order NEVER called", cancel_calls_e == [])
 check("(e) sell() NEVER called", sell_calls_e == [])
@@ -601,7 +601,7 @@ with patch.object(rt, "_load_short_pos", store_g.load), \
      patch.object(rt, "_fetch_upper_circuit", fake_fetch_upper_circuit_g), \
      patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
-    rt._open_short("IOTA", 10, "925", dry_run=False)
+    rt._open_short("IOTA", 10, "916", dry_run=False)
 
 check("(g) short-open SELL was placed as plain LIMIT, tick-rounded 0.5% below LTP",
       sell_calls_g == [("IOTA", "NSE_EQ", 10, "LIMIT", 199.0, None)], str(sell_calls_g))
@@ -647,7 +647,7 @@ with patch.object(rt, "_load_short_pos", store_g3.load), \
      patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_g), \
      patch.object(rt.notify, "send_short_open", MagicMock()), \
      patch.object(rt.notify, "send_circuit_fetch_failed", MagicMock()):
-    rt._open_short("KAPPA", 10, "925", dry_run=False)
+    rt._open_short("KAPPA", 10, "916", dry_run=False)
 
 check("(g3) only the cover-target BUY fired -- no stop-loss attempt",
       buy_calls_g3 == [("KAPPA", "NSE_EQ", 10, "LIMIT")], str(buy_calls_g3))
@@ -673,7 +673,7 @@ with patch.object(rt, "_load_short_pos", store_g2.load), \
      patch.object(rt, "_intraday_margin_check", fail_if_called_g2), \
      patch.object(rt, "sell", fail_if_called_g2), \
      patch.object(rt, "buy", fail_if_called_g2):
-    rt._open_short("IOTA", 10, "925", dry_run=False)
+    rt._open_short("IOTA", 10, "916", dry_run=False)
 
 check("(g2) no position row saved -- _open_short returned immediately",
       store_g2.positions == [], str(store_g2.positions))
@@ -752,7 +752,7 @@ check("(h2) status short_closed", row_h2["status"] == "short_closed")
 
 # ─────────────────────────────────────────────────────────────────────────────
 print("\nScenario (i) — _dhan_get_orders() itself raises -> every position with a "
-      "target skipped, no side effects (check_exit_925/force_exit_1159 now share "
+      "target skipped, no side effects (check_exit_916/force_exit_1159 now share "
       "square_off_239's exact fail-closed Order Book pre-check pattern)\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -789,7 +789,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_i), \
      patch.object(rt, "get_ltp", fake_get_ltp_i), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(i) cancel_order never called", cancel_calls_i == [])
 check("(i) sell() never called", sell_calls_i == [])
@@ -834,7 +834,7 @@ with patch.object(rt, "_load_long_pos", store_im.load), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_im.append(1) or "SHOULD-NOT-HAPPEN"), \
      patch.object(rt, "get_ltp", lambda sym: 999.0), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(i-missing) sell() never called", sell_calls_im == [])
 row_im = store_im.positions[0]
@@ -891,7 +891,7 @@ with patch.object(rt, "_load_long_pos", store_multi.load), \
      patch.object(rt, "get_ltp_batch", lambda syms: {"PI-B": 98.0}), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_multi.append(1) or "SHOULD-NOT-HAPPEN"), \
      patch.object(rt.notify, "send_target_hit", MagicMock()):
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(i-multi) _dhan_get_orders called EXACTLY ONCE for 3 open positions",
       get_orders_call_count_multi == [1], str(get_orders_call_count_multi))
@@ -899,7 +899,7 @@ row_a = next(r for r in store_multi.positions if r["symbol"] == "PI-A")
 row_b = next(r for r in store_multi.positions if r["symbol"] == "PI-B")
 row_c = next(r for r in store_multi.positions if r["symbol"] == "PI-C")
 check("(i-multi) PI-A (TRADED in snapshot) closed from its target fill",
-      row_a["status"] == "exited_925" and row_a["exit_price_925"] == 117.0)
+      row_a["status"] == "exited_916" and row_a["exit_price_916"] == 117.0)
 check("(i-multi) PI-B (PENDING in snapshot, pnl_live<=0 at LTP 98) held for 11:59",
       row_b["status"] == "open")
 check("(i-multi) PI-C (missing from snapshot) skipped untouched, manual review",
@@ -908,7 +908,7 @@ check("(i-multi) cancel_order never called for PI-A (closed from target fill) or
       cancel_calls_multi == [], str(cancel_calls_multi))
 
 
-# square_off_239's own equivalent failure uses the same pattern check_exit_925/
+# square_off_239's own equivalent failure uses the same pattern check_exit_916/
 # force_exit_1159 now share above: the OCO status for every position comes
 # from ONE pre-check GET /orders (Order Book) call, so the failure mode to
 # guard is that ONE call itself raising, which must skip EVERY open short for
@@ -1327,7 +1327,7 @@ except Exception:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (bal-short) — check_exit_925's mirrored-short batch: balance fetched "
+print("\nScenario (bal-short) — check_exit_916's mirrored-short batch: balance fetched "
       "ONCE for the whole batch, tracked locally across shorts (not per short)\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1400,7 +1400,7 @@ _bal_short_patches = [
     patch.object(rt, "_fetch_upper_circuit", lambda sym: 130.0),
     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}),
     patch.object(rt.time, "sleep", lambda secs: None),
-    patch.object(rt.notify, "send_exit_925", MagicMock()),
+    patch.object(rt.notify, "send_exit_916", MagicMock()),
     patch.object(rt.notify, "send_short_open", MagicMock()),
     patch.object(rt, "sell", routed_sell),
     patch.object(rt, "buy", lambda *a, **kw: "COVER-OR-STOP"),
@@ -1412,7 +1412,7 @@ _bal_short_patches = [
 with ExitStack() as _stack:
     for _p in _bal_short_patches:
         _stack.enter_context(_p)
-    rt.check_exit_925(dry_run=False)
+    rt.check_exit_916(dry_run=False)
 
 check("(bal-short) _available_balance() called EXACTLY ONCE for the whole batch "
       "(not once per short)", balance_calls_bs == [1], str(balance_calls_bs))

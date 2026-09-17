@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
 test_batch_concurrency.py -- standalone verifier for the WAVE-BASED
-concurrency redesign (2026-08-27) of check_exit_925/force_exit_1159/
+concurrency redesign (2026-08-27) of check_exit_916/force_exit_1159/
 square_off_239: every position in a batch now performs the SAME action
 before any position moves to the next action (cancel-all, then sell-all;
-short-open-all; target/SL-all for 925/1159 -- cancel-all, then
+short-open-all; target/SL-all for 916/1159 -- cancel-all, then
 force-cover-all for 239), so a concurrent Order-API burst is always
 homogeneous by call type. Covers batching primitives (_run_batch,
 _run_in_chunks, _run_exit_wave1), quote-call batching, the peak Order-API
 concurrency invariant, thread-safe capital allocation (_BalanceTracker),
-write-safety (one _save_long_pos/_save_short_pos per WAVE for 925/1159, one
+write-safety (one _save_long_pos/_save_short_pos per WAVE for 916/1159, one
 per BATCH for 239 -- never from inside a worker thread), per-position
 exception isolation, cross-wave ordering, and square_off_239's single
 Order-Book pre-check (replacing per-order status calls).
@@ -50,7 +50,7 @@ import dhan.run_trades as rt   # noqa: E402
 
 patch.object(rt, "tick_size", lambda sym: 0.05).start()
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
-# check_exit_925/force_exit_1159 now read today's persisted UC cache first
+# check_exit_916/force_exit_1159 now read today's persisted UC cache first
 # (see _circuit_cache_for -> _load_uc_cache) before falling back to
 # _fetch_upper_circuit_batch, which every scenario below mocks directly and
 # asserts call counts against. Forcing a cache miss here keeps that fallback
@@ -64,7 +64,7 @@ patch.object(rt, "_load_uc_cache", lambda: {}).start()
 # concurrency-measurement holds a couple of tests below rely on (e.g. test 3's
 # "hold the in-flight window" pattern). So sleep is mocked LOCALLY, per test,
 # only in tests that don't need a real wall-clock window of their own.
-# check_exit_925/force_exit_1159/square_off_239's own _hold_until (real
+# check_exit_916/force_exit_1159/square_off_239's own _hold_until (real
 # wall-clock pinning, see dhan/run_trades.py) is a different matter --
 # nothing in this file exercises that staging behavior itself, so it's
 # stubbed out globally here, same reasoning as _sync_pnl_workbook above.
@@ -115,7 +115,7 @@ def make_long(sym, **overrides):
 def make_short(sym, **overrides):
     row = {
         "broker": "dhan", "symbol": sym, "direction": "short",
-        "product": "INTRADAY", "source_exit_stage": "925",
+        "product": "INTRADAY", "source_exit_stage": "916",
         "entry_date": "2026-08-26", "entry_price": 100.0, "quantity": 10,
         "entry_order_id": f"S-{sym}", "status": "short_open",
         "cover_target_order_id": f"COVER-{sym}", "cover_target_price": 95.0,
@@ -263,16 +263,19 @@ def test_run_exit_wave1_cancel_before_sell():
           max(cancel_idx) < min(sell_idx), str(events))
     check("single batch -> zero inter-batch sleeps", sleep_calls == [], str(sleep_calls))
 
-    # Multi-batch: n=7 -> batches of 5, 2. Cancel/sell never interleave WITHIN
-    # a batch, and there's exactly one inter-batch sleep.
+    # Multi-batch: n = MAX_ORDER_CALLS_PER_SECOND + 3 -> two chunks (first
+    # full, second the 3-item remainder). Cancel/sell never interleave
+    # WITHIN a batch, and there's exactly one inter-batch sleep.
+    n2 = rt.MAX_ORDER_CALLS_PER_SECOND + 3
     events2 = TaggedEvents()
     sleep_calls2 = []
     with patch.object(rt.time, "sleep", lambda s: sleep_calls2.append(s)):
-        for batch in rt._run_exit_wave1(list(range(7)),
+        for batch in rt._run_exit_wave1(list(range(n2)),
                                         lambda it: events2.add("cancel", str(it)),
                                         lambda it: events2.add("sell", str(it)) or it):
             pass
-    check("multi-batch (n=7, chunks of 5+2): exactly 1 inter-batch sleep",
+    check(f"multi-batch (n={n2}, chunks of {rt.MAX_ORDER_CALLS_PER_SECOND}+3): "
+          f"exactly 1 inter-batch sleep",
           sleep_calls2 == [rt.BATCH_SLEEP_SECONDS], str(sleep_calls2))
 
 
@@ -336,9 +339,9 @@ def test_quote_batching_call_counts():
              patch.object(rt, "buy", fake_buy), \
              patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
              patch.object(rt.time, "sleep", lambda secs: None), \
-             patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
+             patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
              patch.object(rt.notify, "send_short_open", lambda **kw: None):
-            rt.check_exit_925(dry_run=False)
+            rt.check_exit_916(dry_run=False)
 
         check(f"N={n}: get_ltp_batch called EXACTLY ONCE (not once per position)",
               len(ltp_calls) == 1, f"calls={len(ltp_calls)}")
@@ -365,7 +368,7 @@ def test_combined_exit_and_short_budget():
           "bursts (never mixed call types in the same burst), but each burst on "
           "its own must still respect the ceiling")
 
-    n = 12   # 3 chunks of 5,5,2 per wave -- every exit ALSO opens a mirrored short
+    n = 12   # 2 chunks (7+5) per wave at the current MAX_ORDER_CALLS_PER_SECOND -- every exit ALSO opens a mirrored short
     symbols = [f"BUD{i}" for i in range(n)]
     long_store  = FakeStore(positions=[
         make_long(s, target_order_id=f"TGT-{s}", target_price=117.0) for s in symbols
@@ -425,9 +428,9 @@ def test_combined_exit_and_short_budget():
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "buy", fake_buy), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
+         patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
+        rt.check_exit_916(dry_run=False)
 
     check(f"peak concurrent order-calls ({peak_count}) never exceeded "
           f"MAX_ORDER_CALLS_PER_SECOND ({rt.MAX_ORDER_CALLS_PER_SECOND}) across "
@@ -491,9 +494,9 @@ def test_balance_tracker_concurrent_never_double_allocates():
 def test_one_write_per_wave_no_lost_writes():
     print("\n[5] Position-file writes -- exactly ONE _save_long_pos() for the "
           "WHOLE run (not once per batch -- Wave 1 now applies every batch's "
-          "results in memory across all 3 chunks, and saves once at the end)")
+          "results in memory across all chunks, and saves once at the end)")
 
-    n = 12   # 3 chunks of 5, 5, 2 within Wave 1
+    n = 12   # 2 chunks (7+5) within Wave 1 at the current MAX_ORDER_CALLS_PER_SECOND
     symbols = [f"WR{i}" for i in range(n)]
     long_store  = FakeStore(positions=[make_long(s) for s in symbols])
     short_store = FakeStore(positions=[])
@@ -518,15 +521,15 @@ def test_one_write_per_wave_no_lost_writes():
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.time, "sleep", lambda secs: None), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
+         patch.object(rt.notify, "send_exit_916", lambda **kw: None):
+        rt.check_exit_916(dry_run=False)
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
     check(f"all {n} positions present in the final saved state (none lost across "
           f"3 batches within Wave 1)", len(by_sym) == n, f"got {len(by_sym)}")
-    check("every position correctly marked exited_925 -- no batch's in-memory "
+    check("every position correctly marked exited_916 -- no batch's in-memory "
           "update was lost before the final save",
-          all(p["status"] == "exited_925" for p in by_sym.values()),
+          all(p["status"] == "exited_916" for p in by_sym.values()),
           str({s: p["status"] for s, p in by_sym.items()}))
     check("save() called EXACTLY ONCE for the whole run (one write per WAVE, "
           "not one per batch -- 3 batches, 1 save)",
@@ -541,9 +544,9 @@ def test_one_write_per_wave_no_lost_writes():
 
 def test_exception_isolation_within_batch():
     print("\n[6] One position's unexpected exception doesn't affect siblings "
-          "in the same batch (check_exit_925, square_off_239)")
+          "in the same batch (check_exit_916, square_off_239)")
 
-    # -- check_exit_925 (crash injected in Wave 1's sell sub-step, via
+    # -- check_exit_916 (crash injected in Wave 1's sell sub-step, via
     # _broker_qty -- the same call site the exception lived at before the
     # wave split) --
     n = 5
@@ -573,16 +576,16 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", lambda sym, exch, qty, **kw: f"SELL-{sym}"), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
+         patch.object(rt.notify, "send_exit_916", lambda **kw: None):
+        rt.check_exit_916(dry_run=False)
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
-    check("(925) the crashing position was left untouched (still open), "
+    check("(916) the crashing position was left untouched (still open), "
           "not silently marked exited", by_sym[failing]["status"] == "open",
           f"status={by_sym[failing]['status']}")
-    check("(925) every OTHER position in the SAME batch still exited despite "
+    check("(916) every OTHER position in the SAME batch still exited despite "
           "one sibling's unexpected exception",
-          all(by_sym[s]["status"] == "exited_925" for s in symbols if s != failing),
+          all(by_sym[s]["status"] == "exited_916" for s in symbols if s != failing),
           str({s: p["status"] for s, p in by_sym.items()}))
 
     # -- square_off_239 (all 5 shorts are neither_filled -- no cover_target/
@@ -660,7 +663,7 @@ def test_short_anchor_uses_batched_ltp_cache():
         return {s: BATCH_LTP for s in syms}   # positive P&L (100 -> 105) -> queues a sell
 
     def fake_get_ltp(s):
-        # Should NEVER be reached: check_exit_925/Wave 1/2/3 no longer call
+        # Should NEVER be reached: check_exit_916/Wave 1/2/3 no longer call
         # get_ltp() at all, and ltp_cache covers this symbol so
         # _open_short_place's own "ltp is None" internal fallback (unrelated,
         # pre-existing, untouched by this change) doesn't trigger either.
@@ -694,9 +697,9 @@ def test_short_anchor_uses_batched_ltp_cache():
          patch.object(rt, "buy", fake_buy), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.time, "sleep", lambda secs: None), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
+         patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
+        rt.check_exit_916(dry_run=False)
 
     check("get_ltp_batch (stage-start, upfront) called exactly once, covering this symbol",
           len(get_ltp_batch_calls) == 1 and sym in get_ltp_batch_calls[0],
@@ -719,7 +722,7 @@ def test_short_anchor_uses_batched_ltp_cache():
 # ══════════════════════════════════════════════════════════════════════════
 # 8. Cross-wave ordering -- Wave 1 (cancel+sell) fully completes, for EVERY
 #    batch, before Wave 2 (short-open) starts at all; Wave 2 fully completes
-#    before Wave 3 (target/SL) starts. Proven for both check_exit_925 and
+#    before Wave 3 (target/SL) starts. Proven for both check_exit_916 and
 #    force_exit_1159 (which share _run_exit_wave1).
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -779,7 +782,7 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
         patch.object(rt, "buy", fake_buy),
         patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe),
         patch.object(rt.time, "sleep", lambda secs: None),
-        patch.object(rt.notify, "send_exit_925", lambda **kw: None),
+        patch.object(rt.notify, "send_exit_916", lambda **kw: None),
         patch.object(rt.notify, "send_force_exit_1159", lambda **kw: None),
         patch.object(rt.notify, "send_short_open", lambda **kw: None),
         patch.object(rt.notify, "send_circuit_fetch_failed", lambda **kw: None),
@@ -793,14 +796,14 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
     return events, long_store, short_store
 
 
-def test_wave_ordering_check_exit_925():
-    print("\n[8] check_exit_925 -- cross-wave ordering for N=12 (3 batches/wave): "
+def test_wave_ordering_check_exit_916():
+    print("\n[8] check_exit_916 -- cross-wave ordering for N=12 (3 batches/wave): "
           "every Wave-1 cancel/exit-sell precedes every Wave-2 short-sell, which "
           "precedes every Wave-3 target/SL buy")
 
     n = 12
     events, long_store, short_store = _run_wave_ordering_case(
-        rt.check_exit_925, n,
+        rt.check_exit_916, n,
         lambda symbols: [make_long(s, target_order_id=f"TGT-{s}", target_price=117.0)
                          for s in symbols])
 
@@ -824,7 +827,7 @@ def test_wave_ordering_check_exit_925():
 
 def test_wave_ordering_force_exit_1159():
     print("\n[9] force_exit_1159 -- cross-wave ordering for N=12, same "
-          "invariant as check_exit_925 (shares _run_exit_wave1). Also confirms "
+          "invariant as check_exit_916 (shares _run_exit_wave1). Also confirms "
           "the target-cancel moved from sequential Phase 1 into Wave 1's "
           "concurrent cancel sub-step -- cancels are visible as batched events "
           "here, not fired one-at-a-time before any task list existed")
@@ -857,7 +860,7 @@ def test_wave_ordering_force_exit_1159():
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_wave1_mixed_fallback_and_full_same_batch():
-    print("\n[10] check_exit_925 Wave 1 -- a no-LTP-fallback task and two "
+    print("\n[10] check_exit_916 Wave 1 -- a no-LTP-fallback task and two "
           "normal profitable-exit tasks in the SAME batch (n=3, one batch): "
           "still cancel-all-then-sell-all, no separate path for the fallback")
 
@@ -904,9 +907,9 @@ def test_wave1_mixed_fallback_and_full_same_batch():
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
-         patch.object(rt.notify, "send_exit_925", lambda **kw: None), \
-         patch.object(rt.notify, "send_exit_925_nodata", lambda **kw: None):
-        rt.check_exit_925(dry_run=False)
+         patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
+         patch.object(rt.notify, "send_exit_916_nodata", lambda **kw: None):
+        rt.check_exit_916(dry_run=False)
 
     cancel_idx = events.indices("cancel")
     sell_idx   = events.indices("sell")
@@ -922,10 +925,10 @@ def test_wave1_mixed_fallback_and_full_same_batch():
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
     check("NODATA correctly took the no-data fallback path (partial exit)",
-          by_sym["NODATA"]["status"] == "partial_exit_925_nodata",
+          by_sym["NODATA"]["status"] == "partial_exit_916_nodata",
           by_sym["NODATA"]["status"])
     check("FULLA/FULLB correctly took the normal full-exit path",
-          by_sym["FULLA"]["status"] == "exited_925" and by_sym["FULLB"]["status"] == "exited_925")
+          by_sym["FULLA"]["status"] == "exited_916" and by_sym["FULLB"]["status"] == "exited_916")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1036,7 +1039,7 @@ if __name__ == "__main__":
     test_one_write_per_wave_no_lost_writes()
     test_exception_isolation_within_batch()
     test_short_anchor_uses_batched_ltp_cache()
-    test_wave_ordering_check_exit_925()
+    test_wave_ordering_check_exit_916()
     test_wave_ordering_force_exit_1159()
     test_wave1_mixed_fallback_and_full_same_batch()
     test_square_off_single_order_book_call_and_both_filled_exclusion()

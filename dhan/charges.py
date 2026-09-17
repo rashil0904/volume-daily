@@ -13,9 +13,9 @@ stampDuty/serviceTax individually.
 A single symbol can generate up to FOUR separate trade legs in one day
 through run_trades.py, each with a genuinely different charge profile:
     1. 3:21pm entry BUY       -- delivery (CNC or MTF), full charge set
-    2. 9:25am/11:59am SELL    -- closes #1, same delivery position, own
+    2. 9:16am/11:59am SELL    -- closes #1, same delivery position, own
                                  charge numbers (e.g. no stamp duty on sells)
-    3. 9:25am/11:59am SELL    -- the shorting add-on's short-OPEN, a brand
+    3. 9:16am/11:59am SELL    -- the shorting add-on's short-OPEN, a brand
                                  new INTRADAY position in the same symbol
     4. 2:39pm BUY             -- covers #3, INTRADAY, same day squared off
 Two fixed costs Dhan doesn't return per-trade are added on top of the API
@@ -133,9 +133,9 @@ def is_delivery_buy(trade: dict, products: dict[str, str]) -> bool:
     """True only for the 3:21pm entry BUY on a CNC/MTF position -- i.e. an
     actual delivery trade that lands in the demat account. Deliberately
     False for:
-      - any SELL (the 9:25/11:59 close of that same delivery position --
+      - any SELL (the 9:16/11:59 close of that same delivery position --
         different charge fields, no DP/pledge re-charge, see trade_charges)
-      - the shorting add-on's INTRADAY legs: the 9:25/11:59 short-open SELL
+      - the shorting add-on's INTRADAY legs: the 9:16/11:59 short-open SELL
         and the 2:39 cover BUY. Both are same-day squared-off intraday
         trades that never touch the demat account or MTF collateral, so
         DP/pledge must never apply to them even though the cover leg is a
@@ -311,13 +311,13 @@ def tracked_order_ids() -> set[str]:
     """Every order ID this pipeline placed, per both position files --
     not just entry_order_id. A position can carry up to 7 different
     order-id fields across its lifecycle (entry_order_id, target_order_id,
-    exit_order_id_925, exit_order_id_1159, cover_target_order_id,
+    exit_order_id_916, exit_order_id_1159, cover_target_order_id,
     stop_order_id, exit_order_id_239 -- the last 3 only on the shorting
     add-on's mirrored short position). Scanning every "*order_id*"-named key
     on every position, rather than hardcoding the field list, means new
     stages/fields picked up automatically without editing this function
     again -- and it's what makes --tracked-only actually show the shorting
-    leg's 925/1159 short-open SELL and 2:39 cover BUY, not just the original
+    leg's 916/1159 short-open SELL and 2:39 cover BUY, not just the original
     3:21 entry BUY."""
     positions = _load_all_positions()
     ids = set()
@@ -503,17 +503,17 @@ def mtf_interest_allocation_index(positions: list[dict], from_date: str,
 
 
 _EXIT_ORDER_ID_FIELD = {
-    "exited_925":   "exit_order_id_925",
+    "exited_916":   "exit_order_id_916",
     "exited_1159":  "exit_order_id_1159",
     "short_closed": "exit_order_id_239",
 }
 _EXIT_TIMESTAMP_FIELD = {
-    "exited_925":   "exit_timestamp_925",
+    "exited_916":   "exit_timestamp_916",
     "exited_1159":  "exit_timestamp_1159",
     "short_closed": "exit_timestamp_239",
 }
 _EXIT_PRICE_FIELD = {
-    "exited_925":   "exit_price_925",
+    "exited_916":   "exit_price_916",
     "exited_1159":  "exit_price_1159",
     "short_closed": "exit_price_239",
 }

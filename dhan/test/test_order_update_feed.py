@@ -457,7 +457,7 @@ def test_target_module_patches_the_actually_running_module():
 
                 # Call it the way code DEFINED IN run_trades.py actually calls it --
                 # a bare global-name lookup (e.g. `_poll_fill_strict(order_id)` inside
-                # check_exit_925), which resolves via THIS module's own __dict__, not
+                # check_exit_916), which resolves via THIS module's own __dict__, not
                 # via any "rt." prefix.
                 result = main_mod._poll_fill_strict("SIM1")
                 check("(3f) calling it via the module's own namespace returns the real "

@@ -24,7 +24,7 @@ separate money.
 
 Usage:
     python dhan/run_trades.py --entry          [--capital AMOUNT] [--dry-run] [--date YYYY-MM-DD]
-    python dhan/run_trades.py --exit-925       [--dry-run]
+    python dhan/run_trades.py --exit-916       [--dry-run]
     python dhan/run_trades.py --exit-1159      [--dry-run]
     python dhan/run_trades.py --entry --symbol RELIANCE --capital 5000 --dry-run   (manual single-stock)
 """
@@ -65,26 +65,29 @@ _INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 _LOG_DIR      = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 1_500_000
 
-# ── Batched-concurrent execution for check_exit_925 / force_exit_1159 /
+# ── Batched-concurrent execution for check_exit_916 / force_exit_1159 /
 # _open_short / square_off_239 ──────────────────────────────────────────────
 # Dhan's confirmed rate ceilings (separate budgets):
 #   Order APIs (place/modify/cancel/status-check) : 10 req/sec
 #   Data APIs  (historical/candle data)            :  5 req/sec
 #   Quote APIs (/marketfeed/ltp|quote|ohlc)        :  1 req/sec, up to 1,000
 #                                                     instruments per call
-# MAX_ORDER_CALLS_PER_SECOND is set to HALF the confirmed Order-API ceiling,
-# not the full 10 -- margin against the ceiling being an aggregate across
-# every order call this process makes in that second (placements, status
-# checks, cancels), not just the ones this file's chunking directly controls
-# (dhan/trade.py's rate_limiter separately caps place_order()/cancel_order()
-# at 5/sec already; this constant governs how many POSITIONS worth of
-# concurrent order-flow -- exit sell, fill poll, and any short it triggers --
-# run_trades.py itself allows in flight at once, see run_entry_321's model
-# pattern above this being adapted here with explicit chunk+sleep pacing
-# instead of one flat unbounded pool).
-MAX_ORDER_CALLS_PER_SECOND = 5
+# MAX_ORDER_CALLS_PER_SECOND is kept below the confirmed Order-API ceiling of
+# 10, not at the full 10 -- margin against the ceiling being an aggregate
+# across every order call this process makes in that second (placements,
+# status checks, cancels), not just the ones this file's chunking directly
+# controls (dhan/trade.py's rate_limiter separately caps
+# place_order()/cancel_order() at the SAME value already; this constant
+# governs how many POSITIONS worth of concurrent order-flow -- exit sell,
+# fill poll, and any short it triggers -- run_trades.py itself allows in
+# flight at once, see run_entry_321's model pattern above this being adapted
+# here with explicit chunk+sleep pacing instead of one flat unbounded pool).
+# Raised from 5 to 7 on 2026-09-18 -- narrower margin (3/10 headroom left for
+# concurrent status-check/cancel traffic, down from 5/10), a deliberate
+# tradeoff for faster batches.
+MAX_ORDER_CALLS_PER_SECOND = 7
 BATCH_SLEEP_SECONDS        = 1.0
-# Wave-based redesign (2026-08-27): check_exit_925/force_exit_1159/
+# Wave-based redesign (2026-08-27): check_exit_916/force_exit_1159/
 # square_off_239 no longer run a position's full cancel->sell->short->
 # target/SL sequence in one worker thread -- every position in a batch now
 # performs the SAME action before any position in that batch moves to the
@@ -228,7 +231,7 @@ def _seconds_until(hh: int, mm: int, ss: int, now: datetime | None = None) -> fl
     return (target - now).total_seconds()
 
 
-# ── Exit-stage staging holds (check_exit_925 / force_exit_1159 /
+# ── Exit-stage staging holds (check_exit_916 / force_exit_1159 /
 # square_off_239) -- same _seconds_until mechanism as run_entry_321's own
 # staging hold above, reused as-is, not reimplemented. Each stage's cron now
 # fires one minute earlier than its actual decision point, giving runway for
@@ -240,8 +243,8 @@ def _seconds_until(hh: int, mm: int, ss: int, now: datetime | None = None) -> fl
 # The 10s gap is deliberate slack for a slow GET /orders call on a bad-network
 # day -- see _hold_until's own docstring for what happens if prep still runs
 # past the fire point despite that buffer.
-_EXIT_925_PREP_AT   = (9, 24, 50)
-_EXIT_925_FIRE_AT   = (9, 25, 0)
+_EXIT_916_PREP_AT   = (9, 15, 50)
+_EXIT_916_FIRE_AT   = (9, 16, 0)
 _EXIT_1159_PREP_AT  = (11, 58, 50)
 _EXIT_1159_FIRE_AT  = (11, 59, 0)
 _SQUAREOFF_PREP_AT  = (14, 38, 50)
@@ -392,7 +395,7 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
 
       - product == "MTF": "...You are trying to sell more than the quantity
         you currently hold" -- confirmed live 2026-08-25 (OPTIEMUS, bought
-        the previous session, sold at 9:25am the next morning). UNLIKE the
+        the previous session, sold at 9:16am the next morning). UNLIKE the
         T+5 case, a CNC retry does NOT fix this -- the shares are pledged as
         collateral for the MTF loan itself, so the block sits at the
         depository/pledge level, not a product-routing quirk; CNC would hit
@@ -414,7 +417,7 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
 
       - product == "CNC": the SAME "...You are trying to sell more than the
         quantity you currently hold" text, confirmed live 2026-09-08 (RML's
-        9:15am target sell -- entered CNC the prior afternoon at 15:27,
+        9:13am target sell -- entered CNC the prior afternoon at 15:27,
         rejected the next morning). No pledge is involved for a plain CNC
         holding, so this is the T+1 settlement/reporting-lag version of the
         same root cause rather than the pledge-linkage one: the position was
@@ -546,7 +549,7 @@ def _margin_check(symbol: str, quantity: int, ref_price: float) -> dict | None:
 def _intraday_margin_check(symbol: str, quantity: int, price: float) -> dict | None:
     """POST /margincalculator with productType=INTRADAY, transactionType=SELL --
     margin required to open the mirrored intraday short for this symbol+quantity
-    (see run_entry_321's shorting add-on in check_exit_925/force_exit_1159). Unlike
+    (see run_entry_321's shorting add-on in check_exit_916/force_exit_1159). Unlike
     Kite's margin endpoint, Dhan's docs show `price` as a required field (not
     tolerant of 0) -- caller passes the current LTP. Returns
     {"leverage": float, "margin_required": float} on success, None on any lookup
@@ -674,7 +677,7 @@ def _tick_round(symbol: str, price: float) -> float:
 # field. This is deliberate, not just a naming split: with one shared file,
 # a fresh long entry's "already entered today" check (see run_entry_321) has
 # to scan for any same-day row regardless of direction -- which means a
-# mirrored short opened THIS MORNING from a 9:25/11:59 exit silently blocks
+# mirrored short opened THIS MORNING from a 9:16/11:59 exit silently blocks
 # a legitimate fresh long re-entry on that same symbol later the same day.
 # Confirmed live 2026-08-20: BAJAJHIND and ZAGGLE both had fresh long signals
 # today, and both got skipped ("already entered today") purely because their
@@ -717,11 +720,11 @@ def _open_pos(positions: list) -> list:
     contains a short-direction row, so no direction filter is needed here."""
     return [p for p in positions
             if p.get("broker") == _BROKER
-            and p.get("status") in ("open", "partial_exit_925_nodata")]
+            and p.get("status") in ("open", "partial_exit_916_nodata")]
 
 
 def _open_short_pos(positions: list) -> list:
-    """Short positions opened by _open_short() (mirroring a 925/1159 long exit) that
+    """Short positions opened by _open_short() (mirroring a 916/1159 long exit) that
     still need squaring off at 2:39pm. positions must already be from
     _load_short_pos() -- the short file only ever contains direction="short" rows."""
     return [p for p in positions
@@ -742,7 +745,7 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
     additional to it. Confirmed live 2026-08-17: /holdings showed
     {"totalQty": 5, "dpQty": 0, "t1Qty": 5} for a T1-only position, and the old
     "totalQty + t1Qty" formula below double-counted it as 10 -- which then
-    false-mismatched against our local qty=5 and blocked check_exit_925 from
+    false-mismatched against our local qty=5 and blocked check_exit_916 from
     selling MOTISONS/SHANTIGOLD/TARSONS entirely that morning. Fixed to use
     totalQty alone.
 
@@ -763,7 +766,7 @@ def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
     accounting treats a sell-only day the same as opening a fresh short,
     tagging it positionType "SHORT" even though nothing was actually
     shorted). Confirmed live 2026-08-19: JINDRILL had 384 in /holdings
-    (unchanged all day) and -192 in /positions (the 192 sold at the 9:25
+    (unchanged all day) and -192 in /positions (the 192 sold at the 9:16
     no-data fallback) -- the old code required /positions' netQty > 0 to
     trust it, so it discarded the -192 and fell back to /holdings' stale 384,
     false-mismatching against a local shares_remaining of 192 and blocking
@@ -921,16 +924,16 @@ _UC_CACHE_FILE = _RESULTS_DIR / "dhan_uc_cache.json"
 
 
 def _save_uc_cache(circuits: dict[str, float]) -> None:
-    """Persists today's upper-circuit values (see place_targets_915, which
-    already batch-fetches UC for every open position at 9:15am) to a small
-    side file so check_exit_925/force_exit_1159 -- separate cron-launched
-    processes, no shared memory with 9:15's -- can read the SAME values back
+    """Persists today's upper-circuit values (see place_targets_913, which
+    already batch-fetches UC for every open position at 9:13am) to a small
+    side file so check_exit_916/force_exit_1159 -- separate cron-launched
+    processes, no shared memory with 9:13's -- can read the SAME values back
     later instead of fetching them again on demand. UC is an exchange-set
     DAILY price band, not a live tick value (see _fetch_upper_circuit's
-    docstring), so 9:15's fetch is still valid at 9:25/11:59; there is no
+    docstring), so 9:13's fetch is still valid at 9:16/11:59; there is no
     correctness reason to ever re-fetch it intraday, only the accident of
     each stage being its own process. Overwrites the whole file each call
-    (place_targets_915 always covers every open position in one shot, so
+    (place_targets_913 always covers every open position in one shot, so
     there's nothing from a prior call worth merging in)."""
     try:
         _UC_CACHE_FILE.write_text(json.dumps(
@@ -956,16 +959,16 @@ def _load_uc_cache() -> dict[str, float]:
 
 
 def _circuit_cache_for(symbols: list[str], prefetched: dict[str, float] | None = None) -> dict[str, float]:
-    """UC lookup for check_exit_925/force_exit_1159's mirrored-short protect
+    """UC lookup for check_exit_916/force_exit_1159's mirrored-short protect
     step: reads today's persisted cache first (see _load_uc_cache -- normally
-    covers every symbol, since place_targets_915 fetches UC for every open
-    position at 9:15am and a short only ever opens on a symbol that was
+    covers every symbol, since place_targets_913 fetches UC for every open
+    position at 9:13am and a short only ever opens on a symbol that was
     already an open long). Only live-fetches whatever's actually missing
     (e.g. the cache file wasn't written this run for some reason) instead of
     unconditionally re-fetching everything on demand.
 
-    prefetched: an already-loaded UC dict, read at check_exit_925/
-    force_exit_1159's 09:24:50/11:58:50 prep-check instant (see _hold_until)
+    prefetched: an already-loaded UC dict, read at check_exit_916/
+    force_exit_1159's 09:15:50/11:58:50 prep-check instant (see _hold_until)
     instead of doing that file read here, at the fire instant. None (the
     default) preserves the original behavior of reading the file itself,
     for any other/manual caller."""
@@ -1044,7 +1047,7 @@ def _run_in_chunks(items: list, worker_fn, chunk_size: int | None = None,
     A generator rather than a single list-returning function specifically so
     callers can apply each chunk's results -- including any position-file
     write -- BEFORE the next chunk's threads start, per the "no position-file
-    write from inside a worker thread" rule (see check_exit_925 /
+    write from inside a worker thread" rule (see check_exit_916 /
     force_exit_1159 / square_off_239, all of which write their results this
     way).
 
@@ -1060,7 +1063,7 @@ def _run_in_chunks(items: list, worker_fn, chunk_size: int | None = None,
 
 def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = None,
                     sleep_between: float | None = None):
-    """Generator shared by check_exit_925/force_exit_1159's Wave 1: for each
+    """Generator shared by check_exit_916/force_exit_1159's Wave 1: for each
     batch of `tasks`, first cancels every task's stale target order (one
     concurrent burst via _run_batch), THEN -- only once every cancel in the
     batch has completed -- sells every task in the batch (a second, separate
@@ -1092,7 +1095,7 @@ def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = No
 
 def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
                       ltp: float | None, balance: "_BalanceTracker") -> dict | None:
-    """Wave 2 of the mirrored-short open (check_exit_925/force_exit_1159):
+    """Wave 2 of the mirrored-short open (check_exit_916/force_exit_1159):
     shorting kill-switch check, INTRADAY margin check, thread-safe balance
     reservation (_BalanceTracker -- safe to call concurrently from multiple
     Wave-2 workers at once), places the short SELL, polls the fill, fires
@@ -1258,7 +1261,7 @@ def _open_short_core(sym: str, qty: int, source_stage: str, dry_run: bool,
     """Combines _open_short_place() (Wave 2) + _open_short_protect() (Wave 3)
     into the single call standalone/manual callers expect -- see
     _open_short() below, kept as the thin backward-compatible wrapper it
-    already was. check_exit_925/force_exit_1159 call the two pieces
+    already was. check_exit_916/force_exit_1159 call the two pieces
     separately instead, as two independently-batched waves (see the module
     note on the wave-based redesign above MAX_ORDER_CALLS_PER_SECOND's
     definition) -- this function's own external behavior/signature is
@@ -1273,7 +1276,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
                 ltp: float | None = None,
                 available_balance: float | None = None) -> float | None:
     """Opens a same-quantity intraday short (productType=INTRADAY) mirroring a long
-    exit that just filled at either the 9:25am or 11:59am stage -- see run_trades.py's
+    exit that just filled at either the 9:16am or 11:59am stage -- see run_trades.py's
     module docstring for the shorting add-on. Skips (never raises) on any
     margin-check/balance/fill failure: the long exit that triggered this has already
     happened and is never reversed by a failed short.
@@ -1282,7 +1285,7 @@ def _open_short(sym: str, qty: int, source_stage: str, dry_run: bool = False,
     external signature/behavior as before this file's stages were made
     batched-concurrent (still does its own position-file load+append+save,
     still takes/returns a plain float), for standalone/manual calls and
-    existing single-call-site tests. check_exit_925/force_exit_1159's
+    existing single-call-site tests. check_exit_916/force_exit_1159's
     concurrent chunk workers call _open_short_core() directly instead, with
     a shared _BalanceTracker across the whole chunk -- see that function's
     docstring.
@@ -1334,7 +1337,7 @@ def _append_log(trade_date: date, row: dict) -> None:
 def _sync_pnl_workbook() -> None:
     """Regenerates results/strategy_pnl_simple.xlsx from the latest
     positions_dhan_long.json + positions_dhan_short.json -- called after
-    every pipeline stage (321/925/1159/239) so it stays current. Loaded by
+    every pipeline stage (321/916/1159/239) so it stays current. Loaded by
     file path (not a package import, neither results/ nor the repo root is
     one)."""
     try:
@@ -1765,10 +1768,10 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         if res["is_partial_fill"]:
             # Fold the completion fill into the SAME row leg 1 already wrote
             # (weighted-average price, summed quantity) rather than a second
-            # row, so exit logic (place_targets_915/check_exit_925/
+            # row, so exit logic (place_targets_913/check_exit_916/
             # force_exit_1159) still sees exactly one row per position --
             # they already only match status in ("open",
-            # "partial_exit_925_nodata"), so flipping this to "open" is all
+            # "partial_exit_916_nodata"), so flipping this to "open" is all
             # that's needed for them to pick it up with zero changes.
             existing_pos = res["existing_pos"]
             total_qty   = existing_pos["actual_fill_quantity"] + fill_qty
@@ -1818,19 +1821,20 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PROFIT TARGETS 9:15am — resting 17% LIMIT sell for every open long that doesn't
-# already have one. Runs one cron tick before --exit-925 so target protection is
-# live at the exchange before the 9:25 check runs. Shorts get their own 5% cover
+# PROFIT TARGETS 9:13am — resting 17% LIMIT sell for every open long that doesn't
+# already have one. Runs a couple minutes ahead of --exit-916 (fires 9:16am) so
+# target protection has a real buffer to be fully in place -- not just one cron
+# tick's slack -- before the exit check reads position state at 9:15:50. Shorts get their own 5% cover
 # target placed inline at open time (see _open_short below) -- this step only
 # concerns long entry-side targets.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def place_targets_915(dry_run: bool = False) -> None:
+def place_targets_913(dry_run: bool = False) -> None:
     positions = _load_long_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
-    print(f"[dhan] Place targets 9:15am{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Place targets 9:13am{'  DRY RUN' if dry_run else ''}")
     print(f"[dhan] {len(open_ps)} open position(s)")
     print(f"{'='*60}")
 
@@ -1844,7 +1848,7 @@ def place_targets_915(dry_run: bool = False) -> None:
     # One batched call for every open position's upper circuit -- needed to
     # cap the 17% target below the day's UC (see below); batched for the same
     # reason get_ltp_batch() exists (Quote APIs are 1 req/sec). Persisted to
-    # _UC_CACHE_FILE so check_exit_925/force_exit_1159 can read these SAME
+    # _UC_CACHE_FILE so check_exit_916/force_exit_1159 can read these SAME
     # values back later today instead of fetching UC again on demand right
     # when a short opens -- exactly the moment a live fetch is most likely to
     # collide with another one and 429 (confirmed live 2026-09-07).
@@ -1859,7 +1863,7 @@ def place_targets_915(dry_run: bool = False) -> None:
 
         try:
             product      = pos.get("product", "MTF")
-            is_partial   = pos["status"] == "partial_exit_925_nodata"
+            is_partial   = pos["status"] == "partial_exit_916_nodata"
             qty          = (int(pos["shares_remaining"]) if is_partial
                             else int(pos["actual_fill_quantity"]))
             fill_price   = float(pos["actual_fill_price"] or 0)
@@ -1908,20 +1912,20 @@ def place_targets_915(dry_run: bool = False) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_925_mtf / force_exit_1159_mtf
+# EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_916_mtf / force_exit_1159_mtf
 # ══════════════════════════════════════════════════════════════════════════════
 
-def check_exit_925(dry_run: bool = False) -> None:
+def check_exit_916(dry_run: bool = False) -> None:
     print(f"\n{'='*60}")
-    print(f"[dhan] Exit check 9:25am{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Exit check 9:16am{'  DRY RUN' if dry_run else ''}")
     print(f"{'='*60}")
 
-    _hold_until(*_EXIT_925_PREP_AT, "check_exit_925 prep")
+    _hold_until(*_EXIT_916_PREP_AT, "check_exit_916 prep")
 
-    # ── Prep step, pinned to 09:24:50: position load + Order Book snapshot +
+    # ── Prep step, pinned to 09:15:50: position load + Order Book snapshot +
     # UC-cache read. None of this is price-dependent -- safe to resolve up to
     # 10s before the fire instant below (see _hold_until's module note).
-    print(f"[dhan]   TIMING check_exit_925 prep-step start: {_ts()}")   # TEMP verification timing
+    print(f"[dhan]   TIMING check_exit_916 prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
     open_ps   = _open_pos(positions)
     print(f"[dhan] {len(open_ps)} open position(s)")
@@ -1950,17 +1954,17 @@ def check_exit_925(dry_run: bool = False) -> None:
         orders_ok   = False
 
     # UC cache read here too (see _circuit_cache_for's prefetched param) --
-    # same file place_targets_915 wrote at 9:15am, read once now instead of
+    # same file place_targets_913 wrote at 9:13am, read once now instead of
     # again at the fire instant below.
     uc_cache_prefetched = _load_uc_cache()
 
-    _hold_until(*_EXIT_925_FIRE_AT, "check_exit_925 fire")
+    _hold_until(*_EXIT_916_FIRE_AT, "check_exit_916 fire")
 
-    # ── Fire step, pinned to 09:25:00: fresh LTP, then the actual
+    # ── Fire step, pinned to 09:16:00: fresh LTP, then the actual
     # decision/sell/short logic -- unchanged from here down except for what
     # now reads from the prep step's already-fetched values instead of
     # fetching them itself.
-    print(f"[dhan]   TIMING check_exit_925 fire-step start: {_ts()}")   # TEMP verification timing
+    print(f"[dhan]   TIMING check_exit_916 fire-step start: {_ts()}")   # TEMP verification timing
 
     # One batched call for every open position's LTP, not one call per symbol
     # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
@@ -1982,15 +1986,15 @@ def check_exit_925(dry_run: bool = False) -> None:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
         fill_price = float(pos["actual_fill_price"] or 0)
-        is_partial = pos["status"] == "partial_exit_925_nodata"
+        is_partial = pos["status"] == "partial_exit_916_nodata"
         qty        = (int(pos["shares_remaining"]) if is_partial
                       else int(pos["actual_fill_quantity"]))
 
         print(f"\n[dhan] {sym}  [{product}]  fill=₹{fill_price:,.2f}  qty={qty}")
 
         # Target-order status check, BEFORE the existing no_data/pnl_live branches.
-        # If the resting 17% target already TRADED (placed by place_targets_915 at
-        # 9:15am), close the position from the target's own fill and skip the rest
+        # If the resting 17% target already TRADED (placed by place_targets_913 at
+        # 9:13am), close the position from the target's own fill and skip the rest
         # of this position's processing entirely -- no LTP check, no market sell.
         target_oid = pos.get("target_order_id")
         if target_oid:
@@ -2009,17 +2013,17 @@ def check_exit_925(dry_run: bool = False) -> None:
                 pnl = (ep - fill_price) * eq
                 ret = (ep - fill_price) / fill_price * 100 if fill_price else 0
                 pos.update({
-                    "status":              "exited_925",
-                    "exit_price_925":      round(ep, 4),
-                    "exit_order_id_925":   target_oid,
-                    "exit_timestamp_925":  _ts(),
+                    "status":              "exited_916",
+                    "exit_price_916":      round(ep, 4),
+                    "exit_order_id_916":   target_oid,
+                    "exit_timestamp_916":  _ts(),
                     "realized_return_pct": round(ret, 4),
                     "realized_pnl":        round(pnl, 2),
                 })
                 dirty = True
                 print(f"[dhan]   TARGET HIT — exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
-                    notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="925",
+                    notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="916",
                                            exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
@@ -2072,7 +2076,7 @@ def check_exit_925(dry_run: bool = False) -> None:
     # TEMP verification timing -- see this session's request to confirm
     # actual before/after latency from the batched target-status lookup
     # above. Remove once the before/after numbers are captured.
-    print(f"[dhan]   TIMING check_exit_925 Phase 1: {time.monotonic() - _phase1_start:.3f}s "
+    print(f"[dhan]   TIMING check_exit_916 Phase 1: {time.monotonic() - _phase1_start:.3f}s "
           f"for {len(open_ps)} position(s)")
 
     # Phase 1's target-hit updates (if any) are complete now -- persist them
@@ -2087,8 +2091,8 @@ def check_exit_925(dry_run: bool = False) -> None:
     # which will until each chunk's exit fires, so every candidate is covered
     # now rather than guessing. Resolves from the prep step's already-loaded
     # uc_cache_prefetched (see _hold_until/_circuit_cache_for's prefetched
-    # param) instead of re-reading the file here -- place_targets_915 already
-    # fetched every open position's UC at 9:15am, so this is normally a pure
+    # param) instead of re-reading the file here -- place_targets_913 already
+    # fetched every open position's UC at 9:13am, so this is normally a pure
     # in-memory lookup with zero live Quote-API calls, not a fresh fetch
     # racing the same 1/sec budget every other quote call in this run needs.
     circuit_cache: dict[str, float] = {}
@@ -2164,7 +2168,7 @@ def check_exit_925(dry_run: bool = False) -> None:
         except Exception as exc:
             return {**task, "error": f"!! task crashed unexpectedly: {exc}"}
 
-    print(f"[dhan]   TIMING check_exit_925 first order-affecting API call (Wave 1 start): "
+    print(f"[dhan]   TIMING check_exit_916 first order-affecting API call (Wave 1 start): "
           f"{_ts()}")   # TEMP verification timing
     wave1_results: list[dict] = []
     for batch_results in _run_exit_wave1(tasks, _cancel_fn, _sell_fn):
@@ -2172,7 +2176,7 @@ def check_exit_925(dry_run: bool = False) -> None:
 
     # ── Sequential apply for Wave 1 (once per whole run, not per batch): every
     # field update + notify call, then exactly ONE _save_long_pos() -- the
-    # first of check_exit_925's 3 total write-points this run (Wave 1 sold
+    # first of check_exit_916's 3 total write-points this run (Wave 1 sold
     # status, Wave 2 short-open rows, Wave 3 target/SL order IDs).
     wave1_dirty = False
     sold_tasks: list[dict] = []   # feeds Wave 2 -- everything actually sold in Wave 1
@@ -2190,12 +2194,12 @@ def check_exit_925(dry_run: bool = False) -> None:
         if res["kind"] == "fallback":
             remain = res["remain"]
             pos.update({
-                "status":             "partial_exit_925_nodata",
-                "shares_exited_925":  eq,
+                "status":             "partial_exit_916_nodata",
+                "shares_exited_916":  eq,
                 "shares_remaining":   remain,
-                "exit_price_925":     round(ep, 4),
-                "exit_order_id_925":  res["oid"],
-                "exit_timestamp_925": _ts(),
+                "exit_price_916":     round(ep, 4),
+                "exit_order_id_916":  res["oid"],
+                "exit_timestamp_916": _ts(),
             })
             print(f"[dhan]   NO-DATA FALLBACK — sold {eq}  ₹{ep:,.2f}")
             if "new_target_oid" in res:
@@ -2205,28 +2209,28 @@ def check_exit_925(dry_run: bool = False) -> None:
             elif "fresh_target_error" in res:
                 print(f"[dhan]   !! fresh target placement failed for {sym}: {res['fresh_target_error']}")
             try:
-                notify.send_exit_925_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
+                notify.send_exit_916_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
                                             shares_exited=eq, shares_remaining=remain,
                                             exit_price=ep, dry_run=dry_run)
             except Exception as exc:
-                print(f"  [notify] exit_925_nodata failed: {exc}", file=sys.stderr)
+                print(f"  [notify] exit_916_nodata failed: {exc}", file=sys.stderr)
         else:
             pnl     = (ep - fill_price) * eq
             ret_act = (ep - fill_price) / fill_price * 100 if fill_price else 0
             pos.update({
-                "status":              "exited_925",
-                "exit_price_925":      round(ep, 4),
-                "exit_order_id_925":   res["oid"],
-                "exit_timestamp_925":  _ts(),
+                "status":              "exited_916",
+                "exit_price_916":      round(ep, 4),
+                "exit_order_id_916":   res["oid"],
+                "exit_timestamp_916":  _ts(),
                 "realized_return_pct": round(ret_act, 4),
                 "realized_pnl":        round(pnl, 2),
             })
             print(f"[dhan]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
-                notify.send_exit_925(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
+                notify.send_exit_916(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
                                      return_pct=ret_act, pnl=pnl, dry_run=dry_run)
             except Exception as exc:
-                print(f"  [notify] exit_925 failed: {exc}", file=sys.stderr)
+                print(f"  [notify] exit_916 failed: {exc}", file=sys.stderr)
 
         sold_tasks.append(res)
 
@@ -2238,7 +2242,7 @@ def check_exit_925(dry_run: bool = False) -> None:
     # nothing else. Shares the same _BalanceTracker across every batch this
     # wave, same as before the wave split (Part 3).
     def _short_place_fn(res: dict) -> dict | None:
-        return _open_short_place(res["sym"], res["eq"], "925", dry_run,
+        return _open_short_place(res["sym"], res["eq"], "916", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance)
 
     wave2_rows: list[dict] = []
@@ -2275,7 +2279,7 @@ def check_exit_925(dry_run: bool = False) -> None:
     if wave2_rows and not dry_run:
         _save_short_pos(short_positions)
 
-    print(f"\n[dhan] Exit check 9:25am complete.")
+    print(f"\n[dhan] Exit check 9:16am complete.")
     _sync_pnl_workbook()
 
 
@@ -2286,7 +2290,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
     _hold_until(*_EXIT_1159_PREP_AT, "force_exit_1159 prep")
 
-    # ── Prep step, pinned to 11:58:50 -- see check_exit_925's matching note.
+    # ── Prep step, pinned to 11:58:50 -- see check_exit_916's matching note.
     print(f"[dhan]   TIMING force_exit_1159 prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
     open_ps   = _open_pos(positions)
@@ -2303,7 +2307,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
         return
 
     # ── Target-status pre-check (single call) -- see the matching comment in
-    # check_exit_925. Same fail-closed handling: if the one Order Book call
+    # check_exit_916. Same fail-closed handling: if the one Order Book call
     # fails, every position with a target_order_id is skipped for manual
     # review below rather than guessed.
     try:
@@ -2316,37 +2320,37 @@ def force_exit_1159(dry_run: bool = False) -> None:
         order_by_id = {}
         orders_ok   = False
 
-    # UC cache read here too -- see check_exit_925's matching note.
+    # UC cache read here too -- see check_exit_916's matching note.
     uc_cache_prefetched = _load_uc_cache()
 
     _hold_until(*_EXIT_1159_FIRE_AT, "force_exit_1159 fire")
 
-    # ── Fire step, pinned to 11:59:00 -- see check_exit_925's matching note.
+    # ── Fire step, pinned to 11:59:00 -- see check_exit_916's matching note.
     print(f"[dhan]   TIMING force_exit_1159 fire-step start: {_ts()}")   # TEMP verification timing
 
     n_force = 0
     dirty   = False
 
     # One batched call for every still-open position's LTP -- see the matching
-    # comment in check_exit_925.
+    # comment in check_exit_916.
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
 
     # ── Phase 1 (sequential): target-hit checks resolve immediately in place;
     # everything else queues an unconditional force-sell task (no P&L gate at
-    # this stage -- unlike 9:25, every remaining open position sells here).
-    _phase1_start = time.monotonic()   # TEMP verification timing -- see check_exit_925's matching note
+    # this stage -- unlike 9:16, every remaining open position sells here).
+    _phase1_start = time.monotonic()   # TEMP verification timing -- see check_exit_916's matching note
     tasks: list[dict] = []
     for pos in open_ps:
         sym        = pos["symbol"]
         product    = pos.get("product", "MTF")
         fill_price = float(pos["actual_fill_price"] or 0)
-        is_partial = pos["status"] == "partial_exit_925_nodata"
+        is_partial = pos["status"] == "partial_exit_916_nodata"
         qty        = (int(pos["shares_remaining"]) if is_partial
                       else int(pos["actual_fill_quantity"]))
 
         print(f"\n[dhan] {sym}  [{product}]  qty={qty}")
 
-        # Target-order status check, same pattern as check_exit_925: TRADED ->
+        # Target-order status check, same pattern as check_exit_916: TRADED ->
         # close from the target's own fill and skip; not traded -> cancel it,
         # then proceed into the existing unconditional force-sell below (no
         # branching needed here since 11:59 has no P&L gate to begin with).
@@ -2365,9 +2369,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
                 ep = float(t_status.get("averageTradedPrice") or 0)
                 eq = int(t_status.get("filledQty") or 0) or qty
                 if is_partial:
-                    s925 = int(pos.get("shares_exited_925") or 0)
-                    p925 = float(pos.get("exit_price_925") or fill_price)
-                    pnl  = (p925 - fill_price) * s925 + (ep - fill_price) * eq
+                    s916 = int(pos.get("shares_exited_916") or 0)
+                    p916 = float(pos.get("exit_price_916") or fill_price)
+                    pnl  = (p916 - fill_price) * s916 + (ep - fill_price) * eq
                     tot  = int(pos["actual_fill_quantity"])
                     ret  = pnl / (fill_price * tot) * 100 if fill_price and tot else 0
                 else:
@@ -2388,7 +2392,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
                                            exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
-                # No mirrored short here -- see the matching comment in check_exit_925.
+                # No mirrored short here -- see the matching comment in check_exit_916.
                 n_force += 1
                 continue
             # Not traded -- the actual cancel moves into Wave 1's concurrent
@@ -2409,18 +2413,18 @@ def force_exit_1159(dry_run: bool = False) -> None:
                       "qty": qty, "is_partial": is_partial, "sell_limit": sell_limit,
                       "target_oid": target_oid})
 
-    # TEMP verification timing -- see check_exit_925's matching note.
+    # TEMP verification timing -- see check_exit_916's matching note.
     print(f"[dhan]   TIMING force_exit_1159 Phase 1: {time.monotonic() - _phase1_start:.3f}s "
           f"for {len(open_ps)} position(s)")
 
     # Phase 1's target-hit updates (if any) are complete now -- persist them
     # before any chunk work begins, independent of whether `tasks` ends up
-    # empty (see the matching note in check_exit_925).
+    # empty (see the matching note in check_exit_916).
     if not dry_run and dirty:
         _save_long_pos(positions)
 
     # Circuit-limit lookup (Part 1) + one-time INTRADAY-short balance fetch
-    # (Part 3), same reasoning as check_exit_925 -- resolves from the prep
+    # (Part 3), same reasoning as check_exit_916 -- resolves from the prep
     # step's already-loaded uc_cache_prefetched, only live-fetching a gap.
     circuit_cache: dict[str, float] = {}
     short_balance = _BalanceTracker(None)
@@ -2432,8 +2436,8 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # concurrent burst per batch), THEN -- only once that batch's cancels are
     # all confirmed -- force-sell every task in that same batch (a second,
     # separate concurrent burst; includes fill polling). No P&L gate here
-    # (unlike 9:25, no "kind"/fallback distinction -- every task is a plain
-    # unconditional sell). See check_exit_925's matching Wave 1 for the full
+    # (unlike 9:16, no "kind"/fallback distinction -- every task is a plain
+    # unconditional sell). See check_exit_916's matching Wave 1 for the full
     # reasoning; identical shape, reused via _run_exit_wave1.
     def _cancel_fn(task: dict) -> None:
         sym, target_oid = task["sym"], task["target_oid"]
@@ -2492,9 +2496,9 @@ def force_exit_1159(dry_run: bool = False) -> None:
         wave1_dirty = True
 
         if is_partial:
-            s925 = int(pos.get("shares_exited_925") or 0)
-            p925 = float(pos.get("exit_price_925") or fill_price)
-            pnl  = (p925 - fill_price) * s925 + (ep - fill_price) * eq
+            s916 = int(pos.get("shares_exited_916") or 0)
+            p916 = float(pos.get("exit_price_916") or fill_price)
+            pnl  = (p916 - fill_price) * s916 + (ep - fill_price) * eq
             tot  = int(pos["actual_fill_quantity"])
             ret  = pnl / (fill_price * tot) * 100 if fill_price and tot else 0
         else:
@@ -2523,7 +2527,7 @@ def force_exit_1159(dry_run: bool = False) -> None:
         _save_long_pos(positions)
 
     # ── Wave 2 (batched-concurrent): open the mirrored short for everything
-    # force-sold in Wave 1 -- see check_exit_925's matching Wave 2.
+    # force-sold in Wave 1 -- see check_exit_916's matching Wave 2.
     def _short_place_fn(res: dict) -> dict | None:
         return _open_short_place(res["sym"], res["eq"], "1159", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance)
@@ -2540,12 +2544,12 @@ def force_exit_1159(dry_run: bool = False) -> None:
             _save_short_pos(short_positions)
         print(f"\n[dhan] Opened {len(wave2_rows)} mirrored short(s).")
 
-    # ── Settle buffer -- see check_exit_925's matching comment.
+    # ── Settle buffer -- see check_exit_916's matching comment.
     if wave2_rows:
         time.sleep(SHORT_SETTLE_BUFFER_SECONDS)
 
     # ── Wave 3 (batched-concurrent): place cover-target + stop-loss for
-    # every short Wave 2 opened -- see check_exit_925's matching Wave 3.
+    # every short Wave 2 opened -- see check_exit_916's matching Wave 3.
     def _protect_fn(row: dict) -> dict:
         return _open_short_protect(row, dry_run, circuit=circuit_cache.get(row["symbol"]))
 
@@ -2566,15 +2570,15 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
     today_ps = [p for p in positions
                 if p.get("broker") == _BROKER and p.get("entry_date") == today]
     n_opened  = len(today_ps)
-    n_925     = sum(1 for p in today_ps if p.get("status") == "exited_925")
+    n_916     = sum(1 for p in today_ps if p.get("status") == "exited_916")
     n_partial = sum(1 for p in today_ps
-                    if p.get("status") == "exited_1159" and "exit_order_id_925" in p)
+                    if p.get("status") == "exited_1159" and "exit_order_id_916" in p)
     total_pnl = sum(p.get("realized_pnl") or 0 for p in today_ps
-                    if p.get("status") in ("exited_925", "exited_1159"))
-    print(f"\n[dhan] Summary — opened={n_opened}  exited@925={n_925}  "
+                    if p.get("status") in ("exited_916", "exited_1159"))
+    print(f"\n[dhan] Summary — opened={n_opened}  exited@916={n_916}  "
           f"partial_nodata={n_partial}  force@1159={n_force}  P&L=₹{total_pnl:+,.2f}")
     try:
-        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_925=n_925,
+        notify.send_daily_summary(broker=_BROKER, n_opened=n_opened, n_exited_916=n_916,
                                   n_partial_nodata=n_partial, n_force_1159=n_force,
                                   total_pnl=total_pnl, dry_run=dry_run)
     except Exception as exc:
@@ -2583,8 +2587,8 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SHORT SQUARE-OFF 2:39pm — unconditional buy-to-cover for every short opened by
-# _open_short() from either the 925 or 1159 long-exit stages (see module docstring).
-# Mirrors force_exit_1159's unconditional-close shape, not check_exit_925's
+# _open_short() from either the 916 or 1159 long-exit stages (see module docstring).
+# Mirrors force_exit_1159's unconditional-close shape, not check_exit_916's
 # conditional one -- this always closes, regardless of P&L.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2599,7 +2603,7 @@ def square_off_239(dry_run: bool = False) -> None:
     # classification (cover_filled/stop_filled/neither_filled) from that
     # snapshot -- pure in-memory, no live price needed for classification
     # itself (only the neither_filled force-cover path below needs LTP,
-    # which is fetched at the fire instant). See check_exit_925/
+    # which is fetched at the fire instant). See check_exit_916/
     # force_exit_1159's matching prep-step note.
     print(f"[dhan]   TIMING square_off_239 prep-step start: {_ts()}")   # TEMP verification timing
     positions   = _load_short_pos()
@@ -2707,7 +2711,7 @@ def square_off_239(dry_run: bool = False) -> None:
     # neither_filled -- cover_filled/stop_filled resolve from the pre-fetched
     # status alone, no further order call needed), save this batch's results
     # before the next batch's cancels begin. Per-batch saves (not one save
-    # for the whole run, unlike check_exit_925/force_exit_1159's waves) --
+    # for the whole run, unlike check_exit_916/force_exit_1159's waves) --
     # if this run is interrupted, some batches end up fully resolved
     # (cancelled + closed) and others fully untouched, never a half-cancelled
     # position in between.
@@ -2877,12 +2881,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Dhan entry+exit (independent of the Zerodha scripts)")
     grp = parser.add_mutually_exclusive_group(required=True)
     grp.add_argument("--entry",         action="store_true", help="Run entry")
-    grp.add_argument("--exit-925",      action="store_true", help="Exit check at 9:25am")
+    grp.add_argument("--exit-916",      action="store_true", help="Exit check at 9:16am")
     grp.add_argument("--exit-1159",     action="store_true", help="Forced exit at 11:59am")
     grp.add_argument("--square-off-239", action="store_true",
-                     help="Square off shorts opened from 925/1159 exits (unconditional, 2:39pm)")
+                     help="Square off shorts opened from 916/1159 exits (unconditional, 2:39pm)")
     grp.add_argument("--place-targets", action="store_true",
-                     help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
+                     help="Place 17%% profit-target LIMIT sells for open longs (9:13am)")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
@@ -2917,7 +2921,7 @@ if __name__ == "__main__":
     # sys.modules["__main__"], a SEPARATE module object from what a plain
     # `import dhan.run_trades` would return from inside enable_validation_
     # logging. Patching that separate copy has zero effect on the functions
-    # check_exit_925/force_exit_1159/etc. actually call -- confirmed live
+    # check_exit_916/force_exit_1159/etc. actually call -- confirmed live
     # 2026-09-08/09 this silently no-opped in every cron-triggered run since
     # Phase 1 was wired in (see enable_validation_logging's own docstring).
     try:
@@ -2931,14 +2935,14 @@ if __name__ == "__main__":
         if args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                           symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
-        elif args.exit_925:
-            check_exit_925(dry_run=args.dry_run)
+        elif args.exit_916:
+            check_exit_916(dry_run=args.dry_run)
         elif args.exit_1159:
             force_exit_1159(dry_run=args.dry_run)
         elif args.square_off_239:
             square_off_239(dry_run=args.dry_run)
         else:
-            place_targets_915(dry_run=args.dry_run)
+            place_targets_913(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)
