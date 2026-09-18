@@ -1822,9 +1822,14 @@
     "actual_fill_price": 219.5,
     "actual_fill_quantity": 1722,
     "entry_order_id": "221260917656409",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-17T15:21:00.473272+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_916": 222.63,
+    "exit_order_id_916": "22126091852109",
+    "exit_timestamp_916": "2026-09-18T09:16:04.643633+05:30",
+    "realized_return_pct": 1.426,
+    "realized_pnl": 5389.86
   },
   {
     "broker": "dhan",
@@ -1835,8 +1840,13 @@
     "actual_fill_price": 2134.6694,
     "actual_fill_quantity": 176,
     "entry_order_id": "321260917609709",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-17T15:21:01.546143+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "exit_price_916": 2164.58,
+    "exit_order_id_916": "34126091813509",
+    "exit_timestamp_916": "2026-09-18T09:16:05.668680+05:30",
+    "realized_return_pct": 1.4012,
+    "realized_pnl": 5264.27
   }
 ]

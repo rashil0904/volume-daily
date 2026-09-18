@@ -1841,5 +1841,41 @@
     "exit_timestamp_239": "2026-09-17T14:39:11.303558+05:30",
     "realized_return_pct": 0.6418,
     "realized_pnl": 1575.82
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SHAREINDIA",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "916",
+    "entry_date": "2026-09-18",
+    "entry_price": 223.51,
+    "quantity": 1722,
+    "entry_order_id": "34126091813609",
+    "cover_target_order_id": "22126091853509",
+    "cover_target_price": 212.33,
+    "stop_order_id": "22126091853809",
+    "stop_trigger_price": 260.81,
+    "stop_limit_price": 262.12,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-18T09:16:07.875693+05:30"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "VENUSPIPES",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "916",
+    "entry_date": "2026-09-18",
+    "entry_price": 2168.7,
+    "quantity": 176,
+    "entry_order_id": "22126091853309",
+    "cover_target_order_id": "22126091853609",
+    "cover_target_price": 2060.3,
+    "stop_order_id": "32126091856109",
+    "stop_trigger_price": 2545.2,
+    "stop_limit_price": 2558.0,
+    "status": "short_open",
+    "entry_timestamp": "2026-09-18T09:16:07.570147+05:30"
   }
 ]
