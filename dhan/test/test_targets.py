@@ -328,7 +328,7 @@ def fake_broker_qty_c(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_c = []
-def fake_open_short_place_c(sym, qty, stage, dry_run, ltp=None, balance=None):
+def fake_open_short_place_c(sym, qty, stage, dry_run, ltp=None, balance=None, **kw):
     open_short_calls_c.append((sym, qty, stage))
     return None
 
@@ -400,7 +400,7 @@ def fake_broker_qty_d(sym, product):
     return 10, "NSE_EQ"
 
 open_short_calls_d = []
-def fake_open_short_place_d(sym, qty, stage, dry_run, ltp=None, balance=None):
+def fake_open_short_place_d(sym, qty, stage, dry_run, ltp=None, balance=None, **kw):
     open_short_calls_d.append((sym, qty, stage))
     return None
 
@@ -530,7 +530,7 @@ def fake_poll_fill_safe_f2(oid, fallback_price, fallback_qty):
     return 90.0, fallback_qty  # a LOSS -- 11:59 has no P&L gate, must still force-sell
 
 open_short_calls_f2 = []
-def fake_open_short_place_f2(sym, qty, stage, dry_run, ltp=None, balance=None):
+def fake_open_short_place_f2(sym, qty, stage, dry_run, ltp=None, balance=None, **kw):
     open_short_calls_f2.append((sym, qty, stage))
     return None
 

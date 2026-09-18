@@ -284,8 +284,11 @@ def test_run_exit_wave1_cancel_before_sell():
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_quote_batching_call_counts():
-    print("\n[2] Quote-batching -- get_ltp_batch/_fetch_upper_circuit_batch "
-          "called exactly ONCE per stage-run for N=1,5,12 positions")
+    print("\n[2] Quote-batching -- get_ltp_batch called exactly TWICE per "
+          "stage-run (prep-time margin precompute + fire-time decision, "
+          "each covering every position in ONE call, never once per "
+          "position), _fetch_upper_circuit_batch exactly ONCE, for "
+          "N=1,5,12 positions")
 
     for n in (1, 5, 12):
         symbols = [f"Q{n}_{i}" for i in range(n)]
@@ -343,10 +346,11 @@ def test_quote_batching_call_counts():
              patch.object(rt.notify, "send_short_open", lambda **kw: None):
             rt.check_exit_916(dry_run=False)
 
-        check(f"N={n}: get_ltp_batch called EXACTLY ONCE (not once per position)",
-              len(ltp_calls) == 1, f"calls={len(ltp_calls)}")
-        check(f"N={n}: that one call covered all {n} symbol(s)",
-              ltp_calls and sorted(ltp_calls[0]) == sorted(symbols))
+        check(f"N={n}: get_ltp_batch called EXACTLY TWICE (prep margin-precompute "
+              f"+ fire decision, never once per position)",
+              len(ltp_calls) == 2, f"calls={len(ltp_calls)}")
+        check(f"N={n}: BOTH calls covered all {n} symbol(s) in one shot",
+              all(sorted(c) == sorted(symbols) for c in ltp_calls), str(ltp_calls))
         check(f"N={n}: _fetch_upper_circuit_batch called EXACTLY ONCE "
               f"(not once per triggered short)", len(circuit_calls) == 1,
               f"calls={len(circuit_calls)}")
@@ -701,8 +705,9 @@ def test_short_anchor_uses_batched_ltp_cache():
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
         rt.check_exit_916(dry_run=False)
 
-    check("get_ltp_batch (stage-start, upfront) called exactly once, covering this symbol",
-          len(get_ltp_batch_calls) == 1 and sym in get_ltp_batch_calls[0],
+    check("get_ltp_batch called exactly twice (prep margin-precompute + fire "
+          "decision), both covering this symbol",
+          len(get_ltp_batch_calls) == 2 and all(sym in c for c in get_ltp_batch_calls),
           str(get_ltp_batch_calls))
     check("get_ltp (single-symbol) is NEVER called -- no per-thread fresh-quote "
           "fetch remains anywhere in this flow",

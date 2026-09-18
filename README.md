@@ -192,7 +192,7 @@ Every long exit (full or partial) that actually fills — from any of the branch
 
 ### Mirrored Intraday Shorts
 
-Every time a long exit fills (916 full-sell, 916 no-data half-sell, or 1159 force-sell), `_open_short()` opens a same-quantity `productType=INTRADAY` short in the same symbol — skipped (never raising) if the margin check or balance comes up short, since the long exit that triggered it has already happened and is never reversed. Two protective orders go live immediately:
+Every time a long exit fills (916 full-sell, 916 no-data half-sell, or 1159 force-sell), `_open_short()` opens a same-quantity `productType=INTRADAY` short in the same symbol — skipped (never raising) if the margin check or balance comes up short, since the long exit that triggered it has already happened and is never reversed. The INTRADAY margin check itself is pre-computed for every open position ~10 seconds ahead of the fire instant (`_precompute_short_margins`, added 2026-09-18) rather than fetched live per-symbol at short-open time — the one deliberate exception to this file's "nothing price-dependent before the fire hold" rule, since margin/leverage brackets aren't as tick-sensitive as the actual sell/short decision. A no-data-fallback half-sell still triggers a fresh, live margin check (the precomputed figure was sized for the full position). Two protective orders go live immediately:
 
 - **Cover target**: LIMIT buy at 5% below the short's entry price.
 - **Stop-loss**: `STOP_LOSS_MARKET` buy, trigger price 0.5% below the day's upper circuit limit (fetched on-demand via `/marketfeed/quote`) — protects against the short being run over on a genuine breakout, since Dhan has no market-protection collar to fall back on for this leg either.

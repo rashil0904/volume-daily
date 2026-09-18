@@ -363,6 +363,7 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt, "_dhan_order_status", lambda oid: {"orderStatus": "TRADED"}), \
          patch.object(rt, "_poll_fill_ws_first", side_effect=fake_poll_fill_safe), \
          patch.object(rt, "_open_short_place", lambda *a, **kw: None), \
+         patch.object(rt, "_intraday_margin_check", lambda sym, qty, ltp: {"margin_required": 1.0}), \
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", return_value=10_000_000.0), \
          patch.object(rt, "_load_long_pos", side_effect=long_store.load), \
@@ -387,8 +388,11 @@ def test_exit_parallel_timing_and_resilience():
     # for _sell_margin_safe's real, unmocked post-sell status-check wait --
     # genuinely happens concurrently within each chunk, not per-symbol, but
     # budgeted per-chunk here rather than trying to defeat the real time
-    # module (see make_long's comment on why this is now unmocked).
-    expected_ceiling = 2 * _CALL_DELAY + 2 * rt.BATCH_SLEEP_SECONDS + 2 * 2.0 + 1.0
+    # module (see make_long's comment on why this is now unmocked). +1 more
+    # BATCH_SLEEP_SECONDS for the prep-time margin precompute's own wave
+    # (_precompute_short_margins, added 2026-09-18) -- 8 candidates also
+    # chunk 7+1, its own separate inter-chunk pause.
+    expected_ceiling = 2 * _CALL_DELAY + 3 * rt.BATCH_SLEEP_SECONDS + 2 * 2.0 + 1.0
     check(f"8-symbol exit batch, chunked at {rt.MAX_ORDER_CALLS_PER_SECOND}, "
           f"completes well under 8x{_CALL_DELAY}s sequential time",
           elapsed < expected_ceiling,

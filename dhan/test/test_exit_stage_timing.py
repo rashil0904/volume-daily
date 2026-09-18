@@ -144,6 +144,10 @@ def test_check_exit_916_ordering():
         log.append(("get_ltp_batch",))
         return {s: 110.0 for s in syms}   # 100 -> 110, positive P&L -> queues a sell
 
+    def fake_intraday_margin_check(sym, qty, price):
+        log.append(("margin_check",))
+        return {"leverage": 5.0, "margin_required": 1.0}
+
     def fake_sell(sym, exch, qty, **kw):
         log.append(("sell",))
         return "SELL-1"
@@ -158,6 +162,7 @@ def test_check_exit_916_ordering():
          patch.object(rt, "_dhan_get_orders", fake_get_orders), \
          patch.object(rt, "_load_uc_cache", fake_load_uc_cache), \
          patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
+         patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
@@ -180,12 +185,25 @@ def test_check_exit_916_ordering():
           log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916 fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
-    check("get_ltp_batch (price-dependent) happens AFTER the fire-hold, never before",
-          kinds.index("get_ltp_batch") > fire_hold_idx, str(kinds))
+    # get_ltp_batch now fires TWICE: once in prep (margin precompute's own
+    # snapshot, deliberately allowed to be stale -- see
+    # _precompute_short_margins' docstring) and once in fire (the real
+    # sell/short decision's LTP, which must stay fresh). The margin
+    # precompute's own call is what should sit BEFORE the fire-hold.
+    ltp_indices = [i for i, k in enumerate(kinds) if k == "get_ltp_batch"]
+    check("get_ltp_batch fires exactly twice (prep margin-precompute + fire decision)",
+          len(ltp_indices) == 2, str(kinds))
+    check("the prep-time get_ltp_batch (margin precompute) happens BEFORE the fire-hold",
+          ltp_indices[0] < fire_hold_idx, str(kinds))
+    check("margin_check (prep-time precompute) happens after the prep-time get_ltp_batch, before the fire-hold",
+          kinds.index("margin_check") > ltp_indices[0] and kinds.index("margin_check") < fire_hold_idx,
+          str(kinds))
+    check("the fire-time get_ltp_batch (real decision LTP) happens AFTER the fire-hold, never before",
+          ltp_indices[1] > fire_hold_idx, str(kinds))
     check("sell() (price-dependent decision) happens AFTER the fire-hold, never before",
           kinds.index("sell") > fire_hold_idx, str(kinds))
-    check("sell() happens after get_ltp_batch (LTP resolved before the decision fires)",
-          kinds.index("sell") > kinds.index("get_ltp_batch"), str(kinds))
+    check("sell() happens after the fire-time get_ltp_batch (LTP resolved before the decision fires)",
+          kinds.index("sell") > ltp_indices[1], str(kinds))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -217,6 +235,10 @@ def test_force_exit_1159_ordering():
         log.append(("get_ltp_batch",))
         return {s: 90.0 for s in syms}   # loss -- irrelevant at 11:59, unconditional sell anyway
 
+    def fake_intraday_margin_check(sym, qty, price):
+        log.append(("margin_check",))
+        return {"leverage": 5.0, "margin_required": 1.0}
+
     def fake_sell(sym, exch, qty, **kw):
         log.append(("sell",))
         return "SELL-1"
@@ -231,6 +253,7 @@ def test_force_exit_1159_ordering():
          patch.object(rt, "_dhan_get_orders", fake_get_orders), \
          patch.object(rt, "_load_uc_cache", fake_load_uc_cache), \
          patch.object(rt, "get_ltp_batch", fake_get_ltp_batch), \
+         patch.object(rt, "_intraday_margin_check", fake_intraday_margin_check), \
          patch.object(rt, "sell", fake_sell), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")), \
@@ -251,8 +274,15 @@ def test_force_exit_1159_ordering():
           log[fire_hold_idx] == ("hold", 11, 59, 0, "force_exit_1159 fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
-    check("get_ltp_batch (price-dependent) happens AFTER the fire-hold, never before",
-          kinds.index("get_ltp_batch") > fire_hold_idx, str(kinds))
+    # get_ltp_batch fires twice here too -- see check_exit_916_ordering's
+    # matching note.
+    ltp_indices = [i for i, k in enumerate(kinds) if k == "get_ltp_batch"]
+    check("get_ltp_batch fires exactly twice (prep margin-precompute + fire decision)",
+          len(ltp_indices) == 2, str(kinds))
+    check("the prep-time get_ltp_batch (margin precompute) happens BEFORE the fire-hold",
+          ltp_indices[0] < fire_hold_idx, str(kinds))
+    check("the fire-time get_ltp_batch (real decision LTP) happens AFTER the fire-hold, never before",
+          ltp_indices[1] > fire_hold_idx, str(kinds))
     check("sell() (unconditional force-sell) happens AFTER the fire-hold, never before",
           kinds.index("sell") > fire_hold_idx, str(kinds))
 

@@ -580,6 +580,74 @@ def _intraday_margin_check(symbol: str, quantity: int, price: float) -> dict | N
         return None
 
 
+def _precompute_short_margins(open_ps: list[dict]) -> dict[str, dict]:
+    """Pre-computes the INTRADAY margin check (see _intraday_margin_check)
+    for every open position's mirrored-short candidate, called from
+    check_exit_916/force_exit_1159's PREP step (~10s ahead of the fire
+    instant) -- moves this real POST /margincalculator round-trip OUT of
+    Wave 2's critical path. Previously this only ever ran per-position,
+    AFTER that specific position's own exit fill had already confirmed,
+    directly adding to the sell -> short-open gap (confirmed live
+    2026-09-18: margin-check + short-placement + short-fill-confirm easily
+    account for several real seconds of that gap).
+
+    Computed for the FULL remaining quantity (shares_remaining if already
+    partially exited from an earlier no-data fallback, else
+    actual_fill_quantity) -- the common case (target hit / P&L-positive
+    full sell / unconditional force-sell) shorts exactly this quantity, so
+    Wave 2 can reuse this value directly. The no-data-fallback path can
+    still sell only HALF of this at fire time -- _open_short_place detects
+    that mismatch (the actual quantity being shorted doesn't match what
+    this was computed for) and falls back to a fresh, live margin check
+    with the real quantity, exactly as before this precompute existed.
+    Keyed by symbol; each entry also carries the qty it was computed for,
+    so a mismatch is always checked, never assumed away.
+
+    Deliberately uses its OWN prep-time LTP snapshot (a batched
+    get_ltp_batch call separate from the fire step's own) -- unlike every
+    other price-dependent value in this file, this one is allowed to be
+    ~10s stale by the time Wave 2 uses it: margin/leverage brackets aren't
+    tick-sensitive the way an actual sell/short decision is, and the real
+    sell/short DECISION still only ever reads the fire step's fresh LTP,
+    never this one. This is the one deliberate exception to "nothing
+    price-dependent before the fire hold" in this file -- see the prep-step
+    comments in check_exit_916/force_exit_1159 for where this is called.
+
+    Returns {} on an outright LTP-fetch failure (Wave 2 falls back to live
+    margin checks for every short, same as if this function didn't exist);
+    a per-symbol margin-check failure just omits that symbol from the
+    result (same fallback, scoped to one symbol) -- never raises."""
+    try:
+        ltp_cache = get_ltp_batch([p["symbol"] for p in open_ps])
+    except Exception as exc:
+        print(f"[dhan]   !! prep-time LTP fetch for margin precompute failed: {exc} "
+              f"— Wave 2 will fall back to live margin checks for every short.")
+        return {}
+
+    tasks = []
+    for pos in open_ps:
+        sym = pos["symbol"]
+        ltp = ltp_cache.get(sym)
+        if not ltp:
+            continue
+        is_partial = pos["status"] == "partial_exit_916_nodata"
+        qty = (int(pos["shares_remaining"]) if is_partial
+               else int(pos["actual_fill_quantity"]))
+        tasks.append({"sym": sym, "qty": qty, "ltp": ltp})
+
+    def _margin_fn(task: dict) -> dict:
+        return {**task, "margin_info": _intraday_margin_check(task["sym"], task["qty"], task["ltp"])}
+
+    index: dict[str, dict] = {}
+    for batch_results in _run_in_chunks(tasks, _margin_fn):
+        for res in batch_results:
+            if res["margin_info"] is not None:
+                index[res["sym"]] = {"qty": res["qty"], "margin_info": res["margin_info"]}
+
+    print(f"[dhan]   Pre-computed short-open margin for {len(index)}/{len(tasks)} candidate(s).")
+    return index
+
+
 def _available_balance() -> float | None:
     """GET /fundlimit -- live available balance. None on lookup failure."""
     session, _ = _dhan_session()
@@ -1093,7 +1161,8 @@ def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = No
 
 
 def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
-                      ltp: float | None, balance: "_BalanceTracker") -> dict | None:
+                      ltp: float | None, balance: "_BalanceTracker",
+                      precomputed_margins: dict[str, dict] | None = None) -> dict | None:
     """Wave 2 of the mirrored-short open (check_exit_916/force_exit_1159):
     shorting kill-switch check, INTRADAY margin check, thread-safe balance
     reservation (_BalanceTracker -- safe to call concurrently from multiple
@@ -1105,6 +1174,15 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
     stop-loss placement never lands in the same Order-API burst as a
     different position's short-open sell (see the module note on the
     wave-based redesign above MAX_ORDER_CALLS_PER_SECOND's definition).
+
+    precomputed_margins (see _precompute_short_margins, built at the
+    caller's prep step) lets this skip a live margin-check call entirely
+    when its cached qty matches this call's qty exactly -- the common case
+    (full exit). A mismatch (the no-data-fallback path shorted only half a
+    position, so qty here is smaller than what was precomputed) falls back
+    to a fresh live _intraday_margin_check call with the REAL qty, exactly
+    as if precomputed_margins had never been passed -- never trusts a
+    precomputed figure for a quantity it wasn't actually computed for.
 
     Never raises: the long exit that triggered this has already happened
     and is never reversed by a failed short. Wrapped in its own top-level
@@ -1122,7 +1200,11 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
             except Exception:
                 ltp = 0.0
 
-        margin_info = _intraday_margin_check(sym, qty, ltp) if ltp else None
+        cached = precomputed_margins.get(sym) if precomputed_margins else None
+        if cached is not None and cached["qty"] == qty:
+            margin_info = cached["margin_info"]
+        else:
+            margin_info = _intraday_margin_check(sym, qty, ltp) if ltp else None
         if margin_info is None:
             print(f"[dhan]   SHORT SKIP — {sym}: could not verify INTRADAY margin.")
             return None
@@ -1996,6 +2078,12 @@ def check_exit_916(dry_run: bool = False) -> None:
     # again at the fire instant below.
     uc_cache_prefetched = _load_uc_cache()
 
+    # Pre-compute every open position's mirrored-short margin check here too
+    # -- see _precompute_short_margins' own docstring for why this is the
+    # one deliberate exception to "nothing price-dependent before the fire
+    # hold" in this file.
+    margin_index = _precompute_short_margins(open_ps)
+
     _hold_until(*_EXIT_916_FIRE_AT, "check_exit_916 fire")
 
     # ── Fire step, pinned to 09:16:00: fresh LTP, then the actual
@@ -2281,7 +2369,8 @@ def check_exit_916(dry_run: bool = False) -> None:
     # wave, same as before the wave split (Part 3).
     def _short_place_fn(res: dict) -> dict | None:
         return _open_short_place(res["sym"], res["eq"], "916", dry_run,
-                                 ltp=ltp_cache.get(res["sym"]), balance=short_balance)
+                                 ltp=ltp_cache.get(res["sym"]), balance=short_balance,
+                                 precomputed_margins=margin_index)
 
     wave2_rows: list[dict] = []
     for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
@@ -2360,6 +2449,10 @@ def force_exit_1159(dry_run: bool = False) -> None:
 
     # UC cache read here too -- see check_exit_916's matching note.
     uc_cache_prefetched = _load_uc_cache()
+
+    # Pre-compute every still-open position's mirrored-short margin check
+    # here too -- see check_exit_916's matching note / _precompute_short_margins.
+    margin_index = _precompute_short_margins(open_ps)
 
     _hold_until(*_EXIT_1159_FIRE_AT, "force_exit_1159 fire")
 
@@ -2568,7 +2661,8 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # force-sold in Wave 1 -- see check_exit_916's matching Wave 2.
     def _short_place_fn(res: dict) -> dict | None:
         return _open_short_place(res["sym"], res["eq"], "1159", dry_run,
-                                 ltp=ltp_cache.get(res["sym"]), balance=short_balance)
+                                 ltp=ltp_cache.get(res["sym"]), balance=short_balance,
+                                 precomputed_margins=margin_index)
 
     wave2_rows: list[dict] = []
     for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
