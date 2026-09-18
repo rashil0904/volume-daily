@@ -416,7 +416,7 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
 
       - product == "CNC": the SAME "...You are trying to sell more than the
         quantity you currently hold" text, confirmed live 2026-09-08 (RML's
-        9:13am target sell -- entered CNC the prior afternoon at 15:27,
+        9:15am target sell -- entered CNC the prior afternoon at 15:27,
         rejected the next morning). No pledge is involved for a plain CNC
         holding, so this is the T+1 settlement/reporting-lag version of the
         same root cause rather than the pledge-linkage one: the position was
@@ -923,16 +923,16 @@ _UC_CACHE_FILE = _RESULTS_DIR / "dhan_uc_cache.json"
 
 
 def _save_uc_cache(circuits: dict[str, float]) -> None:
-    """Persists today's upper-circuit values (see place_targets_913, which
-    already batch-fetches UC for every open position at 9:13am) to a small
+    """Persists today's upper-circuit values (see place_targets_915, which
+    already batch-fetches UC for every open position at 9:15am) to a small
     side file so check_exit_916/force_exit_1159 -- separate cron-launched
-    processes, no shared memory with 9:13's -- can read the SAME values back
+    processes, no shared memory with 9:15's -- can read the SAME values back
     later instead of fetching them again on demand. UC is an exchange-set
     DAILY price band, not a live tick value (see _fetch_upper_circuit's
-    docstring), so 9:13's fetch is still valid at 9:16/11:59; there is no
+    docstring), so 9:15's fetch is still valid at 9:16/11:59; there is no
     correctness reason to ever re-fetch it intraday, only the accident of
     each stage being its own process. Overwrites the whole file each call
-    (place_targets_913 always covers every open position in one shot, so
+    (place_targets_915 always covers every open position in one shot, so
     there's nothing from a prior call worth merging in)."""
     try:
         _UC_CACHE_FILE.write_text(json.dumps(
@@ -960,8 +960,8 @@ def _load_uc_cache() -> dict[str, float]:
 def _circuit_cache_for(symbols: list[str], prefetched: dict[str, float] | None = None) -> dict[str, float]:
     """UC lookup for check_exit_916/force_exit_1159's mirrored-short protect
     step: reads today's persisted cache first (see _load_uc_cache -- normally
-    covers every symbol, since place_targets_913 fetches UC for every open
-    position at 9:13am and a short only ever opens on a symbol that was
+    covers every symbol, since place_targets_915 fetches UC for every open
+    position at 9:15am and a short only ever opens on a symbol that was
     already an open long). Only live-fetches whatever's actually missing
     (e.g. the cache file wasn't written this run for some reason) instead of
     unconditionally re-fetching everything on demand.
@@ -1767,7 +1767,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         if res["is_partial_fill"]:
             # Fold the completion fill into the SAME row leg 1 already wrote
             # (weighted-average price, summed quantity) rather than a second
-            # row, so exit logic (place_targets_913/check_exit_916/
+            # row, so exit logic (place_targets_915/check_exit_916/
             # force_exit_1159) still sees exactly one row per position --
             # they already only match status in ("open",
             # "partial_exit_916_nodata"), so flipping this to "open" is all
@@ -1820,29 +1820,31 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# PROFIT TARGETS 9:13am — resting 17% LIMIT sell for every open long that doesn't
-# already have one. Runs a couple minutes ahead of --exit-916 (fires 9:16am) so
-# target protection has a real buffer to be fully in place -- not just one cron
-# tick's slack -- before the exit check reads position state at 9:15:50. Shorts get their own 5% cover
-# target placed inline at open time (see _open_short below) -- this step only
-# concerns long entry-side targets.
+# PROFIT TARGETS 9:15am — resting 17% LIMIT sell for every open long that doesn't
+# already have one. Fires at market open itself -- NSE rejects any regular
+# order before 9:15:00 sharp (DH-906 "Market is Closed", confirmed live
+# 2026-09-18 when this briefly ran at 9:13am), so there's no way to get real
+# runway ahead of --exit-916 (fires 9:16am) via an earlier cron time; this and
+# --exit-916 now fire from the same cron minute (15 9 * * 1-5), with
+# check_exit_916's own internal 9:15:50/9:16:00 holds providing whatever
+# buffer exists. Parallelized (below) specifically to make that buffer as
+# real as possible by finishing fast rather than by starting early. Shorts
+# get their own 5% cover target placed inline at open time (see _open_short
+# below) -- this step only concerns long entry-side targets.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def place_targets_913(dry_run: bool = False) -> None:
+def place_targets_915(dry_run: bool = False) -> None:
     positions = _load_long_pos()
     open_ps   = _open_pos(positions)
 
     print(f"\n{'='*60}")
-    print(f"[dhan] Place targets 9:13am{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Place targets 9:15am{'  DRY RUN' if dry_run else ''}")
     print(f"[dhan] {len(open_ps)} open position(s)")
     print(f"{'='*60}")
 
     if not open_ps:
         print("[dhan] No open positions — nothing to place targets for.")
         return
-
-    n_placed  = 0
-    n_skipped = 0
 
     # One batched call for every open position's upper circuit -- needed to
     # cap the 17% target below the day's UC (see below); batched for the same
@@ -1854,58 +1856,95 @@ def place_targets_913(dry_run: bool = False) -> None:
     uc_cache = _fetch_upper_circuit_batch([p["symbol"] for p in open_ps])
     _save_uc_cache(uc_cache)
 
+    # ── Phase 1 (sequential): resolve target price for every position that
+    # needs one -- pure computation, no API calls -- building the task list
+    # the wave below fires concurrently. Was previously the one stage in this
+    # pipeline still doing its Order-API calls one-by-one in a loop; ported
+    # to the same resolve-then-fire shape check_exit_916/force_exit_1159/
+    # square_off_239 already use, chunked at MAX_ORDER_CALLS_PER_SECOND.
+    tasks: list[dict] = []
+    n_skipped = 0
     for pos in open_ps:
         sym = pos["symbol"]
         if pos.get("target_order_id"):
             print(f"[dhan] {sym} — target already placed ({pos['target_order_id']}), skipping.")
             continue
 
+        product      = pos.get("product", "MTF")
+        is_partial   = pos["status"] == "partial_exit_916_nodata"
+        qty          = (int(pos["shares_remaining"]) if is_partial
+                        else int(pos["actual_fill_quantity"]))
+        fill_price   = float(pos["actual_fill_price"] or 0)
+
+        # Target is 17% above fill, OR 0.5% below the day's upper circuit,
+        # WHICHEVER IS LOWER -- a plain 17% target can sit above the UC on
+        # a stock that's already run hard (confirmed live 2026-08-20:
+        # GOPAL's UC was Rs 317.25 but its 17% target computed to
+        # Rs 338.60, and Dhan rejected the order outright since a LIMIT
+        # sell can never legally trade above the circuit). Same 0.995
+        # safety margin already used for the mirrored-short stop-loss
+        # elsewhere in this file, not a new convention.
+        seventeen_pct_target = _tick_round(sym, fill_price * 1.17)
+        uc = uc_cache.get(sym)
+        if uc is not None:
+            uc_capped_target = _tick_round(sym, uc * 0.995)
+            target_price = min(seventeen_pct_target, uc_capped_target)
+            if target_price < seventeen_pct_target:
+                print(f"[dhan]   17% target ₹{seventeen_pct_target:,.2f} exceeds UC ₹{uc:,.2f} "
+                      f"— capped to ₹{target_price:,.2f} (0.5% below UC) instead.")
+        else:
+            target_price = seventeen_pct_target
+            print(f"[dhan]   !! UC unavailable for {sym} — using uncapped 17% target "
+                  f"₹{target_price:,.2f}; may be rejected if it's above the real UC.")
+
+        tasks.append({"pos": pos, "sym": sym, "product": product, "qty": qty,
+                      "target_price": target_price})
+
+    # ── Wave (batched-concurrent): place every resting target sell. Worker
+    # never lets an exception escape (see _run_batch's contract) -- returns
+    # an "error" marker instead, applied sequentially below.
+    def _place_fn(task: dict) -> dict:
         try:
-            product      = pos.get("product", "MTF")
-            is_partial   = pos["status"] == "partial_exit_916_nodata"
-            qty          = (int(pos["shares_remaining"]) if is_partial
-                            else int(pos["actual_fill_quantity"]))
-            fill_price   = float(pos["actual_fill_price"] or 0)
-
-            # Target is 17% above fill, OR 0.5% below the day's upper circuit,
-            # WHICHEVER IS LOWER -- a plain 17% target can sit above the UC on
-            # a stock that's already run hard (confirmed live 2026-08-20:
-            # GOPAL's UC was Rs 317.25 but its 17% target computed to
-            # Rs 338.60, and Dhan rejected the order outright since a LIMIT
-            # sell can never legally trade above the circuit). Same 0.995
-            # safety margin already used for the mirrored-short stop-loss
-            # elsewhere in this file, not a new convention.
-            seventeen_pct_target = _tick_round(sym, fill_price * 1.17)
-            uc = uc_cache.get(sym)
-            if uc is not None:
-                uc_capped_target = _tick_round(sym, uc * 0.995)
-                target_price = min(seventeen_pct_target, uc_capped_target)
-                if target_price < seventeen_pct_target:
-                    print(f"[dhan]   17% target ₹{seventeen_pct_target:,.2f} exceeds UC ₹{uc:,.2f} "
-                          f"— capped to ₹{target_price:,.2f} (0.5% below UC) instead.")
-            else:
-                target_price = seventeen_pct_target
-                print(f"[dhan]   !! UC unavailable for {sym} — using uncapped 17% target "
-                      f"₹{target_price:,.2f}; may be rejected if it's above the real UC.")
-
-            print(f"\n[dhan] {sym}  [{product}]  qty={qty}  target=₹{target_price:,.2f}")
-            order_id = _sell_margin_safe(sym, "NSE_EQ", qty, target_price, product, dry_run)
-
-            pos["target_order_id"] = order_id
-            pos["target_price"]    = target_price
-            if not dry_run:
-                _save_long_pos(positions)
-            print(f"[dhan]   target placed — order {order_id}")
-            try:
-                notify.send_target_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
-                                          target_price=target_price, order_id=order_id,
-                                          dry_run=dry_run)
-            except Exception as exc:
-                print(f"  [notify] target_placed failed: {exc}", file=sys.stderr)
-            n_placed += 1
+            order_id = _sell_margin_safe(task["sym"], "NSE_EQ", task["qty"],
+                                         task["target_price"], task["product"], dry_run)
+            return {**task, "order_id": order_id}
         except Exception as exc:
-            print(f"[dhan]   !! target placement failed for {sym}: {exc}. Skipping.")
+            return {**task, "error": str(exc)}
+
+    results: list[dict] = []
+    for batch_results in _run_in_chunks(tasks, _place_fn):
+        results.extend(batch_results)
+
+    # ── Sequential apply (once for the whole run, not per position): every
+    # field update + notify call, then exactly ONE _save_long_pos() -- same
+    # "no position-file write from inside a worker thread" rule the rest of
+    # this file follows (check_exit_916/force_exit_1159/square_off_239).
+    n_placed = 0
+    dirty = False
+    for res in results:
+        sym, product = res["sym"], res["product"]
+        print(f"\n[dhan] {sym}  [{product}]  qty={res['qty']}  target=₹{res['target_price']:,.2f}")
+
+        if "error" in res:
+            print(f"[dhan]   !! target placement failed for {sym}: {res['error']}. Skipping.")
             n_skipped += 1
+            continue
+
+        pos = res["pos"]
+        pos["target_order_id"] = res["order_id"]
+        pos["target_price"]    = res["target_price"]
+        dirty = True
+        print(f"[dhan]   target placed — order {res['order_id']}")
+        try:
+            notify.send_target_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
+                                      target_price=res["target_price"], order_id=res["order_id"],
+                                      dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] target_placed failed: {exc}", file=sys.stderr)
+        n_placed += 1
+
+    if not dry_run and dirty:
+        _save_long_pos(positions)
 
     print(f"\n[dhan] Place targets complete. Placed: {n_placed}  Skipped: {n_skipped}.")
 
@@ -1953,7 +1992,7 @@ def check_exit_916(dry_run: bool = False) -> None:
         orders_ok   = False
 
     # UC cache read here too (see _circuit_cache_for's prefetched param) --
-    # same file place_targets_913 wrote at 9:13am, read once now instead of
+    # same file place_targets_915 wrote at 9:15am, read once now instead of
     # again at the fire instant below.
     uc_cache_prefetched = _load_uc_cache()
 
@@ -1992,8 +2031,8 @@ def check_exit_916(dry_run: bool = False) -> None:
         print(f"\n[dhan] {sym}  [{product}]  fill=₹{fill_price:,.2f}  qty={qty}")
 
         # Target-order status check, BEFORE the existing no_data/pnl_live branches.
-        # If the resting 17% target already TRADED (placed by place_targets_913 at
-        # 9:13am), close the position from the target's own fill and skip the rest
+        # If the resting 17% target already TRADED (placed by place_targets_915 at
+        # 9:15am), close the position from the target's own fill and skip the rest
         # of this position's processing entirely -- no LTP check, no market sell.
         target_oid = pos.get("target_order_id")
         if target_oid:
@@ -2090,8 +2129,8 @@ def check_exit_916(dry_run: bool = False) -> None:
     # which will until each chunk's exit fires, so every candidate is covered
     # now rather than guessing. Resolves from the prep step's already-loaded
     # uc_cache_prefetched (see _hold_until/_circuit_cache_for's prefetched
-    # param) instead of re-reading the file here -- place_targets_913 already
-    # fetched every open position's UC at 9:13am, so this is normally a pure
+    # param) instead of re-reading the file here -- place_targets_915 already
+    # fetched every open position's UC at 9:15am, so this is normally a pure
     # in-memory lookup with zero live Quote-API calls, not a fresh fetch
     # racing the same 1/sec budget every other quote call in this run needs.
     circuit_cache: dict[str, float] = {}
@@ -2885,7 +2924,7 @@ if __name__ == "__main__":
     grp.add_argument("--square-off-239", action="store_true",
                      help="Square off shorts opened from 916/1159 exits (unconditional, 2:39pm)")
     grp.add_argument("--place-targets", action="store_true",
-                     help="Place 17%% profit-target LIMIT sells for open longs (9:13am)")
+                     help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
@@ -2941,7 +2980,7 @@ if __name__ == "__main__":
         elif args.square_off_239:
             square_off_239(dry_run=args.dry_run)
         else:
-            place_targets_913(dry_run=args.dry_run)
+            place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:
         print(f"\nERROR: {exc}", file=sys.stderr)
         sys.exit(1)

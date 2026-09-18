@@ -162,7 +162,7 @@ Live execution — own broker (Dhan, via `dhan/`), own capital pool, own positio
 | Broker / product type | Dhan, CNC or MTF (per-symbol leverage check) |
 | Live trading capital | ₹15,00,000 total (`TOTAL_CAPITAL` in `dhan/run_trades.py`) |
 | Entry order type | **LIMIT**, 0.75% above live LTP — not MARKET (see note below) |
-| Profit target | 17% LIMIT sell, placed at 9:13 AM for every open long |
+| Profit target | 17% LIMIT sell, placed at 9:15 AM for every open long |
 | Mirrored shorts | Opened on every 9:16/11:59 long exit — 5% cover target + UC-based stop-loss |
 | Auth | Manual 24h access token paste — no OAuth handshake (see [Daily Operations](#daily-operations)) |
 
@@ -172,9 +172,9 @@ Live execution — own broker (Dhan, via `dhan/`), own capital pool, own positio
 
 Same `capital/4`-or-`n` allocation rule described in [Capital Allocation](#capital-allocation), against the ₹15L Dhan capital base. Per symbol: checks live leverage via `POST /margincalculator` (`productType=MTF`) — `product="MTF"` if leverage ≥2x, otherwise falls back to `product="CNC"` at **half** the capital base (`capital/2`, resized allocation/shares). Places a LIMIT buy 0.75% above live LTP (falls back to the reference price as the limit anchor if LTP is momentarily unavailable), polls for a broker-confirmed fill (never records a phantom fill on an unconfirmed timeout), and writes the position to `results/positions_dhan.json`.
 
-> **MTF-ineligibility CNC retry**: `/margincalculator`'s pre-check isn't fully reliable — it can return a plausible leverage figure for a scrip that Dhan then genuinely rejects at order-placement time (`"Mtf Product Is Not Allowed For This Scrip"`). When that specific rejection is confirmed (not just any rejection — a circuit-limit rejection, for instance, retries nothing, since CNC would hit the same price band), the order is retried as CNC automatically, at the same quantity (no re-halving). This applies to entries, the 9:13 AM targets, both 9:16/11:59 exit branches, and the forced exit. **`MARGIN`/T+5 is never used as a product anywhere in this pipeline** — a T+5-settlement-lag sell rejection (`"No eligible T+5 quantity found"`) also retries as CNC, same mechanism.
+> **MTF-ineligibility CNC retry**: `/margincalculator`'s pre-check isn't fully reliable — it can return a plausible leverage figure for a scrip that Dhan then genuinely rejects at order-placement time (`"Mtf Product Is Not Allowed For This Scrip"`). When that specific rejection is confirmed (not just any rejection — a circuit-limit rejection, for instance, retries nothing, since CNC would hit the same price band), the order is retried as CNC automatically, at the same quantity (no re-halving). This applies to entries, the 9:15 AM targets, both 9:16/11:59 exit branches, and the forced exit. **`MARGIN`/T+5 is never used as a product anywhere in this pipeline** — a T+5-settlement-lag sell rejection (`"No eligible T+5 quantity found"`) also retries as CNC, same mechanism.
 
-### Profit Targets — 9:13 AM (`--place-targets`)
+### Profit Targets — 9:15 AM (`--place-targets`)
 
 For every open long without one yet, places a resting LIMIT sell at **17% above the recorded fill price** (`target_order_id`/`target_price` saved on the position). This runs a couple minutes ahead of the 9:16 exit check, so a target can fill on its own in that window without the pipeline needing to be watching.
 
@@ -505,7 +505,7 @@ python dhan/run_trades.py --entry --dry-run
 python dhan/run_trades.py --entry
 python dhan/run_trades.py --entry --symbol RELIANCE --capital 5000 --dry-run   # single stock
 
-# Profit targets, 9:13 AM
+# Profit targets, 9:15 AM
 python dhan/run_trades.py --place-targets
 
 # Exit check 9:25 AM / forced exit 11:59 AM
@@ -575,7 +575,7 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 |---|---|---|
 | 8:00 AM & 8:00 PM (every day) | `0 8,20 * * *` | `python -m dhan.auth --renew` — access-token auto-renewal (see [Auth](#auth-automated-daily-renewal-manual-fallback)) |
 | 9:13 AM | `10 9 * * 1-5` | `scripts/run_dhan_live_monitor.sh` |
-| 9:13 AM | `13 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
+| 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --place-targets` |
 | 9:15 AM | `15 9 * * 1-5` | `dhan/run_trades.py --exit-916` — one minute earlier than the actual decision point; the script itself holds internally at 09:15:50 (prep) and 09:16:00 (fire) — see the note below the table |
 | 11:58 AM | `58 11 * * 1-5` | `dhan/run_trades.py --exit-1159` — holds internally at 11:58:50 (prep) and 11:59:00 (fire) |
 | 2:38 PM | `38 14 * * 1-5` | `dhan/run_trades.py --square-off-239` — holds internally at 14:38:50 (prep) and 14:39:00 (fire) |
@@ -584,7 +584,7 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 
 > The token-renewal job runs **every day of the week**, not just Mon–Fri (see [Auth](#auth-automated-daily-renewal-manual-fallback) for why). Every other Dhan cron line stays Mon–Fri only. UC-based staged entry (`--enable-uc-staged-entry`) is **not** in any cron line above — `scripts/run_dhan_live_monitor.sh` still launches plain `python3.11 -u -m dhan.live_monitor` with no flags; the feature is tested manually (see [UC-Based Staged Entry](#uc-based-staged-entry-case-ab--off-by-default)) until explicitly wired in.
 >
-> **`--exit-916`/`--exit-1159`/`--square-off-239` cron times sit one minute earlier** than their actual decision point (9:15/11:58/2:38) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). `--place-targets` itself moved from 9:15am to 9:13am on 2026-09-18 (to keep a real buffer ahead of the now-earlier exit check), and the exit check moved from 9:25am (`--exit-925`) to 9:16am (`--exit-916`) the same day — the stage's own internal prep/fire mechanism is otherwise unchanged.
+> **`--exit-916`/`--exit-1159`/`--square-off-239` cron times sit one minute earlier** than their actual decision point (9:15/11:58/2:38) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). `--place-targets` briefly moved from 9:15am to 9:13am on 2026-09-18 to keep a buffer ahead of the now-earlier exit check, but NSE rejects any regular order before 9:15:00 sharp (confirmed live via a real DH-906 "Market is Closed" rejection that same morning) -- reverted back to 9:15am the same day and parallelized instead (chunked at `MAX_ORDER_CALLS_PER_SECOND`) so it finishes fast rather than relying on an earlier start. The exit check moved from 9:25am (`--exit-925`) to 9:16am (`--exit-916`) the same day — the stage's own internal prep/fire mechanism is otherwise unchanged.
 
 ---
 

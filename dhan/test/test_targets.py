@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 test_targets.py -- standalone verifier for the profit-target mechanism added to
-dhan/run_trades.py: place_targets_913(), the target-status checks inserted into
+dhan/run_trades.py: place_targets_915(), the target-status checks inserted into
 check_exit_916/force_exit_1159/square_off_239, and cover-target placement in
 _open_short().
 
@@ -55,10 +55,10 @@ patch.object(rt, "tick_size", lambda sym: 0.05).start()
 # files on every test run. Stubbed out globally, same as tick_size above.
 patch.object(rt, "_sync_pnl_workbook", lambda: None).start()
 
-# place_targets_913() now persists its UC batch-fetch to the REAL
+# place_targets_915() now persists its UC batch-fetch to the REAL
 # results/dhan_uc_cache.json (see _save_uc_cache) so later stages can read it
 # back instead of re-fetching live. Left unpatched, every scenario below that
-# calls the real place_targets_913() would overwrite that real file. Stubbed
+# calls the real place_targets_915() would overwrite that real file. Stubbed
 # out globally, same reasoning as _sync_pnl_workbook above.
 patch.object(rt, "_save_uc_cache", lambda circuits: None).start()
 
@@ -150,7 +150,7 @@ def orders_from_status(order_ids, status_fn):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-print("\nScenario (a) — place_targets_913\n")
+print("\nScenario (a) — place_targets_915\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 pos_no_target  = make_long(symbol="ALPHA", actual_fill_price=100.0, actual_fill_quantity=10)
@@ -168,7 +168,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_a), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_913(dry_run=False)
+    rt.place_targets_915(dry_run=False)
 
 check("(a) ALPHA (no target yet) gets a target order placed",
       any(c[0] == "ALPHA" for c in sell_calls))
@@ -206,7 +206,7 @@ with patch.object(rt, "_load_long_pos", store_a2.load), \
      patch.object(rt, "sell", fake_sell_a2), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {"OMICRON": 110.0}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_913(dry_run=False)
+    rt.place_targets_915(dry_run=False)
 
 check("(a2) target capped to 109.45 (110 * 0.995), NOT the uncapped 117.0",
       sell_calls_a2 == [("OMICRON", "NSE_EQ", 10, "LIMIT", 109.45, "MTF")], str(sell_calls_a2))
@@ -228,7 +228,7 @@ with patch.object(rt, "_load_long_pos", store_a3.load), \
      patch.object(rt, "sell", fake_sell_a3), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.place_targets_913(dry_run=False)
+    rt.place_targets_915(dry_run=False)
 
 check("(a3) UC unavailable -> falls back to uncapped 17% target (117.0)",
       sell_calls_a3 == [("PI", "NSE_EQ", 10, "LIMIT", 117.0)], str(sell_calls_a3))
