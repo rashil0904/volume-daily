@@ -1848,5 +1848,70 @@
     "exit_timestamp_916": "2026-09-18T09:16:05.668680+05:30",
     "realized_return_pct": 1.4012,
     "realized_pnl": 5264.27
+  },
+  {
+    "broker": "dhan",
+    "symbol": "GRAUWEIL",
+    "entry_date": "2026-09-18",
+    "reference_price": 86.9,
+    "shares_intended": 1726,
+    "actual_fill_price": 86.8737,
+    "actual_fill_quantity": 1726,
+    "entry_order_id": "34126091878509",
+    "status": "open",
+    "entry_timestamp": "2026-09-18T15:21:01.217138+05:30",
+    "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "LUXIND",
+    "entry_date": "2026-09-18",
+    "reference_price": 1136.9,
+    "shares_intended": 263,
+    "actual_fill_price": 1139.811,
+    "actual_fill_quantity": 263,
+    "entry_order_id": "221260918730609",
+    "status": "open",
+    "entry_timestamp": "2026-09-18T15:21:02.340758+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "NRBBEARING",
+    "entry_date": "2026-09-18",
+    "reference_price": 527.8,
+    "shares_intended": 568,
+    "actual_fill_price": 526.0403,
+    "actual_fill_quantity": 568,
+    "entry_order_id": "23126091873309",
+    "status": "open",
+    "entry_timestamp": "2026-09-18T15:21:03.051348+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SAMBHV",
+    "entry_date": "2026-09-18",
+    "reference_price": 148.39,
+    "shares_intended": 2021,
+    "actual_fill_price": 148.3417,
+    "actual_fill_quantity": 2021,
+    "entry_order_id": "23126091873409",
+    "status": "open",
+    "entry_timestamp": "2026-09-18T15:21:03.786051+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "TALBROAUTO",
+    "entry_date": "2026-09-18",
+    "reference_price": 474.15,
+    "shares_intended": 632,
+    "actual_fill_price": 474.6399,
+    "actual_fill_quantity": 632,
+    "entry_order_id": "34126091878409",
+    "status": "open",
+    "entry_timestamp": "2026-09-18T15:21:04.629110+05:30",
+    "product": "MTF"
   }
 ]
