@@ -3007,12 +3007,662 @@ def square_off_239(dry_run: bool = False) -> None:
     _sync_pnl_workbook()
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIMIT ENTRY — semi-aggressive, software-side tranching (3:06 PM → 3:19 PM)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Design (Option B — manual per-tranche placement, no exchange DQ):
+#   • Invoked immediately after the pipeline finishes (~3:06 PM IST).
+#   • For each signal, place a LIMIT BUY at best_bid + 1 tick, showing a
+#     fixed tranche = floor(initial_desired / LIMIT_ENTRY_TRANCHE_DIVISOR)
+#     shares.  Fixed (not decreasing remaining/10) so we get price averaging
+#     as tranches fill at different bids, rather than one price for the
+#     whole position.
+#   • Every LIMIT_ENTRY_RECAL_SECS (default 10): re-fetch best bids via a
+#     single batch /marketfeed/quote call for all active symbols.
+#     ∙ If best_bid + tick > our active bid  → cancel existing order,
+#       re-place at the new price.
+#     ∙ Otherwise                            → leave existing order in place.
+#   • If remaining < tranche_size → show the full remaining qty instead.
+#   • At LIMIT_ENTRY_CUTOFF_HHMM (15:19): cancel all open limit orders, then
+#     MARKET-sweep any remaining unfilled qty (wave 1 cancel → wave 2 market).
+#   • The existing run_entry_321 cron at 15:20/15:21 is an independent safety
+#     net for symbols where run_entry_limit completely failed (0 fills from
+#     both the limit phase and the cutoff sweep).
+#   • Position records are written in the same format as run_entry_321 with
+#     actual_fill_price = VWAP across all partial fills (limit + sweep).
+#
+# Thread model: single coordinator loop; parallel order status checks and
+# placements/cancels via ThreadPoolExecutor (same pattern as exit waves).
+# All quote API calls share _quote_rate_limiter (1 req/1.5s, same as the rest
+# of the file) — with all symbols batched in one call per tick this is fine.
+#
+# Edge cases handled:
+#   • best_bid = 0 (no buyers in book): fall back to last_price as bid anchor,
+#     or keep existing order if one is already live.
+#   • Cancel races a just-traded order: always re-check status after cancel
+#     to credit any fills that landed between the status poll and the cancel.
+#   • Partial fills on a tranche: tracked via active_oid_credited (delta
+#     crediting) so no fill is double-counted across ticks.
+#   • Upper circuit: cap limit price at UC rather than above it.
+#   • MTF-ineligibility rejection mid-loop: switch to CNC, resize shares.
+#   • already-entered-today dedup (same check as run_entry_321).
+#   • Zero-share allocation: skip with a clear log line.
+
+LIMIT_ENTRY_RECAL_SECS      = 10   # seconds between recalibrations — easy to tune
+LIMIT_ENTRY_CUTOFF_HHMM     = 1519 # HHMM: at/after this → cancel all + MARKET sweep
+LIMIT_ENTRY_TRANCHE_DIVISOR = 10   # tranche = initial_desired // this
+
+
+def _now_hhmm() -> int:
+    """Current time as HHMM integer (IST), e.g. 15:06 → 1506."""
+    n = datetime.now(_IST)
+    return n.hour * 100 + n.minute
+
+
+def _get_quote_batch(symbols: list[str]) -> dict[str, dict]:
+    """Batch-fetch /marketfeed/quote for every symbol in ONE call (chunked at
+    _LTP_CHUNK = 900; Dhan's cap is 1000).  Returns:
+        dict[sym -> {"best_bid": float, "upper_circuit": float|None,
+                     "last_price": float}]
+    Missing/failed symbols are absent from the result.
+
+    Field names from Dhan's NSE_EQ segment response (same endpoint already
+    used by _fetch_upper_circuit_batch; buy_price is the top-of-book buyer
+    price confirmed by inspecting those live responses):
+        buy_price            → best bid (best resting buy order)
+        upper_circuit_limit  → daily UC price band
+        last_price           → last traded price (LTP fallback when no bids)
+
+    buy_price = 0 means no resting buyers — callers treat 0 as "no live bid"
+    and either fall back to last_price or keep the existing order as-is."""
+    result: dict[str, dict] = {}
+    if not symbols:
+        return result
+
+    session, _ = _dhan_session()
+    sym_to_sid: dict[str, int] = {}
+    for sym in symbols:
+        try:
+            sym_to_sid[sym] = int(security_id(sym))
+        except Exception as exc:
+            print(f"[dhan]   quote batch: could not resolve securityId for {sym}: {exc}")
+    if not sym_to_sid:
+        return result
+
+    sid_to_sym = {sid: sym for sym, sid in sym_to_sid.items()}
+    sids       = list(sym_to_sid.values())
+
+    for i in range(0, len(sids), _LTP_CHUNK):
+        chunk = sids[i : i + _LTP_CHUNK]
+        try:
+            resp = _quote_post(session, f"{_DHAN_BASE}/marketfeed/quote", {"NSE_EQ": chunk})
+            data = resp.json().get("data", {}).get("NSE_EQ", {})
+        except Exception as exc:
+            print(f"[dhan]   quote batch chunk {i}–{i+len(chunk)-1} failed: {exc}")
+            continue
+        for sid_str, row in data.items():
+            sym = sid_to_sym.get(int(sid_str))
+            if sym is None:
+                continue
+            uc_raw = float(row.get("upper_circuit_limit") or 0)
+            result[sym] = {
+                "best_bid":      float(row.get("buy_price") or 0),
+                "upper_circuit": uc_raw if uc_raw > 0 else None,
+                "last_price":    float(row.get("last_price") or 0),
+            }
+    return result
+
+
+class _LimitSymState:
+    """Mutable per-symbol state for run_entry_limit's coordinator loop.
+
+    filled_total / vwap_num accumulate across ALL tranches (limit orders +
+    the final MARKET sweep), so the position record's actual_fill_price is
+    the true weighted-average fill price across the entire entry.
+
+    active_oid_credited: how much of the CURRENT active order's filledQty
+    we have already credited.  Prevents double-counting when the same order
+    appears across multiple status-check ticks with a growing filledQty
+    (partial fills before final TRADED confirmation).  Reset to 0 whenever
+    active_oid is cleared."""
+
+    __slots__ = (
+        "symbol", "initial_desired", "tranche_size", "product", "ref",
+        "capital_base", "filled_total", "vwap_num",
+        "active_oid", "active_oid_qty", "active_oid_credited", "active_bid",
+        "done",
+    )
+
+    def __init__(self, symbol: str, initial_desired: int, product: str,
+                 ref: float, capital_base: float) -> None:
+        self.symbol              = symbol
+        self.initial_desired     = initial_desired
+        self.tranche_size        = max(1, initial_desired // LIMIT_ENTRY_TRANCHE_DIVISOR)
+        self.product             = product
+        self.ref                 = ref
+        self.capital_base        = capital_base
+        self.filled_total        = 0
+        self.vwap_num            = 0.0
+        self.active_oid:   str | None = None
+        self.active_oid_qty      = 0
+        self.active_oid_credited = 0
+        self.active_bid          = 0.0
+        self.done                = False
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.initial_desired - self.filled_total)
+
+    @property
+    def avg_fill_price(self) -> float:
+        return (self.vwap_num / self.filled_total) if self.filled_total > 0 else 0.0
+
+
+def run_entry_limit(
+    trade_date,
+    dry_run:         bool  = False,
+    capital:         float = None,
+    symbol:          str   = None,
+    shares_override: int   = None,
+    cnc_only:        bool  = False,
+) -> None:
+    """Semi-aggressive tranched limit-order entry running from ~3:06 PM to
+    3:19 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
+    limit orders and sweeps remaining unfilled qty with MARKET orders.
+    The existing run_entry_321 cron at 15:20 acts as an independent safety
+    net for any symbol that produced 0 fills here (both limit phase AND
+    market sweep failed — e.g. circuit-locked stock).
+
+    See module-level comment above for full design rationale."""
+
+    capital     = capital or TOTAL_CAPITAL
+    manual_mode = symbol is not None
+
+    print(f"\n{'='*60}")
+    print(f"[dhan] Limit Entry {'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Trade date : {trade_date}  Capital: ₹{capital:,.0f}")
+    print(f"[dhan] Recal every {LIMIT_ENTRY_RECAL_SECS}s | "
+          f"Cutoff {LIMIT_ENTRY_CUTOFF_HHMM} | "
+          f"Tranche ÷{LIMIT_ENTRY_TRANCHE_DIVISOR}")
+    print(f"{'='*60}\n")
+
+    # ── Load + dedup symbols ──────────────────────────────────────────────────
+    if manual_mode:
+        raw_syms = [symbol.upper()]
+    else:
+        raw_syms = _load_symbols(trade_date)
+
+    positions = _load_long_pos()
+    today_str = trade_date.isoformat()
+    already_entered = {p["symbol"] for p in positions if p.get("entry_date") == today_str}
+    syms = [s for s in raw_syms if s not in already_entered]
+    if skipped_dedup := [s for s in raw_syms if s in already_entered]:
+        print(f"[dhan] Already entered today — skipping: {', '.join(skipped_dedup)}")
+    if not syms:
+        print("[dhan] No symbols to enter — exiting.")
+        return
+
+    # ── Upfront balance check ─────────────────────────────────────────────────
+    available_balance = _available_balance()
+    if available_balance is None:
+        print("[dhan]   WARNING: could not verify balance — proceeding without balance guard.")
+        available_balance = float("inf")
+    else:
+        print(f"[dhan] Available balance: ₹{available_balance:,.2f}")
+
+    # ── Size shares + MTF/CNC per symbol (mirrors run_entry_321 Phase 1) ──────
+    n = 1 if manual_mode else len(syms)
+    states: dict[str, _LimitSymState] = {}
+
+    for sym in syms:
+        try:
+            ref, _ = get_reference_price(sym)
+        except Exception as exc:
+            print(f"[dhan]   SKIP {sym}: reference price failed — {exc}")
+            continue
+
+        if manual_mode and shares_override:
+            shares       = shares_override
+            product      = "CNC"
+            margin_req   = shares * ref
+            capital_base = capital
+        elif cnc_only:
+            alloc        = (compute_allocation(capital, n)
+                            if not manual_mode else capital)
+            shares       = compute_shares(alloc, ref)
+            if shares == 0:
+                print(f"[dhan]   SKIP {sym}: 0 shares at ₹{ref:,.2f} on ₹{alloc:,.0f} (CNC)")
+                continue
+            product      = "CNC"
+            margin_req   = shares * ref
+            capital_base = capital
+        else:
+            alloc = compute_allocation(capital, n) if not manual_mode else capital
+            shares = compute_shares(alloc, ref)
+            if shares == 0:
+                print(f"[dhan]   SKIP {sym}: 0 shares at ₹{ref:,.2f} on ₹{alloc:,.0f}")
+                continue
+            margin_info  = _margin_check(sym, shares, ref)
+            has_leverage = margin_info is not None and margin_info["leverage"] >= 2
+            if has_leverage:
+                product      = "MTF"
+                margin_req   = margin_info["margin_required"]
+                capital_base = capital
+            else:
+                reason = ("margin check failed" if margin_info is None
+                          else f"leverage {margin_info['leverage']:.2f}x < 2x")
+                fallback_cap   = capital if manual_mode else capital / 2
+                fallback_alloc = (compute_allocation(fallback_cap, n)
+                                  if not manual_mode else fallback_cap)
+                shares = compute_shares(fallback_alloc, ref)
+                if shares == 0:
+                    print(f"[dhan]   SKIP {sym}: 0 shares on CNC fallback ({reason})")
+                    continue
+                product      = "CNC"
+                margin_req   = shares * ref
+                capital_base = fallback_cap
+
+        if available_balance < margin_req:
+            print(f"[dhan]   SKIP {sym}: balance ₹{available_balance:,.2f} "
+                  f"< margin ₹{margin_req:,.2f}")
+            continue
+        available_balance -= margin_req
+
+        print(f"[dhan]   {sym}: {shares}× ref ₹{ref:,.2f} [{product}]  "
+              f"tranche={max(1, shares // LIMIT_ENTRY_TRANCHE_DIVISOR)}  "
+              f"margin ₹{margin_req:,.2f}  balance left ₹{available_balance:,.2f}")
+        states[sym] = _LimitSymState(sym, shares, product, ref, capital_base)
+
+    if not states:
+        print("[dhan] No tradeable symbols after sizing — exiting.")
+        return
+
+    print(f"\n[dhan] Starting limit-order loop for {len(states)} symbol(s). "
+          f"Cutoff at HHMM {LIMIT_ENTRY_CUTOFF_HHMM}.\n")
+
+    # ── Inner helpers ─────────────────────────────────────────────────────────
+
+    def _credit_status(st: _LimitSymState, o: dict) -> None:
+        """Credit newly-filled qty from an order-status dict into st,
+        avoiding double-counting via st.active_oid_credited.  Safe to call
+        multiple times on the same order across ticks."""
+        filled    = int(o.get("filledQty") or 0)
+        new_fills = max(0, filled - st.active_oid_credited)
+        if new_fills > 0:
+            price = float(o.get("averageTradedPrice") or st.ref)
+            st.vwap_num            += price * new_fills
+            st.filled_total        += new_fills
+            st.active_oid_credited += new_fills
+
+    def _clear_active(st: _LimitSymState) -> None:
+        st.active_oid          = None
+        st.active_oid_qty      = 0
+        st.active_oid_credited = 0
+        st.active_bid          = 0.0
+
+    _MTF_INELIGIBLE_REASONS = ("mtf product is not allow", "buy back is not allowed")
+
+    # ── Coordinator loop ──────────────────────────────────────────────────────
+    iteration = 0
+    while True:
+        tick_start = time.monotonic()
+        iteration += 1
+        active = [s for s, st in states.items() if not st.done]
+        if not active:
+            print("[dhan] All symbols fully filled — exiting limit loop.")
+            break
+
+        now_hhmm = _now_hhmm()
+        print(f"[dhan] ── Tick {iteration}  HHMM={now_hhmm}  "
+              f"active={len(active)} ──")
+
+        # ══ CUTOFF PATH: cancel all limits → MARKET sweep ════════════════════
+        if now_hhmm >= LIMIT_ENTRY_CUTOFF_HHMM:
+            print(f"[dhan] Cutoff {LIMIT_ENTRY_CUTOFF_HHMM} — "
+                  f"cancelling limit orders then MARKET sweep.")
+
+            # Wave 1: cancel + re-check every active limit order
+            def _cancel_and_recheck(sym: str) -> tuple[str, dict | None]:
+                st = states[sym]
+                if st.active_oid is None:
+                    return sym, None
+                try:
+                    _dhan_cancel_order(st.active_oid)
+                except Exception as exc:
+                    print(f"[dhan]   {sym}: cancel failed (may have just traded): {exc}")
+                # Always re-check to capture fills that landed during cancel
+                try:
+                    return sym, _dhan_order_status(st.active_oid)
+                except Exception:
+                    return sym, None
+
+            syms_with_orders = [s for s in active if states[s].active_oid]
+            if syms_with_orders:
+                with ThreadPoolExecutor(max_workers=MAX_ORDER_CALLS_PER_SECOND) as ex:
+                    futs = {ex.submit(_cancel_and_recheck, s): s
+                            for s in syms_with_orders}
+                    _wait_futures(futs.keys())
+                    for fut in futs:
+                        sym, o = fut.result()
+                        st = states[sym]
+                        if o:
+                            _credit_status(st, o)
+                        _clear_active(st)
+
+            # Wave 2: MARKET sweep for any remaining qty
+            def _market_sweep_one(sym: str) -> dict:
+                st  = states[sym]
+                rem = st.remaining
+                if rem <= 0:
+                    return {"sym": sym, "oid": "", "qty": 0, "price": 0.0,
+                            "err": "no_remainder"}
+                print(f"[dhan]   {_ts()} — MARKET {rem}× {sym} [{st.product}] (cutoff sweep)"
+                      + ("  (DRY RUN)" if dry_run else ""))
+                if dry_run:
+                    return {"sym": sym, "oid": "DRY_RUN",
+                            "qty": rem, "price": st.ref, "err": None}
+                try:
+                    oid = buy(sym, "NSE_EQ", rem,
+                              order_type="MARKET", product=st.product, dry_run=False)
+                except Exception as exc:
+                    return {"sym": sym, "oid": "", "qty": 0, "price": 0.0,
+                            "err": f"ORDER FAILED: {exc}"}
+                fill_price, fill_qty, _, _ = _poll_fill_strict(oid)
+                if fill_qty == 0:
+                    return {"sym": sym, "oid": oid, "qty": 0, "price": 0.0,
+                            "err": "MARKET not confirmed (check manually)"}
+                return {"sym": sym, "oid": oid,
+                        "qty": fill_qty, "price": fill_price, "err": None}
+
+            sweep_tasks = [s for s in active if states[s].remaining > 0]
+            if sweep_tasks:
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    futs = {ex.submit(_market_sweep_one, s): s for s in sweep_tasks}
+                    _wait_futures(futs.keys())
+                    for fut in futs:
+                        r   = fut.result()
+                        sym = r["sym"]
+                        st  = states[sym]
+                        if r["err"] and r["err"] != "no_remainder":
+                            print(f"[dhan]   {sym}: sweep — {r['err']}")
+                        elif r["qty"] > 0:
+                            st.vwap_num    += r["price"] * r["qty"]
+                            st.filled_total += r["qty"]
+                        st.done = True
+
+            for sym in active:
+                states[sym].done = True
+            break  # exit coordinator loop after cutoff
+
+        # ══ NORMAL TICK ═══════════════════════════════════════════════════════
+
+        # Step 1: batch quote — one /marketfeed/quote call for all active syms
+        quote_data: dict[str, dict] = {}
+        try:
+            quote_data = _get_quote_batch(active)
+        except Exception as exc:
+            print(f"[dhan]   quote batch failed: {exc} — skipping recal this tick")
+
+        # Step 2: parallel status checks for symbols with a live order
+        syms_with_orders = [s for s in active if states[s].active_oid]
+        status_map: dict[str, dict | None] = {}
+        if syms_with_orders:
+            def _status_one(sym: str) -> tuple[str, dict | None]:
+                try:
+                    return sym, _dhan_order_status(states[sym].active_oid)
+                except Exception as exc:
+                    print(f"[dhan]   {sym}: status check failed: {exc}")
+                    return sym, None
+
+            with ThreadPoolExecutor(max_workers=MAX_ORDER_CALLS_PER_SECOND) as ex:
+                futs = {ex.submit(_status_one, s): s for s in syms_with_orders}
+                _wait_futures(futs.keys())
+                for fut in futs:
+                    sym, o = fut.result()
+                    status_map[sym] = o
+
+        # Step 3: decide next action per symbol
+        to_cancel_rebid: list[str] = []  # bid improved → cancel, then re-place
+        to_place_fresh:  list[str] = []  # no active order → place new tranche
+
+        for sym in active:
+            st = states[sym]
+            o  = status_map.get(sym)
+
+            if o is not None:
+                ost = (o.get("orderStatus") or "").upper()
+                _credit_status(st, o)
+
+                if ost == "TRADED":
+                    _clear_active(st)
+                    if st.remaining <= 0:
+                        st.done = True
+                        print(f"[dhan]   {sym}: fully filled "
+                              f"({st.filled_total}× @ VWAP ₹{st.avg_fill_price:,.2f})")
+                        continue
+
+                elif ost in ("REJECTED", "CANCELLED", "EXPIRED"):
+                    reject_msg = (o.get("omsErrorDescription") or "").lower()
+                    # MTF-ineligibility mid-loop: switch product, resize once
+                    if (st.product == "MTF"
+                            and any(r in reject_msg for r in _MTF_INELIGIBLE_REASONS)):
+                        print(f"[dhan]   {sym}: MTF REJECTED ({reject_msg.strip()}) — "
+                              f"switching to CNC.")
+                        if not manual_mode:
+                            cnc_cap   = st.capital_base / 2
+                            cnc_alloc = compute_allocation(cnc_cap, n)
+                            new_sh    = compute_shares(cnc_alloc, st.ref)
+                            if new_sh > 0:
+                                st.initial_desired = new_sh
+                                st.tranche_size    = max(1, new_sh // LIMIT_ENTRY_TRANCHE_DIVISOR)
+                        st.product = "CNC"
+                    _clear_active(st)
+
+            if st.done:
+                continue
+            if st.remaining <= 0:
+                st.done = True
+                continue
+
+            # Determine target bid from live quote
+            qd = quote_data.get(sym)
+            if qd is None:
+                # quote fetch failed entirely this tick — leave order in place
+                continue
+
+            best_bid = qd.get("best_bid", 0)
+            ltp      = qd.get("last_price", 0)
+            bid_anchor = best_bid if best_bid > 0 else ltp  # fall back to LTP
+            if bid_anchor == 0:
+                # No price data at all — leave order in place (or wait)
+                continue
+
+            ts_val  = tick_size(sym)
+            uc      = qd.get("upper_circuit")
+            raw_bid = bid_anchor + ts_val
+            if uc and raw_bid > uc:
+                raw_bid = uc
+            new_bid = _tick_round(sym, raw_bid)
+
+            if st.active_oid is not None:
+                # Cancel and re-place only if bid has genuinely improved
+                if new_bid > st.active_bid:
+                    to_cancel_rebid.append(sym)
+                # else: still best — leave order
+            else:
+                to_place_fresh.append(sym)
+
+        # Step 4: execute cancels (parallel)
+        def _do_cancel(sym: str) -> tuple[str, dict | None]:
+            st = states[sym]
+            try:
+                _dhan_cancel_order(st.active_oid)
+            except Exception as exc:
+                print(f"[dhan]   {sym}: cancel failed: {exc}")
+            # Re-check to get any fills between our last status check and cancel
+            try:
+                return sym, _dhan_order_status(st.active_oid)
+            except Exception:
+                return sym, None
+
+        if to_cancel_rebid:
+            with ThreadPoolExecutor(max_workers=MAX_ORDER_CALLS_PER_SECOND) as ex:
+                futs = {ex.submit(_do_cancel, s): s for s in to_cancel_rebid}
+                _wait_futures(futs.keys())
+                for fut in futs:
+                    sym, o = fut.result()
+                    st = states[sym]
+                    if o:
+                        _credit_status(st, o)
+                    _clear_active(st)
+                    # Re-queue for fresh placement if still has qty left
+                    if st.remaining > 0 and not st.done:
+                        to_place_fresh.append(sym)
+
+        # Step 5: place fresh tranches (parallel)
+        def _place_tranche(sym: str) -> tuple[str, str, float, int]:
+            """Returns (sym, order_id, bid_placed, qty_placed)."""
+            st  = states[sym]
+            rem = st.remaining
+            if rem <= 0:
+                return sym, "", 0.0, 0
+            show_qty = min(st.tranche_size, rem)
+
+            qd        = quote_data.get(sym) or {}
+            best_bid  = qd.get("best_bid", 0)
+            ltp       = qd.get("last_price", 0)
+            bid_anchor = best_bid if best_bid > 0 else (ltp if ltp > 0 else st.ref)
+            ts_val    = tick_size(sym)
+            uc        = qd.get("upper_circuit")
+            raw_bid   = bid_anchor + ts_val
+            if uc and raw_bid > uc:
+                raw_bid = uc
+            bid = _tick_round(sym, raw_bid)
+
+            print(f"[dhan]   {_ts()} — LIMIT BUY {show_qty}× {sym} @ ₹{bid:,.2f} "
+                  f"[{st.product}]  remaining={rem}"
+                  + ("  (DRY RUN)" if dry_run else ""))
+
+            if dry_run:
+                return sym, "DRY_RUN", bid, show_qty
+
+            try:
+                oid = buy(sym, "NSE_EQ", show_qty,
+                          order_type="LIMIT", price=bid, product=st.product, dry_run=False)
+                return sym, oid, bid, show_qty
+            except Exception as exc:
+                print(f"[dhan]   {sym}: place_order failed: {exc}")
+                return sym, "", 0.0, 0
+
+        if to_place_fresh:
+            with ThreadPoolExecutor(max_workers=MAX_ORDER_CALLS_PER_SECOND) as ex:
+                futs = {ex.submit(_place_tranche, s): s for s in to_place_fresh}
+                _wait_futures(futs.keys())
+                for fut in futs:
+                    sym, oid, bid, qty = fut.result()
+                    if oid and qty > 0:
+                        st = states[sym]
+                        st.active_oid          = oid
+                        st.active_oid_qty      = qty
+                        st.active_oid_credited = 0
+                        st.active_bid          = bid
+
+        # Step 6: sleep until next recal tick
+        elapsed = time.monotonic() - tick_start
+        sleep_s = max(0.0, LIMIT_ENTRY_RECAL_SECS - elapsed)
+        if sleep_s > 0.1:
+            time.sleep(sleep_s)
+
+    # ── Write position records ────────────────────────────────────────────────
+    # Re-load positions fresh so any concurrent write (unlikely but safe) is
+    # included.  run_entry_321 safety-net will handle any sym with 0 fills
+    # (not written here), so it can retry those with MARKET at 15:21.
+    positions = _load_long_pos()
+    n_entered  = 0
+    n_partial  = 0
+    n_zero     = 0
+
+    for sym, st in states.items():
+        if st.filled_total == 0:
+            print(f"[dhan]   {sym}: 0 fills — not recording "
+                  f"(run_entry_321 safety net will retry).")
+            n_zero += 1
+            try:
+                notify.send_entry_failed(broker=_BROKER, symbol=sym,
+                                         error_msg="0 fills in limit+sweep entry phase",
+                                         dry_run=dry_run)
+            except Exception:
+                pass
+            continue
+
+        avg_price  = st.avg_fill_price
+        fill_qty   = st.filled_total
+        is_partial = fill_qty < st.initial_desired
+
+        print(f"[dhan]   {sym}: {fill_qty}/{st.initial_desired}× @ VWAP ₹{avg_price:,.4f} "
+              f"[{st.product}]"
+              + ("  PARTIAL" if is_partial else "  FULL")
+              + ("  (DRY RUN)" if dry_run else ""))
+
+        _append_log(trade_date, {
+            "timestamp":       _ts(),
+            "symbol":          sym,
+            "quantity":        fill_qty,
+            "ref_price":       round(st.ref, 4),
+            "fill_price":      round(avg_price, 4),
+            "leverage":        0.0,
+            "margin_required": round(st.ref * fill_qty, 2),
+            "order_id":        "limit_entry_multi",
+            "status":          "dry_run" if dry_run else "filled",
+            "product":         st.product,
+            "capital_base":    st.capital_base,
+        })
+
+        if not dry_run:
+            positions.append({
+                "broker":               _BROKER,
+                "symbol":               sym,
+                "entry_date":           today_str,
+                "reference_price":      round(st.ref, 4),
+                "shares_intended":      st.initial_desired,
+                "actual_fill_price":    round(avg_price, 4),
+                "actual_fill_quantity": fill_qty,
+                "entry_order_id":       "limit_entry_multi",
+                "status":               "open",
+                "entry_timestamp":      _ts(),
+                "product":              st.product,
+            })
+
+        try:
+            notify.send_entry(broker=_BROKER, symbol=f"{sym} [{st.product}]",
+                              fill_price=avg_price, shares=fill_qty,
+                              order_id="limit_entry_multi", dry_run=dry_run)
+        except Exception as exc:
+            print(f"  [notify] entry notify failed: {exc}", file=sys.stderr)
+
+        n_entered += 1
+        if is_partial:
+            n_partial += 1
+
+    if not dry_run and n_entered > 0:
+        _save_long_pos(positions)
+
+    print(f"\n[dhan] Limit entry complete. "
+          f"Entered: {n_entered}  Partial: {n_partial}  Zero-filled: {n_zero}")
+    print(f"[dhan] Log: {_log_path(trade_date)}")
+    _sync_pnl_workbook()
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Dhan entry+exit (independent of the Zerodha scripts)")
     grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--entry",         action="store_true", help="Run entry")
+    grp.add_argument("--entry",         action="store_true", help="Run entry (MARKET at 3:21)")
+    grp.add_argument("--entry-limit",   action="store_true",
+                     help="Semi-aggressive limit entry 3:06–3:19, MARKET sweep at cutoff")
     grp.add_argument("--exit-916",      action="store_true", help="Exit check at 9:16am")
     grp.add_argument("--exit-1159",     action="store_true", help="Forced exit at 11:59am")
     grp.add_argument("--square-off-239", action="store_true",
@@ -3064,7 +3714,10 @@ if __name__ == "__main__":
               f"(non-fatal -- continuing without it)", file=sys.stderr)
 
     try:
-        if args.entry:
+        if args.entry_limit:
+            run_entry_limit(trade_date=td, dry_run=args.dry_run, capital=args.capital,
+                            symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
+        elif args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                           symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
         elif args.exit_916:
