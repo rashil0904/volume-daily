@@ -40,7 +40,6 @@ TEST_FILES = [
     "test_targets.py",
     "test_batch_concurrency.py",
     "test_parallel_orders.py",
-    "test_uc_staged_entry.py",
     "test_exit_stage_timing.py",
     "test_order_update_feed.py",
 ]

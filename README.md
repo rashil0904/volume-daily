@@ -18,7 +18,7 @@ Live execution currently runs entirely through **Dhan** (`dhan/`) — own capita
   - [Part 2 — EOD Candle Fill (4:00 PM)](#part-2--eod-candle-fill-400-pm)
   - [Part 3 — Auto-Push Data & Results (5:00 PM)](#part-3--auto-push-data--results-500-pm)
 - [Dhan Pipeline (Independent, Parallel Broker)](#dhan-pipeline-independent-parallel-broker)
-  - [UC-Based Staged Entry (Case A/B) — Off By Default](#uc-based-staged-entry-case-ab--off-by-default)
+  - [UC-Based Staged Entry (Case A/B) — Removed 2026-09-21](#uc-based-staged-entry-case-ab--removed-2026-09-21)
 - [Repository Structure](#repository-structure)
 - [First-Time VM Setup](#first-time-vm-setup)
 - [Configuration](#configuration)
@@ -240,26 +240,9 @@ Longs and shorts share one file, distinguished by `direction`:
 }
 ```
 
-### UC-Based Staged Entry (Case A/B) — Off By Default
+### UC-Based Staged Entry (Case A/B) — Removed 2026-09-21
 
-A second, independent entry mechanism (the "UC-based staged entry" section of `dhan/live_monitor.py`) that runs **alongside** the 3:21 PM entry, not in place of it — driven by live websocket ticks instead of a single end-of-day snapshot, so a strong stock can be bought earlier than 3:21 PM. **Off by default** behind `--enable-uc-staged-entry` on `dhan/live_monitor.py`; the launcher script and crontab don't pass it, so today's production behavior is unchanged until it's explicitly turned on.
-
-- **Case A qualification filter**: a symbol is only eligible if it hit its upper circuit at some point *before* 2:30 PM, then is seen trading *off* that circuit at some point during the 2:30–3:18 PM window. Both are one-way latches, checked continuously from market open. A symbol that never locks at UC, or locks and never comes back off it, is never a Case A candidate — it just falls through untouched to the normal 3:21 PM entry.
-- **Case A leg 1** (2:30–3:18 PM, qualified symbols only): LTP crosses up through `prev_close × 1.19` → buy 50% of `per_stock_capital`.
-- **Case A leg 2** (same window, only after leg 1 has fired): LTP retraces back down to `prev_close × 1.17` → buy the other 50%, folded into the same position row. If it never retraces by 3:18 PM, the position is left `entry_status: partially_filled` — not abandoned, not treated as a fresh entry (see below).
-- **Case B** (3:00–3:18 PM, non-qualified symbols only): LTP crosses `prev_close × 1.19` → buy 100% of `per_stock_capital` in one shot. No legs, no retrace, no UC-proximity gate.
-- **Tie-break**: a symbol excluded the moment it's `case_a_qualified`, even before leg 1 has actually fired — Case A and Case B's windows overlap for the last 18 minutes, and a qualified symbol always resolves through the Case A path, never Case B.
-- **`per_stock_capital`** = Total Capital ÷ number of symbols already "qualified" on the existing volume/VWAP screen (`live_monitor.py`'s own long-standing signal) — recomputed fresh every tick from 2:30 PM onward and read at the exact instant a Case A/B trigger actually fires, not a one-time snapshot (changed 2026-09-09: the earlier frozen-at-2:30-PM version gave a real Case B fire a stale divisor because 2 more symbols qualified between the 2:30 PM snapshot and that symbol's own later trigger).
-- **3:21 PM entry priority** (the *only* change to the otherwise-untouched entry function): symbols left `partially_filled` by Case A are completed first (remaining rupee balance, same product as leg 1, no fresh margin check), symbols already `filled` via Case A/B are skipped entirely, everything else runs exactly as it always has.
-- `prev_close` is read from this pipeline's own local candle history (`data/candles/<symbol>.csv`), not from Dhan's live feed — confirmed live that Dhan's `ohlc.close` tracks *today's* running price, not yesterday's close.
-- Buy limit prices are capped just below the day's upper circuit (same fix already shipped for the sell-side 17% target), and a Case A/B fill that turns out MTF-ineligible retries as CNC exactly like the 3:21 PM entry does.
-
-```bash
-# Manual test — never places real orders
-python -m dhan.live_monitor --enable-uc-staged-entry --dry-run
-```
-
-A step-by-step walkthrough with worked examples: `results/UC_Staged_Entry_Explained.docx`.
+A second, independent entry mechanism that ran alongside the 3:21 PM entry, driven by live websocket ticks rather than a single end-of-day snapshot. Went live 2026-09-09; **removed 2026-09-21** after a real live bug — Case B kept re-firing on the same symbol every tick instead of latching once a fire attempt was decided/skipped, burning real balance-check API calls in a tight loop for the rest of the session. To be rebuilt from scratch; see git history (`08df6cbd` onward) for the removed implementation and `results/UC_Staged_Entry_Explained.docx` for the original design writeup.
 
 ### Auth (Automated Daily Renewal, Manual Fallback)
 
@@ -282,11 +265,10 @@ Saved to `dhan/.token.json` (gitignored) and reused for the rest of the day by e
 All Dhan tests live in `dhan/test/` — standalone, fully mocked scripts (no pytest, no real network/file I/O, no real token file ever touched).
 
 ```bash
-python dhan/test/test_all.py           # runs all 7 below, one consolidated pass/fail report
+python dhan/test/test_all.py           # runs all 6 below, one consolidated pass/fail report
 python dhan/test/test_all.py -v        #   ...same, but streams every file's full output live
 
 python dhan/test/test_targets.py             # Profit targets, OCO short stop-loss, every exit-reason branch
-python dhan/test/test_uc_staged_entry.py     # Case A/B qualification, legs, tie-break, capital snapshot, 3:21 priority
 python dhan/test/test_auth_renew.py          # Token renewal: success, renew failure, verify failure, GET-not-POST
 python dhan/test/test_batch_concurrency.py   # Wave-based batching, OCO status resolution from one Order Book snapshot
 python dhan/test/test_parallel_orders.py     # RateLimiter sliding window, entry/exit parallel-phase timing
@@ -327,10 +309,8 @@ volume-daily/
 │   ├── trade.py                 # buy(), sell(), place_order(), order_status(), cancel_order() via Dhan — CLI too
 │   ├── instruments.py           # symbol → securityId resolution
 │   ├── run_trades.py           # Entry / 17% targets / 916 & 1159 exits / mirrored shorts / 239 square-off
-│   ├── uc_staged_entry.py      # UC-based staged entry (Case A/B) — off by default, see Dhan Pipeline section
 │   ├── live_monitor.py         # MarketFeed WebSocket monitor, 9:13 AM–3:40 PM — Telegram-only
 │   ├── test_targets.py         # Self-test — profit targets, OCO short stop-loss, all exit-reason branches
-│   ├── test_uc_staged_entry.py # Self-test — Case A/B qualification, legs, tie-break, capital snapshot
 │   └── test_auth_renew.py      # Self-test — token renewal success/failure paths, GET-not-POST guard
 │
 ├── scripts/
@@ -358,7 +338,7 @@ volume-daily/
 │   ├── positions_dhan_short.json         # Dhan mirrored shorts, all-time, all statuses
 │   ├── trade_book.csv                    # Flattened per-position P&L view (regenerated daily at 4:30 PM)
 │   ├── trade_book.xlsx                   # Day-boxed visual version of the same data
-│   └── UC_Staged_Entry_Explained.docx    # Step-by-step walkthrough of Case A/B with worked examples
+│   └── UC_Staged_Entry_Explained.docx    # Original design writeup (feature removed 2026-09-21)
 │
 └── .env.example                # Credential template — copy to pipeline/.env and fill in
 ```
@@ -582,7 +562,7 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 | 3:21 PM | `21 15 * * 1-5` | `dhan/run_trades.py --entry` |
 | 3:40 PM | `40 15 * * 1-5` | `pkill -f 'dhan\.live_monitor'` |
 
-> The token-renewal job runs **every day of the week**, not just Mon–Fri (see [Auth](#auth-automated-daily-renewal-manual-fallback) for why). Every other Dhan cron line stays Mon–Fri only. UC-based staged entry (`--enable-uc-staged-entry`) is **not** in any cron line above — `scripts/run_dhan_live_monitor.sh` still launches plain `python3.11 -u -m dhan.live_monitor` with no flags; the feature is tested manually (see [UC-Based Staged Entry](#uc-based-staged-entry-case-ab--off-by-default)) until explicitly wired in.
+> The token-renewal job runs **every day of the week**, not just Mon–Fri (see [Auth](#auth-automated-daily-renewal-manual-fallback) for why). Every other Dhan cron line stays Mon–Fri only. `scripts/run_dhan_live_monitor.sh` launches plain `python3.11 -u -m dhan.live_monitor` (plus `--enable-order-update-feed`) — UC-based staged entry was removed 2026-09-21 (see [UC-Based Staged Entry](#uc-based-staged-entry-case-ab--removed-2026-09-21)).
 >
 > **`--exit-916`/`--exit-1159`/`--square-off-239` cron times sit one minute earlier** than their actual decision point (9:15/11:58/2:38) so each script has runway to reach two pinned wall-clock instants internally, same mechanism as `--entry`'s existing 15:20:57/15:21:00 staging hold (`_seconds_until`/`_hold_until` in `dhan/run_trades.py`): a prep-check 10 seconds before the real decision time (position load, Order Book snapshot, UC-cache read — none of it price-dependent) followed by the actual fire instant (fresh LTP, then the sell/cover decision). `--place-targets` briefly moved from 9:15am to 9:13am on 2026-09-18 to keep a buffer ahead of the now-earlier exit check, but NSE rejects any regular order before 9:15:00 sharp (confirmed live via a real DH-906 "Market is Closed" rejection that same morning) -- reverted back to 9:15am the same day and parallelized instead (chunked at `MAX_ORDER_CALLS_PER_SECOND`) so it finishes fast rather than relying on an earlier start. The exit check moved from 9:25am (`--exit-925`) to 9:16am (`--exit-916`) the same day — the stage's own internal prep/fire mechanism is otherwise unchanged.
 

@@ -190,6 +190,15 @@ is interrupted mid-way. Not an inconsistency to "fix."
 
 ### 6. UC-staged entry — Case A / Case B (`dhan/live_monitor.py`)
 
+**REMOVED 2026-09-21** — a real live bug (Case B kept re-firing on the same
+symbol every tick instead of latching once a fire attempt was decided/
+skipped, burning real balance-check API calls in a tight loop for the rest
+of the session) prompted a full removal, with the intent to rebuild from
+scratch later. Everything below in this section describes the removed
+implementation as it existed at the time of this audit — kept for historical
+context, not current behavior. See git history (`08df6cbd` onward) for the
+removed code.
+
 **This corrects the "wired but off by default" premise from last session — that
 was true of the code's own default, but not of the actual deployed
 configuration.**
@@ -546,7 +555,7 @@ Ranked safety/correctness first, then latency/efficiency, per your instruction.
 |---|---|---|---|---|---|---|---|
 | 1 | `square_off_239` force-cover buy has no UC check — can get rejected exactly like the entry-side bug did, leaving a short stuck open past the stage meant to unconditionally close it | `square_off_239` | none | none | **High** — an unprotected short surviving past 2:39pm is a real, uncapped-duration open-risk position, worse than a missed entry | Low — same pattern already proven twice (`run_entry_321`, `live_monitor.py`) | Not started |
 | 2 | `_poll_fill_safe` phantom-fill-on-timeout can silently record an unconfirmed sell/cover/short-open as filled at a guessed price | `check_exit_916`/`force_exit_1159`/`square_off_239` (all exit-side fill polling) | none | none | **High** — incorrect P&L, incorrect position state, on a specific already-reproduced failure mode (STYLEBAAZA) | Medium — `_poll_fill_strict` already exists and is proven on the entry side; porting changes behavior on timeout (position stays "not filled" instead of auto-closing), needs a decision on what should happen to a stuck exit | Deferred by you earlier this session ("let it be, will do it later") |
-| 3 | Cross-process locking gap between `live_monitor.py`'s Case A/B writes and cron writes to `positions_dhan_long.json` | `live_monitor.py` + all long-file writers | none | none | Medium, currently dormant — only matters the moment `--dry-run` is dropped from the launcher, and today's window timing leaves ~2 min buffer that isn't a designed guarantee | Medium — needs a real file lock (e.g. `fcntl.flock`) around read-modify-write, touches every writer | Not started |
+| 3 | Cross-process locking gap between `live_monitor.py`'s Case A/B writes and cron writes to `positions_dhan_long.json` | `live_monitor.py` + all long-file writers | none | none | Moot — Case A/B removed 2026-09-21 | Moot | Moot (feature removed) |
 | 4 | `place_targets_915` places target orders sequentially, one position at a time — the one stage never ported to the wave/chunk pattern | `place_targets_915` | 0 (same total calls) | Real — N sequential RTs instead of concurrent chunks, same shape 916/1159 already fixed | None — pure speed, no behavior change | Low — direct application of the existing `_run_in_chunks` helper | **Implemented 2026-09-18** — ported to the same resolve-then-fire wave shape, chunked at `MAX_ORDER_CALLS_PER_SECOND` |
 | 5 | `_sync_pnl_workbook` re-fetches `funded_amount` (`POST /margincalculator`) for every open MTF position, uncached, on every one of the 5 stage-runs/day | all 5 stages | Up to ~24-30/day saved on a 6-position day (5 calls → 1 if cached until a position's qty/price changes) | Minor per-call, adds up across the day | None — funded amount is stable intraday for an unchanged position | Low — simple day-scoped cache keyed on symbol+qty+price | Not started |
 | 6 | `_dhan_order_status`/`_dhan_get_orders` bypass `rate_limiter` entirely (only `place_order`/`cancel_order` call `.acquire()`) | all stages that poll fills or fetch the Order Book | 0 | None currently observed | Low today (chunk sizes stay under Order API's 10/sec even unthrottled), but latent — a future chunk-size increase could silently exceed the ceiling with no client-side guard | Low — one-line addition to both functions | Not started |

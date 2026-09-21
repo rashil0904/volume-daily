@@ -24,13 +24,10 @@ if [ -n "$OLD_PID" ]; then
     sleep 2
 fi
 
-# UC-based staged entry -- LIVE, real orders (--dry-run removed 2026-09-09).
-# Case A/B fires now place real MTF/CNC buys via _place_staged_buy, same
-# margin-check/CNC-retry path as run_entry_321. Ran dry-run-only since
-# 2026-08-27; went live before the day's first real fire could be verified
-# against real price action (explicit call, not a default).
-UC_FLAGS="--enable-uc-staged-entry"
-echo "$LOG_PREFIX  UC-based staged entry: LIVE (real orders)"
+# UC-based staged entry -- REMOVED 2026-09-21 after a live bug (Case B kept
+# re-firing on the same symbol every tick instead of latching once decided/
+# skipped, burning real balance-check API calls in a tight loop all
+# session). To be rebuilt from scratch later; see git history.
 
 # Order Update feed -- Phase 1 shadow-mode observation only (see
 # dhan/order_update_feed.py). Opens a second, independent WebSocket
@@ -40,5 +37,5 @@ echo "$LOG_PREFIX  UC-based staged entry: LIVE (real orders)"
 ORDER_UPDATE_FLAGS="--enable-order-update-feed"
 echo "$LOG_PREFIX  Order Update feed: shadow-mode ENABLED"
 
-nohup python3.11 -u -m dhan.live_monitor $UC_FLAGS $ORDER_UPDATE_FLAGS >> /root/dhan_live_monitor.log 2>&1 &
+nohup python3.11 -u -m dhan.live_monitor $ORDER_UPDATE_FLAGS >> /root/dhan_live_monitor.log 2>&1 &
 echo "$LOG_PREFIX  Started dhan/live_monitor.py (PID $!)"
