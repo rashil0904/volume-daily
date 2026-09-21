@@ -18,7 +18,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623472+05:30",
     "realized_return_pct": 0.6605,
     "realized_pnl": 1650.92,
-    "exit_note": "9:25 no-data fallback sold 269 @ ₹466.2611; remainder 270 manually sold @ ₹467.2896 (order 221260819155809)"
+    "exit_note": "9:25 no-data fallback sold 269 @ \u20b9466.2611; remainder 270 manually sold @ \u20b9467.2896 (order 221260819155809)"
   },
   {
     "broker": "dhan",
@@ -39,7 +39,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623514+05:30",
     "realized_return_pct": 2.1309,
     "realized_pnl": 2660.3,
-    "exit_note": "9:25 no-data fallback sold 102 @ ₹624.6000; remainder 102 manually sold @ ₹625.4426 (order 241260819164809)"
+    "exit_note": "9:25 no-data fallback sold 102 @ \u20b9624.6000; remainder 102 manually sold @ \u20b9625.4426 (order 241260819164809)"
   },
   {
     "broker": "dhan",
@@ -60,7 +60,7 @@
     "exit_timestamp_925": "2026-08-19T18:06:09.199095+05:30",
     "realized_return_pct": -0.7024,
     "realized_pnl": -1755.86,
-    "exit_note": "9:25 no-data fallback sold 192 @ ₹656.5651; remainder 192 manually sold @ ₹636.2896 (order 321260819458209)"
+    "exit_note": "9:25 no-data fallback sold 192 @ \u20b9656.5651; remainder 192 manually sold @ \u20b9636.2896 (order 321260819458209)"
   },
   {
     "broker": "dhan",
@@ -100,7 +100,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623531+05:30",
     "realized_return_pct": 1.0596,
     "realized_pnl": 2644.35,
-    "exit_note": "9:25 no-data fallback sold 643 @ ₹195.2740; remainder 644 manually sold @ ₹196.6343 (order 33126081991909)"
+    "exit_note": "9:25 no-data fallback sold 643 @ \u20b9195.2740; remainder 644 manually sold @ \u20b9196.6343 (order 33126081991909)"
   },
   {
     "broker": "dhan",
@@ -1948,5 +1948,89 @@
     "exit_timestamp_916": "2026-09-21T09:16:05.882943+05:30",
     "realized_return_pct": 0.6616,
     "realized_pnl": 1984.54
+  },
+  {
+    "broker": "dhan",
+    "symbol": "ASHIANA",
+    "entry_date": "2026-09-21",
+    "reference_price": 402.75,
+    "shares_intended": 112,
+    "actual_fill_price": 406.58957,
+    "actual_fill_quantity": 340,
+    "entry_order_id": "241260921697209",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T15:27:09+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "INDORAMA",
+    "entry_date": "2026-09-21",
+    "reference_price": 106.49,
+    "shares_intended": 426,
+    "actual_fill_price": 105.67,
+    "actual_fill_quantity": 1300,
+    "entry_order_id": "241260921699009",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T15:28:19+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JASH",
+    "entry_date": "2026-09-21",
+    "reference_price": 572.9,
+    "shares_intended": 79,
+    "actual_fill_price": 580.8,
+    "actual_fill_quantity": 244,
+    "entry_order_id": "351260921486209",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T15:28:20+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JAYKAY",
+    "entry_date": "2026-09-21",
+    "reference_price": 187.33,
+    "shares_intended": 242,
+    "actual_fill_price": 188.91,
+    "actual_fill_quantity": 750,
+    "entry_order_id": "211260921155609",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T15:29:21+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KROSS",
+    "entry_date": "2026-09-21",
+    "reference_price": 256.99,
+    "shares_intended": 176,
+    "actual_fill_price": 257.49,
+    "actual_fill_quantity": 233,
+    "entry_order_id": "241260921702409",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T16:29:48+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position. KROSS: order filled 233/545 before the remainder was cancelled (orderStatus=CANCELLED but filledQty=233, averageTradedPrice=257.49 -- a genuine partial fill, not a clean cancel)."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "REFEX",
+    "entry_date": "2026-09-21",
+    "reference_price": 293.55,
+    "shares_intended": 154,
+    "actual_fill_price": 293.2,
+    "actual_fill_quantity": 470,
+    "entry_order_id": "221260921659609",
+    "status": "open",
+    "entry_timestamp": "2026-09-21T15:51:41+05:30",
+    "product": "MTF",
+    "entry_note": "Placed manually via the Dhan app/web, not by this pipeline -- confirmed by correlationId=NA, algoId=0, MARKET/LIMIT order type, and zero footprint in dhan_trades.log (same fingerprint as the RML/INDNIPPON external-order cases). Automated run_entry_321's own 3:21pm attempt for this symbol was separately skipped for insufficient balance (11/11 signals skipped that run) -- this manual fill and that skip are unrelated, the manual trade came later (15:27-16:29). Reconciled here so 9:15/9:16/11:59 pick it up like any other open position."
   }
 ]
