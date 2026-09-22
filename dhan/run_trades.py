@@ -213,6 +213,26 @@ def _load_symbols(trade_date: date) -> list[str]:
         return [r["symbol"].strip().upper() for r in csv.DictReader(f)]
 
 
+def _full_signal_count(trade_date: date) -> int:
+    """The day's FULL signal count, straight off trade_list_<date>.csv's row
+    count -- the single source of truth both run_entry_321 and
+    run_entry_limit() must divide capital by, regardless of which subset of
+    symbols either invocation was actually handed (a --symbols subset, or a
+    partial list after already-entered dedup). trade_list_<date>.csv is
+    written once, atomically, by pipeline/main.py and never modified after
+    (confirmed: only pipeline/main.py writes it; notify.py and _load_symbols
+    only read it) -- so its row count is stable for the whole day and needs
+    no separate sidecar file to duplicate it. Loud failure, not a silent
+    fallback to len(whatever local list this caller built) -- that silent
+    fallback is exactly the sizing bug this replaces."""
+    path = _RESULTS_DIR / "trades" / f"trade_list_{trade_date.isoformat()}.csv"
+    if not path.exists():
+        sys.exit(f"[dhan] No trade list: {path} — cannot determine the day's "
+                  f"full signal count for allocation sizing.")
+    with open(path, newline="") as f:
+        return sum(1 for _ in csv.DictReader(f))
+
+
 def _ts() -> str:
     return datetime.now(_IST).isoformat()
 
@@ -273,6 +293,85 @@ def _hold_until(hh: int, mm: int, ss: int, label: str) -> None:
         return
     print(f"[dhan]   holding {hold_s:.3f}s until {hh:02d}:{mm:02d}:{ss:02d} IST ({label})…")
     time.sleep(hold_s)
+
+
+# ── run_entry_limit --symbols / run_entry_321 hand-off markers ────────────────
+# run_entry_limit(), when invoked in --symbols subset mode, claims a subset of
+# today's signals and writes its own fills to positions_dhan_long.json some
+# time before run_entry_321's 15:21:00 fire. run_entry_321 reads that same
+# file for its already-entered dedup right at cron start (~15:20:00) --
+# BEFORE its own 15:20:57/15:21:00 staging holds -- so a slow --symbols sweep
+# could still be writing positions when run_entry_321 reads them. These two
+# markers close that race: "started" records that a --symbols invocation is
+# in flight for the day at all (so a normal day with no --entry-limit run
+# never waits on a marker nobody was ever going to write), "done" records
+# that its fills are safely persisted. Both are only written by --symbols
+# mode -- full-list --entry-limit and single---symbol manual mode are
+# unaffected (full-list mode already deliberately leaves 0-fill symbols
+# unrecorded for run_entry_321 to retry as its safety net -- no marker needed
+# there, that overlap is by design, see run_entry_limit's own docstring).
+_ENTRY_LIMIT_MARKER_DEADLINE = (15, 21, 30)   # wall-clock (H, M, S) IST -- bounded wait cutoff
+
+
+def _entry_limit_started_flag_path(trade_date: date) -> Path:
+    return _RESULTS_DIR / "trades" / f"entry_limit_started_{trade_date.isoformat()}.flag"
+
+
+def _entry_limit_done_flag_path(trade_date: date) -> Path:
+    return _RESULTS_DIR / "trades" / f"entry_limit_done_{trade_date.isoformat()}.flag"
+
+
+def _wait_for_entry_limit_marker(trade_date: date, *, _now_fn=None, _sleep_fn=None) -> None:
+    """No-op (single Path.exists() check, no behavior/timing change) unless
+    today's entry_limit_started flag exists -- i.e. unless a run_entry_limit
+    --symbols invocation was actually expected for trade_date. If it exists
+    but entry_limit_done doesn't yet, polls until it appears or until
+    _ENTRY_LIMIT_MARKER_DEADLINE (15:21:30 IST) passes, whichever is first --
+    logs a loud alert and returns (never raises, never hangs past the
+    deadline) if the deadline is hit first.
+
+    _now_fn/_sleep_fn are injection points for tests only (default to real
+    datetime.now(_IST)/time.sleep) -- lets a test exercise the real
+    poll-then-timeout logic against a fake clock instead of either mocking
+    this function into a no-op (which would test nothing) or sleeping for
+    real wall-clock seconds."""
+    now_fn   = _now_fn or (lambda: datetime.now(_IST))
+    sleep_fn = _sleep_fn or time.sleep
+
+    started_path = _entry_limit_started_flag_path(trade_date)
+    if not started_path.exists():
+        return  # no --symbols invocation was expected today -- normal day, no-op
+
+    done_path = _entry_limit_done_flag_path(trade_date)
+    if done_path.exists():
+        return  # already finished before we even checked
+
+    print(f"[dhan]   {started_path.name} found — a run_entry_limit --symbols "
+          f"invocation is in flight for {trade_date}. Waiting for "
+          f"{done_path.name} before reading positions (deadline "
+          f"{_ENTRY_LIMIT_MARKER_DEADLINE[0]:02d}:{_ENTRY_LIMIT_MARKER_DEADLINE[1]:02d}:"
+          f"{_ENTRY_LIMIT_MARKER_DEADLINE[2]:02d} IST)…")
+
+    while True:
+        if done_path.exists():
+            print(f"[dhan]   {done_path.name} found — proceeding.")
+            return
+
+        now = now_fn()
+        deadline = now.replace(hour=_ENTRY_LIMIT_MARKER_DEADLINE[0],
+                               minute=_ENTRY_LIMIT_MARKER_DEADLINE[1],
+                               second=_ENTRY_LIMIT_MARKER_DEADLINE[2], microsecond=0)
+        remaining = (deadline - now).total_seconds()
+        if remaining <= 0:
+            print(f"[dhan]   !! ALERT: {done_path.name} never appeared by "
+                  f"{_ENTRY_LIMIT_MARKER_DEADLINE[0]:02d}:{_ENTRY_LIMIT_MARKER_DEADLINE[1]:02d}:"
+                  f"{_ENTRY_LIMIT_MARKER_DEADLINE[2]:02d} IST — run_entry_limit --symbols may "
+                  f"have hung, crashed, or is still running. Proceeding with run_entry_321 "
+                  f"anyway; check {started_path} for which symbols it claimed and verify no "
+                  f"double-entry occurred on them.")
+            return
+
+        sleep_fn(min(1.0, remaining))
 
 
 # ── Order fill polling ─────────────────────────────────────────────────────────
@@ -1444,6 +1543,12 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     manual_mode = symbol is not None
 
+    if not manual_mode:
+        # Must run before positions are loaded just below -- see
+        # _wait_for_entry_limit_marker's own module comment for why this
+        # can't wait until the 15:21:00 staging hold further down.
+        _wait_for_entry_limit_marker(trade_date)
+
     if manual_mode:
         symbols    = [symbol.strip().upper()]
         n          = 1
@@ -1454,7 +1559,12 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         if not symbols:
             print(f"[dhan] Trade list empty for {trade_date} — nothing to enter.")
             return
-        n          = len(symbols)
+        # Full day's signal count, not len(symbols) post-dedup -- see
+        # _full_signal_count's own docstring. For run_entry_321 today this is
+        # a no-op value-wise (symbols IS the full trade_list, dedup happens
+        # further below, after n/allocation are already fixed) -- this just
+        # removes the asymmetry against run_entry_limit's equivalent fix.
+        n          = _full_signal_count(trade_date)
         capital    = capital if capital is not None else TOTAL_CAPITAL
         allocation = compute_allocation(capital, n)
 
@@ -3091,11 +3201,12 @@ class _LimitSymState:
 
 def run_entry_limit(
     trade_date,
-    dry_run:         bool  = False,
-    capital:         float = None,
-    symbol:          str   = None,
-    shares_override: int   = None,
-    cnc_only:        bool  = False,
+    dry_run:         bool       = False,
+    capital:         float      = None,
+    symbol:          str        = None,
+    symbols:         list[str]  = None,
+    shares_override: int        = None,
+    cnc_only:        bool       = False,
 ) -> None:
     """Semi-aggressive tranched limit-order entry running from ~3:06 PM to
     3:19 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
@@ -3104,10 +3215,28 @@ def run_entry_limit(
     net for any symbol that produced 0 fills here (both limit phase AND
     market sweep failed — e.g. circuit-locked stock).
 
+    `symbols` (plural) trades an explicit SUBSET of today's trade list via
+    this limit mechanism, leaving the rest for a normal run_entry_321 --entry
+    run to pick up at 15:21 -- distinct from `symbol` (singular), which is a
+    fully manual one-off trade outside the day's signals entirely (capital
+    used directly, not divided). Mutually exclusive with `symbol`. Per-symbol
+    allocation in subset mode still divides by the FULL day's signal count
+    (see _full_signal_count) -- NOT by the subset size -- so every symbol
+    gets the same slice it would have gotten under a normal single --entry
+    run on all of today's signals, regardless of which mechanism buys it.
+    Writes entry_limit_started_<date>.flag / entry_limit_done_<date>.flag so
+    run_entry_321 can wait for this invocation to finish claiming its
+    symbols before it reads positions_dhan_long.json for its own dedup --
+    see _wait_for_entry_limit_marker.
+
     See module-level comment above for full design rationale."""
+
+    if symbol is not None and symbols is not None:
+        sys.exit("[dhan] --symbol and --symbols are mutually exclusive.")
 
     capital     = capital or TOTAL_CAPITAL
     manual_mode = symbol is not None
+    subset_mode = symbols is not None
 
     print(f"\n{'='*60}")
     print(f"[dhan] Limit Entry {'  DRY RUN' if dry_run else ''}")
@@ -3120,6 +3249,8 @@ def run_entry_limit(
     # ── Load + dedup symbols ──────────────────────────────────────────────────
     if manual_mode:
         raw_syms = [symbol.upper()]
+    elif subset_mode:
+        raw_syms = [s.strip().upper() for s in symbols]
     else:
         raw_syms = _load_symbols(trade_date)
 
@@ -3133,6 +3264,21 @@ def run_entry_limit(
         print("[dhan] No symbols to enter — exiting.")
         return
 
+    # "Started" marker -- written as early as possible (right after dedup,
+    # before the potentially slow sequential sizing loop below) so the
+    # protection window against run_entry_321's 15:21 read starts as soon as
+    # this invocation genuinely has symbols to claim. Only --symbols mode
+    # writes it -- see this function's own docstring for why full-list/manual
+    # mode don't need it. Not written on a dry run -- a dry run claims nothing
+    # real, and shouldn't make a real run_entry_321 wait on it.
+    if subset_mode and not dry_run:
+        started_path = _entry_limit_started_flag_path(trade_date)
+        started_path.parent.mkdir(parents=True, exist_ok=True)
+        started_path.write_text(json.dumps(
+            {"symbols": syms, "started_at": _ts()}, indent=2, ensure_ascii=False))
+        print(f"[dhan] Wrote {started_path} — run_entry_321 will wait for "
+              f"entry_limit_done_{today_str}.flag before its own 15:21 dedup read.")
+
     # ── Upfront balance check ─────────────────────────────────────────────────
     available_balance = _available_balance()
     if available_balance is None:
@@ -3142,7 +3288,10 @@ def run_entry_limit(
         print(f"[dhan] Available balance: ₹{available_balance:,.2f}")
 
     # ── Size shares + MTF/CNC per symbol (mirrors run_entry_321 Phase 1) ──────
-    n = 1 if manual_mode else len(syms)
+    # Full day's signal count, not len(syms) -- a --symbols subset (or a
+    # full-list run with some symbols already dedup'd out) must NOT change
+    # anyone's per-share allocation. See _full_signal_count's own docstring.
+    n = 1 if manual_mode else _full_signal_count(trade_date)
     states: dict[str, _LimitSymState] = {}
 
     for sym in syms:
@@ -3578,6 +3727,22 @@ def run_entry_limit(
     if not dry_run and n_entered > 0:
         _save_long_pos(positions)
 
+    # "Done" marker -- written AFTER _save_long_pos() above has returned
+    # (or was correctly skipped because n_entered==0 -- zero fills is still
+    # a completed, not a hung, invocation), so run_entry_321's own
+    # _load_long_pos() read is guaranteed to see every claimed symbol this
+    # invocation was ever going to record. See this function's own docstring
+    # and _wait_for_entry_limit_marker for the full race this closes.
+    if subset_mode and not dry_run:
+        done_path = _entry_limit_done_flag_path(trade_date)
+        done_path.parent.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(json.dumps({
+            "symbols_claimed": list(states.keys()),
+            "n_entered": n_entered, "n_partial": n_partial, "n_zero": n_zero,
+            "done_at": _ts(),
+        }, indent=2, ensure_ascii=False))
+        print(f"[dhan] Wrote {done_path}")
+
     print(f"\n[dhan] Limit entry complete. "
           f"Entered: {n_entered}  Partial: {n_partial}  Zero-filled: {n_zero}")
     print(f"[dhan] Log: {_log_path(trade_date)}")
@@ -3607,6 +3772,11 @@ if __name__ == "__main__":
     parser.add_argument("--symbol",   default=None,
                         help="Buy this one symbol instead of reading the day's trade list. "
                              "Shares are sized from --capital/ref-price unless --shares is given.")
+    parser.add_argument("--symbols",  default=None,
+                        help="--entry-limit only: comma-separated SUBSET of today's trade list to "
+                             "trade via limit-entry, leaving the rest for a normal --entry run. "
+                             "Per-symbol allocation still divides by the FULL day's signal count, "
+                             "not the subset size. Mutually exclusive with --symbol.")
     parser.add_argument("--shares",   type=int, default=None,
                         help="Exact quantity to buy in --symbol mode (skips allocation-based sizing).")
     parser.add_argument("--cnc-only", action="store_true",
@@ -3616,6 +3786,13 @@ if __name__ == "__main__":
 
     if args.shares is not None and args.symbol is None:
         sys.exit("[dhan] --shares requires --symbol")
+    if args.symbols is not None and args.symbol is not None:
+        sys.exit("[dhan] --symbol and --symbols are mutually exclusive.")
+    if args.symbols is not None and not args.entry_limit:
+        sys.exit("[dhan] --symbols is only valid with --entry-limit.")
+
+    symbols_list = ([s.strip() for s in args.symbols.split(",") if s.strip()]
+                    if args.symbols else None)
 
     td = date.fromisoformat(args.date) if args.date else date.today()
 
@@ -3645,7 +3822,8 @@ if __name__ == "__main__":
     try:
         if args.entry_limit:
             run_entry_limit(trade_date=td, dry_run=args.dry_run, capital=args.capital,
-                            symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
+                            symbol=args.symbol, symbols=symbols_list,
+                            shares_override=args.shares, cnc_only=args.cnc_only)
         elif args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                           symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)

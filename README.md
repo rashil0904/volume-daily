@@ -265,7 +265,7 @@ Saved to `dhan/.token.json` (gitignored) and reused for the rest of the day by e
 All Dhan tests live in `dhan/test/` — standalone, fully mocked scripts (no pytest, no real network/file I/O, no real token file ever touched).
 
 ```bash
-python dhan/test/test_all.py           # runs all 6 below, one consolidated pass/fail report
+python dhan/test/test_all.py           # runs all 7 below, one consolidated pass/fail report
 python dhan/test/test_all.py -v        #   ...same, but streams every file's full output live
 
 python dhan/test/test_targets.py             # Profit targets, OCO short stop-loss, every exit-reason branch
@@ -274,6 +274,7 @@ python dhan/test/test_batch_concurrency.py   # Wave-based batching, OCO status r
 python dhan/test/test_parallel_orders.py     # RateLimiter sliding window, entry/exit parallel-phase timing
 python dhan/test/test_exit_stage_timing.py   # 916/1159/239's :50-prep / :00-fire staging holds
 python dhan/test/test_order_update_feed.py   # Order Update WebSocket shadow-mode validation layer
+python dhan/test/test_entry_limit_subset.py  # run_entry_limit --symbols subset sizing + hand-off marker to run_entry_321
 ```
 
 `test_all.py` runs each file as its own fresh subprocess rather than importing them together — several files apply process-wide mocks at import time that are only safe in isolation (see `test_all.py`'s own docstring).

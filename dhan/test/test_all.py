@@ -42,6 +42,7 @@ TEST_FILES = [
     "test_parallel_orders.py",
     "test_exit_stage_timing.py",
     "test_order_update_feed.py",
+    "test_entry_limit_subset.py",
 ]
 
 PASS = "\033[32mPASS\033[0m"
