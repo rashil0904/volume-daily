@@ -3048,7 +3048,7 @@ def square_off_239(dry_run: bool = False) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LIMIT ENTRY — semi-aggressive, software-side tranching (3:06 PM → 3:19 PM)
+# LIMIT ENTRY — semi-aggressive, software-side tranching (3:06 PM → 3:20 PM)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Design (Option B — manual per-tranche placement, no exchange DQ):
@@ -3064,11 +3064,19 @@ def square_off_239(dry_run: bool = False) -> None:
 #       re-place at the new price.
 #     ∙ Otherwise                            → leave existing order in place.
 #   • If remaining < tranche_size → show the full remaining qty instead.
-#   • At LIMIT_ENTRY_CUTOFF_HHMM (15:19): cancel all open limit orders, then
+#   • At LIMIT_ENTRY_CUTOFF_HHMM (15:20): cancel all open limit orders, then
 #     MARKET-sweep any remaining unfilled qty (wave 1 cancel → wave 2 market).
-#   • The existing run_entry_321 cron at 15:20/15:21 is an independent safety
-#     net for symbols where run_entry_limit completely failed (0 fills from
-#     both the limit phase and the cutoff sweep).
+#   • The existing run_entry_321 cron ALSO fires at 15:20 (dedup-reads
+#     positions_dhan_long.json right at cron start, before its own internal
+#     15:20:57/15:21:00 holds) -- moved from a ~1min buffer (cutoff 15:19) to
+#     the SAME clock minute as this cutoff (2026-09-22). This is no longer a
+#     rare race: every run now genuinely overlaps run_entry_321's dedup read,
+#     not just a slow-sweep edge case, so run_entry_321's
+#     _wait_for_entry_limit_marker bounded wait (deadline 15:21:30) is
+#     expected to actually block for a few seconds on a normal run, not just
+#     exist as a fallback. run_entry_321 remains an independent safety net
+#     for symbols where run_entry_limit completely failed (0 fills from both
+#     the limit phase and the cutoff sweep) -- that part is unchanged.
 #   • Position records are written in the same format as run_entry_321 with
 #     actual_fill_price = VWAP across all partial fills (limit + sweep).
 #
@@ -3090,7 +3098,7 @@ def square_off_239(dry_run: bool = False) -> None:
 #   • Zero-share allocation: skip with a clear log line.
 
 LIMIT_ENTRY_RECAL_SECS      = 10   # seconds between recalibrations — easy to tune
-LIMIT_ENTRY_CUTOFF_HHMM     = 1519 # HHMM: at/after this → cancel all + MARKET sweep
+LIMIT_ENTRY_CUTOFF_HHMM     = 1520 # HHMM: at/after this → cancel all + MARKET sweep
 LIMIT_ENTRY_TRANCHE_DIVISOR = 10   # tranche = initial_desired // this
 
 
@@ -3209,11 +3217,13 @@ def run_entry_limit(
     cnc_only:        bool       = False,
 ) -> None:
     """Semi-aggressive tranched limit-order entry running from ~3:06 PM to
-    3:19 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
+    3:20 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
     limit orders and sweeps remaining unfilled qty with MARKET orders.
-    The existing run_entry_321 cron at 15:20 acts as an independent safety
-    net for any symbol that produced 0 fills here (both limit phase AND
-    market sweep failed — e.g. circuit-locked stock).
+    The existing run_entry_321 cron ALSO fires at 15:20 (see the module-level
+    comment above this function's own block for the timing overlap this
+    creates and how _wait_for_entry_limit_marker handles it) and acts as an
+    independent safety net for any symbol that produced 0 fills here (both
+    limit phase AND market sweep failed — e.g. circuit-locked stock).
 
     `symbols` (plural) trades an explicit SUBSET of today's trade list via
     this limit mechanism, leaving the rest for a normal run_entry_321 --entry
