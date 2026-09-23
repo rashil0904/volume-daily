@@ -203,6 +203,42 @@ def get_reference_price(symbol: str) -> tuple[float, int]:
         )
 
 
+def _prefetch_ref_prices(symbols: list[str]) -> dict[str, object]:
+    """Fetches every symbol's reference price CONCURRENTLY rather than one
+    at a time -- each get_reference_price() call is an independent Upstox
+    1-min-candle fetch (own instrument_key, own request) with no shared
+    state between symbols, so there's nothing to serialize. Confirmed live
+    2026-09-23: run_entry_limit's own sizing loop calling this sequentially
+    for a --symbols subset took ~8s for just 4 symbols (each candle fetch
+    carries data_loader.py's own 0.8s CALL_DELAY throttle plus real network
+    latency, stacked one after another) before the FIRST order could even
+    be placed. Running them concurrently collapses that to roughly one
+    symbol's latency instead of N of them -- this is the same
+    already-proven-safe pattern data_loader.py itself uses for multi-symbol
+    intraday fetches (up to 5 concurrent workers, same 0.8s/call throttle
+    per worker).
+
+    Returns sym -> (ref, ref_hhmm) on success, or sym -> the raised
+    Exception on failure, so the caller can reproduce the exact same
+    per-symbol SKIP message the old sequential loop gave -- this function
+    only changes WHEN each fetch happens, never what a caller sees from
+    it. margin-check calls are deliberately NOT parallelized here (kept
+    sequential in the caller) -- unlike this candle-fetch endpoint,
+    concurrent calls to Dhan's own /margincalculator have no prior
+    confirmed-safe precedent in this codebase."""
+    results: dict[str, object] = {}
+    if not symbols:
+        return results
+    with ThreadPoolExecutor(max_workers=len(symbols)) as ex:
+        futures = {ex.submit(get_reference_price, sym): sym for sym in symbols}
+        for fut, sym in futures.items():
+            try:
+                results[sym] = fut.result()
+            except Exception as exc:
+                results[sym] = exc
+    return results
+
+
 # ── Trade list (same file, same parsing as zerodha/) ──────────────────────────
 
 def _load_symbols(trade_date: date) -> list[str]:
@@ -3209,12 +3245,14 @@ class _LimitSymState:
 
 def run_entry_limit(
     trade_date,
-    dry_run:         bool       = False,
-    capital:         float      = None,
-    symbol:          str        = None,
-    symbols:         list[str]  = None,
-    shares_override: int        = None,
-    cnc_only:        bool       = False,
+    dry_run:         bool                     = False,
+    capital:         float                    = None,
+    symbol:          str                      = None,
+    symbols:         list[str]                = None,
+    shares_override: int                      = None,
+    cnc_only:        bool                     = False,
+    prep_at:         tuple[int, int, int]      = None,
+    fire_at:         tuple[int, int, int]      = None,
 ) -> None:
     """Semi-aggressive tranched limit-order entry running from ~3:06 PM to
     3:20 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
@@ -3238,6 +3276,27 @@ def run_entry_limit(
     run_entry_321 can wait for this invocation to finish claiming its
     symbols before it reads positions_dhan_long.json for its own dedup --
     see _wait_for_entry_limit_marker.
+
+    `prep_at`/`fire_at`, if given, are (hh, mm, ss) IST instants to hold
+    until (via _hold_until) -- prep_at right BEFORE the balance check +
+    ref-price prefetch + per-symbol sizing loop, fire_at right AFTER
+    sizing finishes, immediately before the coordinator loop's first tick.
+    Same two-stage shape as run_entry_321's own _LTP_FETCH_AT/_FIRE_AT
+    holds, for the same reason: ref (used to decide SHARE COUNT --
+    compute_shares(allocation, ref) -- a one-time decision, never
+    recalculated later) goes stale the longer it sits before firing, so
+    resolving it as LATE as safely possible keeps sizing closer to the
+    live price WITHOUT compressing sizing into an unsafely short window
+    (confirmed live 2026-09-23: a caller starting the whole process only
+    ~8-10s before firing left no margin for a slow API response). The
+    actual FILL price is unaffected either way -- the coordinator loop's
+    first tick fetches its own fresh quote for bidding regardless of when
+    sizing ran, so prep_at only changes how fresh `ref` (and therefore
+    share count) is, not execution price. Passing fire_at without prep_at
+    holds only once, right before firing, using whatever `ref` sizing
+    happened to get (the original single-hold behavior). Both default to
+    None, which skips their hold entirely -- fires as soon as sizing is
+    done, byte-for-byte the behavior before these parameters existed.
 
     See module-level comment above for full design rationale."""
 
@@ -3289,6 +3348,13 @@ def run_entry_limit(
         print(f"[dhan] Wrote {started_path} — run_entry_321 will wait for "
               f"entry_limit_done_{today_str}.flag before its own 15:21 dedup read.")
 
+    # ── Prep hold (see this function's own docstring) -- balance check +
+    # ref-price prefetch + sizing all happen AFTER this, as late as safely
+    # possible before firing, so `ref` (and therefore share count) is as
+    # fresh as the fire_at gap allows.
+    if prep_at is not None:
+        _hold_until(*prep_at, "run_entry_limit prep (ref price + margin check)")
+
     # ── Upfront balance check ─────────────────────────────────────────────────
     available_balance = _available_balance()
     if available_balance is None:
@@ -3304,12 +3370,20 @@ def run_entry_limit(
     n = 1 if manual_mode else _full_signal_count(trade_date)
     states: dict[str, _LimitSymState] = {}
 
+    # Every symbol's reference price fetched CONCURRENTLY up front (see
+    # _prefetch_ref_prices) instead of one at a time inside the loop below --
+    # confirmed live 2026-09-23 this was the dominant cost of the sizing
+    # phase (~8s for 4 symbols, sequential). Margin-check stays sequential,
+    # inside the loop, unchanged -- see _prefetch_ref_prices' own docstring
+    # for why only the candle fetch got this treatment.
+    ref_prices = _prefetch_ref_prices(syms)
+
     for sym in syms:
-        try:
-            ref, _ = get_reference_price(sym)
-        except Exception as exc:
-            print(f"[dhan]   SKIP {sym}: reference price failed — {exc}")
+        cached = ref_prices.get(sym)
+        if isinstance(cached, Exception):
+            print(f"[dhan]   SKIP {sym}: reference price failed — {cached}")
             continue
+        ref, _ = cached
 
         if manual_mode and shares_override:
             shares       = shares_override
@@ -3366,6 +3440,9 @@ def run_entry_limit(
     if not states:
         print("[dhan] No tradeable symbols after sizing — exiting.")
         return
+
+    if fire_at is not None:
+        _hold_until(*fire_at, "run_entry_limit first tick")
 
     print(f"\n[dhan] Starting limit-order loop for {len(states)} symbol(s). "
           f"Cutoff at HHMM {LIMIT_ENTRY_CUTOFF_HHMM}.\n")
@@ -3789,6 +3866,18 @@ if __name__ == "__main__":
                              "not the subset size. Mutually exclusive with --symbol.")
     parser.add_argument("--shares",   type=int, default=None,
                         help="Exact quantity to buy in --symbol mode (skips allocation-based sizing).")
+    parser.add_argument("--prep-at",  default=None,
+                        help="--entry-limit only: hold until this exact HHMM or HHMMSS IST "
+                             "instant BEFORE the balance check + ref-price fetch + sizing "
+                             "loop -- keeps the reference price (and therefore share count) "
+                             "as fresh as possible without cutting it too close to --fire-at. "
+                             "Optional; pairs with --fire-at (see that flag's help).")
+    parser.add_argument("--fire-at",  default=None,
+                        help="--entry-limit only: hold until this exact HHMM or HHMMSS IST "
+                             "instant (e.g. 1517 or 151700) right after sizing finishes, before "
+                             "the first order. Start the process a few seconds early and this "
+                             "makes the first REAL order land at a precise, predictable second "
+                             "instead of whenever sizing happened to finish.")
     parser.add_argument("--cnc-only", action="store_true",
                         help="Skip the MTF leverage check entirely -- buy every entry as CNC "
                              "using the full per-position allocation (--entry only).")
@@ -3800,9 +3889,24 @@ if __name__ == "__main__":
         sys.exit("[dhan] --symbol and --symbols are mutually exclusive.")
     if args.symbols is not None and not args.entry_limit:
         sys.exit("[dhan] --symbols is only valid with --entry-limit.")
+    if args.fire_at is not None and not args.entry_limit:
+        sys.exit("[dhan] --fire-at is only valid with --entry-limit.")
+    if args.prep_at is not None and not args.entry_limit:
+        sys.exit("[dhan] --prep-at is only valid with --entry-limit.")
 
     symbols_list = ([s.strip() for s in args.symbols.split(",") if s.strip()]
                     if args.symbols else None)
+
+    def _parse_hhmmss(flag_name: str, raw: str) -> tuple[int, int, int]:
+        s = raw.strip()
+        if len(s) == 4:
+            return int(s[:2]), int(s[2:4]), 0
+        if len(s) == 6:
+            return int(s[:2]), int(s[2:4]), int(s[4:6])
+        sys.exit(f"[dhan] {flag_name} must be HHMM or HHMMSS")
+
+    prep_at_tuple = _parse_hhmmss("--prep-at", args.prep_at) if args.prep_at else None
+    fire_at_tuple = _parse_hhmmss("--fire-at", args.fire_at) if args.fire_at else None
 
     td = date.fromisoformat(args.date) if args.date else date.today()
 
@@ -3833,7 +3937,8 @@ if __name__ == "__main__":
         if args.entry_limit:
             run_entry_limit(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                             symbol=args.symbol, symbols=symbols_list,
-                            shares_override=args.shares, cnc_only=args.cnc_only)
+                            shares_override=args.shares, cnc_only=args.cnc_only,
+                            prep_at=prep_at_tuple, fire_at=fire_at_tuple)
         elif args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                           symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)

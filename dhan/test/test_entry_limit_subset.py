@@ -156,8 +156,11 @@ def entry_limit_fakes(ref_price=100.0, leverage=3.0):
 
 
 def run_entry_limit_with_fakes(trade_date, tmp_root, store, *, symbol=None, symbols=None,
-                                capital=None, allocation_spy=None):
+                                capital=None, allocation_spy=None, prep_at=None, fire_at=None,
+                                hold_spy=None, ref_price_fn=None):
     fakes = entry_limit_fakes()
+    if ref_price_fn is not None:
+        fakes["get_reference_price"] = ref_price_fn
     patches = [
         patch.object(rt, "_RESULTS_DIR", tmp_root),
         patch.object(rt, "_LOG_DIR", tmp_root / "trades"),
@@ -170,13 +173,15 @@ def run_entry_limit_with_fakes(trade_date, tmp_root, store, *, symbol=None, symb
     ] + [patch.object(rt, name, fn) for name, fn in fakes.items()]
     if allocation_spy is not None:
         patches.append(patch.object(rt, "compute_allocation", allocation_spy))
+    if hold_spy is not None:
+        patches.append(patch.object(rt, "_hold_until", hold_spy))
 
     from contextlib import ExitStack
     with ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
         rt.run_entry_limit(trade_date=trade_date, dry_run=False, capital=capital,
-                           symbol=symbol, symbols=symbols)
+                           symbol=symbol, symbols=symbols, prep_at=prep_at, fire_at=fire_at)
 
 
 def run_entry_321_with_fakes(trade_date, tmp_root, store, *, capital=None,
@@ -499,6 +504,139 @@ with patch.object(rt, "_RESULTS_DIR", tmp11):
     except SystemExit:
         mutual_exclusion_enforced = True
 check("run_entry_limit(symbol=, symbols=) together -> SystemExit", mutual_exclusion_enforced)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nScenario 12 -- _prefetch_ref_prices fetches every symbol CONCURRENTLY, "
+      "not sequentially, and preserves per-symbol success/failure exactly\n")
+# ═════════════════════════════════════════════════════════════════════════════
+
+import time as _time_mod
+
+_PREFETCH_DELAY = 0.3
+_prefetch_syms = ["SLOWA", "SLOWB", "SLOWC", "SLOWD", "FAILSYM"]
+
+def _slow_ref_price(sym):
+    _time_mod.sleep(_PREFETCH_DELAY)
+    if sym == "FAILSYM":
+        raise ValueError("no candle data")
+    return (100.0 + len(sym), 1520)
+
+with patch.object(rt, "get_reference_price", _slow_ref_price):
+    t0 = _time_mod.monotonic()
+    result12 = rt._prefetch_ref_prices(_prefetch_syms)
+    elapsed12 = _time_mod.monotonic() - t0
+
+check("prefetch of 5 symbols (0.3s each) finishes in well under 5x0.3s=1.5s (concurrent, not sequential)",
+      elapsed12 < 1.0, f"{elapsed12:.3f}s")
+check("prefetch still took at least ~0.3s (didn't just skip the work)",
+      elapsed12 >= _PREFETCH_DELAY * 0.8, f"{elapsed12:.3f}s")
+check("successful symbols return (ref, hhmm) tuples",
+      result12["SLOWA"] == (100.0 + len("SLOWA"), 1520), str(result12.get("SLOWA")))
+check("failing symbol's exception is captured, not raised",
+      isinstance(result12["FAILSYM"], ValueError), str(result12.get("FAILSYM")))
+
+# End-to-end: run_entry_limit still gives the exact same per-symbol SKIP
+# behavior for a ref-price failure when going through the real sizing loop
+# (not just _prefetch_ref_prices in isolation).
+TD12 = date(2026, 9, 23)
+tmp12 = fresh_tmp_root()
+write_trade_list(tmp12 / "trades", TD12, ["GOOD1", "GOOD2", "BADSYM"])
+store12 = FakeStore()
+
+def _mixed_ref_price(sym):
+    if sym == "BADSYM":
+        raise ValueError("no candle data at all")
+    return (100.0, 1520)
+
+buf12 = io.StringIO()
+with redirect_stdout(buf12):
+    run_entry_limit_with_fakes(TD12, tmp12, store12, symbols=["GOOD1", "GOOD2", "BADSYM"],
+                               capital=1_500_000.0, ref_price_fn=_mixed_ref_price)
+check("end-to-end: BADSYM skipped with the expected message, GOOD1/GOOD2 still entered",
+      "SKIP BADSYM: reference price failed" in buf12.getvalue()
+      and {p["symbol"] for p in store12.positions} == {"GOOD1", "GOOD2"},
+      str({p["symbol"] for p in store12.positions}))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nScenario 13 -- fire_at: holds until the given instant right before the "
+      "first tick, and is a complete no-op (never calls _hold_until) when omitted\n")
+# ═════════════════════════════════════════════════════════════════════════════
+
+TD13 = date(2026, 9, 23)
+tmp13 = fresh_tmp_root()
+write_trade_list(tmp13 / "trades", TD13, ["A", "B"])
+store13 = FakeStore()
+hold_calls13 = []
+
+def fake_hold_until13(hh, mm, ss, label):
+    hold_calls13.append((hh, mm, ss, label))
+
+run_entry_limit_with_fakes(TD13, tmp13, store13, symbols=["A"], capital=1_500_000.0,
+                           fire_at=(15, 17, 0), hold_spy=fake_hold_until13)
+check("fire_at=(15,17,0) -> _hold_until called with exactly that instant",
+      hold_calls13 == [(15, 17, 0, "run_entry_limit first tick")], str(hold_calls13))
+
+TD13b = date(2026, 9, 23)
+tmp13b = fresh_tmp_root()
+write_trade_list(tmp13b / "trades", TD13b, ["A", "B"])
+store13b = FakeStore()
+hold_calls13b = []
+
+def fake_hold_until13b(hh, mm, ss, label):
+    hold_calls13b.append((hh, mm, ss, label))
+
+run_entry_limit_with_fakes(TD13b, tmp13b, store13b, symbols=["A"], capital=1_500_000.0,
+                           fire_at=None, hold_spy=fake_hold_until13b)
+check("fire_at=None (default) -> _hold_until never called -- zero behavior change",
+      hold_calls13b == [], str(hold_calls13b))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nScenario 14 -- prep_at: holds BEFORE the ref-price fetch/sizing loop, "
+      "in the right order relative to fire_at, and is a no-op when omitted\n")
+# ═════════════════════════════════════════════════════════════════════════════
+
+TD14 = date(2026, 9, 23)
+tmp14 = fresh_tmp_root()
+write_trade_list(tmp14 / "trades", TD14, ["A", "B"])
+store14 = FakeStore()
+hold_calls14 = []
+ref_price_call_order14 = []
+
+def fake_hold_until14(hh, mm, ss, label):
+    hold_calls14.append((hh, mm, ss, label))
+
+def tracking_ref_price14(sym):
+    ref_price_call_order14.append(sym)
+    return (100.0, 1520)
+
+run_entry_limit_with_fakes(TD14, tmp14, store14, symbols=["A"], capital=1_500_000.0,
+                           prep_at=(15, 16, 50), fire_at=(15, 17, 0),
+                           hold_spy=fake_hold_until14, ref_price_fn=tracking_ref_price14)
+
+check("prep_at + fire_at: _hold_until called with BOTH instants, in order",
+      hold_calls14 == [
+          (15, 16, 50, "run_entry_limit prep (ref price + margin check)"),
+          (15, 17, 0, "run_entry_limit first tick"),
+      ], str(hold_calls14))
+check("ref-price fetch happened (sizing ran) -- confirms prep hold didn't block sizing itself",
+      ref_price_call_order14 == ["A"], str(ref_price_call_order14))
+
+TD14b = date(2026, 9, 23)
+tmp14b = fresh_tmp_root()
+write_trade_list(tmp14b / "trades", TD14b, ["A", "B"])
+store14b = FakeStore()
+hold_calls14b = []
+
+def fake_hold_until14b(hh, mm, ss, label):
+    hold_calls14b.append((hh, mm, ss, label))
+
+run_entry_limit_with_fakes(TD14b, tmp14b, store14b, symbols=["A"], capital=1_500_000.0,
+                           prep_at=None, fire_at=None, hold_spy=fake_hold_until14b)
+check("prep_at=None, fire_at=None (default) -> _hold_until never called at all",
+      hold_calls14b == [], str(hold_calls14b))
 
 
 print()
