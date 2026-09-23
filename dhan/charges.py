@@ -75,10 +75,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import re
 import json
+import time
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 from dhan.auth import BASE_URL, get_session
-from dhan.trade import security_id
+from dhan.trade import security_id, RateLimiter
 
 _CHARGE_FIELDS = [
     ("brokerageCharges",          "Brokerage"),
@@ -174,14 +175,45 @@ def fixed_charges(trade: dict, products: dict[str, str]) -> tuple[float, float]:
     return dp, pledge
 
 
+# Same conservative cadence as dhan/run_trades.py's _quote_rate_limiter (1
+# req/1.5s) -- confirmed live 2026-09-23 that this endpoint, called with NO
+# delay between pages, lets exactly 20 requests through before DH-904
+# (Rate_Limit) rejects the 21st. As trade history has grown past ~a month,
+# a full [PNL_START_DATE, today] fetch now routinely needs MORE than 20
+# pages, so every such call was silently hitting this every time -- see
+# _trades_rate_limiter's own use below and _TRADES_MAX_RETRIES for the
+# retry-on-429 that also matters: get_trades() raises on ANY page failure,
+# discarding every already-fetched page with it (not a partial-result
+# return), so a transient 429 on page 20 was previously destroying pages
+# 0-19's real data too, not just failing to fetch the rest.
+_trades_rate_limiter  = RateLimiter(max_per_sec=1, window_seconds=1.5)
+_TRADES_MAX_RETRIES   = 3     # extra attempts after the first, only on a 429
+_TRADES_RETRY_BACKOFF = 5.0   # seconds, doubles each retry
+
+
 def get_trades(from_date: str, to_date: str) -> list[dict]:
     """Fetches every trade in [from_date, to_date] (inclusive), paginating
-    until an empty page comes back."""
+    until an empty page comes back. Each page is serialized through
+    _trades_rate_limiter and retried with backoff on a 429 (see that
+    limiter's comment above) -- a 429 here is the same kind of transient,
+    not-the-caller's-fault rate limit as the Quote API's, worth retrying
+    before giving up on the whole fetch."""
     session, _ = get_session()
     trades = []
     page = 0
     while True:
-        resp = session.get(f"{BASE_URL}/trades/{from_date}/{to_date}/{page}", timeout=15)
+        backoff = _TRADES_RETRY_BACKOFF
+        for attempt in range(_TRADES_MAX_RETRIES + 1):
+            _trades_rate_limiter.acquire()
+            resp = session.get(f"{BASE_URL}/trades/{from_date}/{to_date}/{page}", timeout=15)
+            if resp.status_code == 429 and attempt < _TRADES_MAX_RETRIES:
+                print(f"[dhan]   trade-book page {page} 429 "
+                      f"(attempt {attempt + 1}/{_TRADES_MAX_RETRIES + 1}) -- "
+                      f"backing off {backoff:.0f}s before retrying.")
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            break
         if not resp.ok:
             raise RuntimeError(f"[dhan] trade-book fetch failed (page {page}): {resp.text}")
         batch = resp.json()
