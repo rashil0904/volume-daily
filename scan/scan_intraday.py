@@ -48,7 +48,6 @@ from common.calc_utils import compute_allocation, compute_shares
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 MCAP_DAILY_DIR = _ROOT / "data" / "market_cap_daily"
-INSTRUMENTS_DIR = _ROOT / "data" / "instruments"
 SCANS_DIR      = _ROOT / "results" / "scans"
 SCANS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -79,14 +78,6 @@ def _load_today_mcap() -> dict:
     return universe
 
 
-def _load_instrument_lookup() -> dict:
-    inst_file = INSTRUMENTS_DIR / "upstox_instruments.csv"
-    if not inst_file.exists():
-        return {}
-    with open(inst_file, newline="") as f:
-        return {r["symbol"].strip().upper(): r for r in csv.DictReader(f)}
-
-
 def main():
     as_of_hhmm = NOW_HHMM
     universe   = _load_today_mcap()
@@ -96,9 +87,12 @@ def main():
     print("  Preview only — not the official 3:01 PM trade list.")
     print("  Volume threshold is the same fixed 6x 36-day avg as the official run (not prorated).\n")
 
-    # Refresh 15-min candles for today's mcap universe before checking signals
-    inst_lookup = _load_instrument_lookup()
-    matched     = [inst_lookup[sym] for sym in sorted(universe) if sym in inst_lookup]
+    # Refresh 15-min candles for today's mcap universe before checking signals.
+    # securityId resolution now happens per-symbol inside data_loader.py itself
+    # (via dhan.trade.security_id) -- unlike the old Upstox-instrument-lookup
+    # gate this replaced, every universe symbol is attempted, not just ones
+    # already present in a separately-maintained instrument file.
+    matched = [{"symbol": sym} for sym in sorted(universe)]
     if matched:
         print(f"  Refreshing 15min candles for {len(matched):,} symbols …")
         data_loader.load_candles(matched, interval="15minute", mode="intraday")

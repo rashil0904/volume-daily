@@ -135,6 +135,7 @@ rate_limiter = RateLimiter(max_per_sec=7)  # raised from 5 on 2026-09-18, matchi
 
 _cache: dict[str, str] = {}
 _tick_cache: dict[str, float] = {}
+_cache_lock = threading.Lock()
 
 
 def _refresh_if_stale() -> None:
@@ -151,35 +152,47 @@ def _refresh_if_stale() -> None:
 
 
 def _load_cache() -> None:
+    """Thread-safe lazy fill via double-checked locking. Confirmed live
+    2026-09-24 that the original unlocked check-then-fill pattern is a real
+    race under concurrent callers (same shape as the bug that caused
+    dhan/run_trades.py's _ikey() to silently skip symbols that day): one
+    thread partway through filling _cache makes a second thread see it as
+    already non-empty and skip straight to a lookup for a symbol the first
+    thread hasn't reached yet. The unlocked fast-path check below is safe
+    (dict truthiness read is atomic under the GIL) -- it only exists to
+    avoid taking the lock on every call once the cache is warm."""
     global _cache, _tick_cache
     if _cache:
         return
-    _refresh_if_stale()
-    with open(_CACHE_FILE, newline="") as f:
-        for row in csv.DictReader(f):
-            if (row.get("SEM_EXM_EXCH_ID") == "NSE"
-                    and row.get("SEM_SEGMENT") == "E"
-                    and row.get("SEM_SERIES") == "EQ"):
-                sym = (row.get("SEM_TRADING_SYMBOL") or "").strip().upper()
-                sid = (row.get("SEM_SMST_SECURITY_ID") or "").strip()
-                if sym and sid:
-                    _cache[sym] = sid
-                tick_raw = (row.get("SEM_TICK_SIZE") or "").strip()
-                if sym and tick_raw:
-                    try:
-                        # SEM_TICK_SIZE is in paise, not rupees -- confirmed via Dhan's
-                        # own field description ("Minimum decimal point at which an
-                        # instrument can be priced") plus the raw value distribution
-                        # across the whole NSE-EQ master (1/5/10/50/100/500), which only
-                        # makes sense as paise (0.01/0.05/0.10/0.50/1.00/5.00 rupees) --
-                        # a literal "500 rupee tick" would be absurd for any equity.
-                        # Confirmed live 2026-08-18: TVSSRICHAK's raw tick is 10.0000
-                        # (-> ₹0.10), NOT the ₹0.05 every NSE equity was previously
-                        # assumed to share -- that wrong assumption is what caused two
-                        # real order rejections (EXCH:16283) earlier that day.
-                        _tick_cache[sym] = float(tick_raw) / 100
-                    except ValueError:
-                        pass
+    with _cache_lock:
+        if _cache:
+            return
+        _refresh_if_stale()
+        with open(_CACHE_FILE, newline="") as f:
+            for row in csv.DictReader(f):
+                if (row.get("SEM_EXM_EXCH_ID") == "NSE"
+                        and row.get("SEM_SEGMENT") == "E"
+                        and row.get("SEM_SERIES") == "EQ"):
+                    sym = (row.get("SEM_TRADING_SYMBOL") or "").strip().upper()
+                    sid = (row.get("SEM_SMST_SECURITY_ID") or "").strip()
+                    if sym and sid:
+                        _cache[sym] = sid
+                    tick_raw = (row.get("SEM_TICK_SIZE") or "").strip()
+                    if sym and tick_raw:
+                        try:
+                            # SEM_TICK_SIZE is in paise, not rupees -- confirmed via Dhan's
+                            # own field description ("Minimum decimal point at which an
+                            # instrument can be priced") plus the raw value distribution
+                            # across the whole NSE-EQ master (1/5/10/50/100/500), which only
+                            # makes sense as paise (0.01/0.05/0.10/0.50/1.00/5.00 rupees) --
+                            # a literal "500 rupee tick" would be absurd for any equity.
+                            # Confirmed live 2026-08-18: TVSSRICHAK's raw tick is 10.0000
+                            # (-> ₹0.10), NOT the ₹0.05 every NSE equity was previously
+                            # assumed to share -- that wrong assumption is what caused two
+                            # real order rejections (EXCH:16283) earlier that day.
+                            _tick_cache[sym] = float(tick_raw) / 100
+                        except ValueError:
+                            pass
 
 
 def security_id(symbol: str) -> str:

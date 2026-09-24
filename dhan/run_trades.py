@@ -1,8 +1,9 @@
 """
 dhan/run_trades.py — 3-stage live trading via Dhan (independent of Zerodha)
 ============================================================================
-Entry price : Upstox intraday V3 candle API (same source Zerodha's scripts use) —
-              close of 15:20 candle, falls back to 15:19 if 15:20 isn't published yet.
+Entry price : Dhan's own /charts/intraday Data API (pipeline/data_loader.py;
+              migrated off Upstox 2026-09-24) — close of 15:20 candle, falls
+              back to 15:19 if 15:20 isn't published yet.
 Exit check  : Our own recorded entry fill price vs. current LTP from Dhan's
               /marketfeed/ltp (Stage 2) — pnl = (ltp - fill_price) * qty, computed
               directly rather than trusting Dhan's positions'
@@ -61,7 +62,6 @@ _BROKER       = "dhan"
 _RESULTS_DIR  = _ROOT / "results"
 _POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
 _POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
-_INSTRUMENTS  = _ROOT / "data" / "instruments" / "upstox_instruments.csv"
 _LOG_DIR      = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 1_500_000
 
@@ -165,33 +165,16 @@ if _env.exists():
             _k, _, _v = _ln.partition("=")
             os.environ.setdefault(_k.strip(), _v.strip())
 
-_sym_cache: dict[str, str] = {}
-
-
-# ── Instrument key resolution (for Upstox candle API — same as zerodha/) ──────
-
-def _ikey(symbol: str) -> str:
-    if "|" in symbol:
-        return symbol
-    global _sym_cache
-    if not _sym_cache and _INSTRUMENTS.exists():
-        with open(_INSTRUMENTS, newline="") as f:
-            for row in csv.DictReader(f):
-                _sym_cache[row["symbol"].strip().upper()] = row["instrument_key"].strip()
-    key = _sym_cache.get(symbol.upper())
-    if not key:
-        raise ValueError(
-            f"[dhan] '{symbol}' not found in instruments CSV — "
-            "pass the instrument_key directly (e.g. 'NSE_EQ|INE...')"
-        )
-    return key
-
-
 def get_reference_price(symbol: str) -> tuple[float, int]:
     """Same reference-candle logic as the Zerodha scripts: close of 15:20 1-min
     candle, falling back to 15:19, then whichever candle at/before 15:20 is
-    actually the most recent available."""
-    matched        = [{"symbol": symbol, "instrument_key": _ikey(symbol)}]
+    actually the most recent available. securityId resolution now happens
+    inside data_loader.py itself (dhan.trade.security_id, thread-safe as of
+    2026-09-24) -- this used to go through a separate, thread-unsafe
+    Upstox-instrument-CSV cache here (_ikey()) that silently skipped symbols
+    under concurrent calls from _prefetch_ref_prices(); that whole layer is
+    retired, not patched."""
+    matched        = [{"symbol": symbol}]
     candles_by_sym = _dl.load_candles(matched, interval="1minute", mode="intraday")
     candles        = candles_by_sym.get(symbol, [])
     try:
@@ -205,18 +188,19 @@ def get_reference_price(symbol: str) -> tuple[float, int]:
 
 def _prefetch_ref_prices(symbols: list[str]) -> dict[str, object]:
     """Fetches every symbol's reference price CONCURRENTLY rather than one
-    at a time -- each get_reference_price() call is an independent Upstox
-    1-min-candle fetch (own instrument_key, own request) with no shared
-    state between symbols, so there's nothing to serialize. Confirmed live
+    at a time -- each get_reference_price() call is an independent 1-min-
+    candle fetch (own securityId, own request) with no shared state between
+    symbols, so there's nothing to serialize; the shared
+    data_loader._candle_rate_limiter (4 req/sec, since the 2026-09-24
+    Upstox->Dhan migration) is what keeps aggregate throughput correct
+    across however many of these run concurrently. Confirmed live
     2026-09-23: run_entry_limit's own sizing loop calling this sequentially
-    for a --symbols subset took ~8s for just 4 symbols (each candle fetch
-    carries data_loader.py's own 0.8s CALL_DELAY throttle plus real network
-    latency, stacked one after another) before the FIRST order could even
-    be placed. Running them concurrently collapses that to roughly one
-    symbol's latency instead of N of them -- this is the same
-    already-proven-safe pattern data_loader.py itself uses for multi-symbol
-    intraday fetches (up to 5 concurrent workers, same 0.8s/call throttle
-    per worker).
+    for a --symbols subset took ~8s for just 4 symbols (each candle fetch's
+    per-call throttle plus real network latency, stacked one after another)
+    before the FIRST order could even be placed. Running them concurrently
+    collapses that to roughly one symbol's latency instead of N of them --
+    the same already-proven-safe pattern data_loader.py itself uses for
+    multi-symbol intraday fetches (up to 5 concurrent workers).
 
     Returns sym -> (ref, ref_hhmm) on success, or sym -> the raised
     Exception on failure, so the caller can reproduce the exact same

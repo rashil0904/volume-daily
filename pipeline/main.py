@@ -8,7 +8,7 @@ Flow
 ----
   Step 1 : Fetch today's market cap via data_loader.load_market_cap()
   Step 2 : Detect new symbols vs universe_combined.csv; append new entrants
-  Step 3 : For new symbols — match Upstox instruments, backfill 1-year candles
+  Step 3 : For new symbols — resolve Dhan securityId, backfill 6-month candles
            For all symbols with candle files — fetch today's 15-min intraday candles
   Step 4 : Run STRICT signal check via signal_engine.get_signals()
   Step 5 : Write results/trades/trade_list_<date>.csv
@@ -47,13 +47,11 @@ if _env_file.exists():
             k, _, v = _line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
 
-if not os.environ.get("UPSTOX_ACCESS_TOKEN"):
-    sys.exit("ERROR: Set UPSTOX_ACCESS_TOKEN in pipeline/.env or environment.")
-
 import data_loader
 import signal_engine
 import notify
 from common.calc_utils import compute_allocation, compute_shares
+from dhan.trade import security_id
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 UNIVERSE_FILE   = _ROOT / "data" / "universe_combined.csv"
@@ -92,28 +90,30 @@ def _append_new_to_universe(new_syms: dict) -> None:
     print(f"  Appended {len(new_syms)} new symbol(s) to {UNIVERSE_FILE.name}")
 
 
-def _load_instrument_lookup() -> dict:
-    f = INSTRUMENTS_DIR / "upstox_instruments.csv"
-    if not f.exists():
-        return {}
-    with open(f, newline="") as fh:
-        return {r["symbol"].strip().upper(): r for r in csv.DictReader(fh)}
+def _resolve_new_symbols(new_syms: dict) -> tuple:
+    """Resolve each new symbol to a Dhan securityId via the shared scrip-master
+    cache (dhan.trade.security_id) -- already the source of truth for every
+    real order this system places, so no separate instrument-matching step is
+    needed the way Upstox required. Returns (matched, unmatched); matched is a
+    list of {"symbol": sym} dicts ready for data_loader.load_candles()."""
+    matched, unmatched = [], []
+    for sym in new_syms:
+        try:
+            security_id(sym)
+        except ValueError:
+            unmatched.append(sym)
+            continue
+        matched.append({"symbol": sym})
+    return matched, unmatched
 
 
-def _append_to_instruments(matched: list, unmatched: list) -> None:
-    inst_file = INSTRUMENTS_DIR / "upstox_instruments.csv"
-    with open(inst_file, "a", newline="") as f:
-        csv.DictWriter(
-            f,
-            fieldnames=["symbol", "instrument_key", "trading_symbol", "series", "exchange"]
-        ).writerows(matched)
-    print(f"  Appended {len(matched)} matched → {inst_file.name}")
-
-    if unmatched:
-        unmatched_file = INSTRUMENTS_DIR / "upstox_unmatched.csv"
-        with open(unmatched_file, "a", newline="") as f:
-            csv.writer(f).writerows([[s] for s in unmatched])
-        print(f"  Appended {len(unmatched)} unmatched → {unmatched_file.name}")
+def _log_unmatched(unmatched: list) -> None:
+    if not unmatched:
+        return
+    unmatched_file = INSTRUMENTS_DIR / "dhan_unmatched.csv"
+    with open(unmatched_file, "a", newline="") as f:
+        csv.writer(f).writerows([[s] for s in unmatched])
+    print(f"  Appended {len(unmatched)} unmatched (no Dhan securityId) → {unmatched_file.name}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -156,15 +156,9 @@ def main():
         print("\n── Step 3: Candle data update ──────────────────────────────")
 
         if new_syms:
-            existing_matched = _load_instrument_lookup()
-            to_match = [s for s in new_syms if s not in existing_matched]
-            if to_match:
-                instruments   = data_loader.download_nse_instruments()
-                matched_new, unmatched_new = data_loader.match_instruments(to_match, instruments)
-                _append_to_instruments(matched_new, unmatched_new)
-            else:
-                matched_new = []
-                print("  All new symbols already in instrument master.")
+            matched_new, unmatched_new = _resolve_new_symbols(new_syms)
+            _log_unmatched(unmatched_new)
+            print(f"  Resolved {len(matched_new)}/{len(new_syms)} new symbol(s) to a Dhan securityId.")
             if matched_new:
                 print(f"  Backfilling {len(matched_new)} new symbol(s) from {BACKFILL_START} …")
                 data_loader.load_candles(
@@ -172,20 +166,9 @@ def main():
                     from_date=BACKFILL_START, to_date=TODAY,
                 )
         else:
-            print("  No new symbols — skipping instrument match and historical backfill.")
+            print("  No new symbols — skipping instrument resolution and historical backfill.")
 
-        print("\n  Re-validating instrument keys before candle fetch …")
-        data_loader.revalidate_instruments()
-
-        inst_lookup = _load_instrument_lookup()
-        candle_instruments = [
-            inst_lookup[p.stem]
-            for p in sorted(CANDLES_DIR.glob("*.csv"))
-            if p.stem in inst_lookup
-        ]
-        no_key = [p.stem for p in CANDLES_DIR.glob("*.csv") if p.stem not in inst_lookup]
-        if no_key:
-            print(f"  Note: {len(no_key)} candle file(s) have no instrument key — skipping.")
+        candle_instruments = [{"symbol": p.stem} for p in sorted(CANDLES_DIR.glob("*.csv"))]
         print(f"  Fetching 15min intraday for {len(candle_instruments):,} symbols …")
         data_loader.load_candles(candle_instruments, interval="15minute", mode="intraday")
 
