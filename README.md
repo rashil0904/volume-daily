@@ -1,6 +1,6 @@
 # NSE Volume Pipeline
 
-Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, and generates a trade list. Upstox is used for market data only — no trading happens through Upstox.
+Automated NSE mid-cap momentum scanner running daily at **3:06 PM IST** (Mon–Fri) on a DigitalOcean Ubuntu VM. Scans the ₹1,500–5,000 Cr market-cap band, fires on volume + return conditions, and generates a trade list. Candle data and live reference prices are both sourced from **Dhan's own Data API** (migrated off Upstox 2026-09-24 — see git history for the prior Upstox-based pipeline).
 
 Live execution currently runs entirely through **Dhan** (`dhan/`) — own capital pool, own positions file, own broker-specific quirks (LIMIT entries, 17% profit targets, mirrored intraday shorts with a UC-based stop-loss). See [Dhan Pipeline](#dhan-pipeline-independent-parallel-broker) below.
 
@@ -37,7 +37,7 @@ The pipeline targets **NSE equities with market cap ₹1,500–5,000 Cr**. It sc
 |---|---|
 | Universe | NSE EQ/BE segment, ₹1,500–5,000 Cr |
 | Candle interval | 15-minute OHLCV (pipeline), 1-minute (live trading reference price) |
-| Data source | Upstox V3 API (data/analytics only — no Upstox trading) |
+| Data source | Dhan Data API (`/charts/intraday` — candles + live reference price) |
 | Market cap source | Screener.in Premium (live daily export) |
 | Entry reference price | Close of the 15:20 candle (falls back to 15:19) |
 | Pipeline schedule | Mon–Fri, fully automated end-to-end via cron |
@@ -121,7 +121,7 @@ See [Dhan Pipeline](#dhan-pipeline-independent-parallel-broker) for the live cap
 
 1. **Fetch market cap** — `data_loader.load_market_cap()` logs into Screener.in (Premium), runs the query `Market Capitalization > 1500 AND Market Capitalization < 5000`, and exports to `data/market_cap_daily/market_cap_<date>.csv`. Falls back to the most recent prior export (with a warning) if the live fetch fails, or fails the whole run if there's no fallback at all.
 2. **Update universe** — compares today's market-cap symbols against `data/universe_combined.csv`; new symbols not previously seen are appended automatically.
-3. **Candle data update** — for brand-new symbols: matches Upstox `instrument_key` and backfills 1 year of 15-min candles. For every symbol with a candle file: fetches today's intraday 15-min candles (in-progress candle at fetch time is necessarily incomplete until the 4:00 PM EOD fill corrects it).
+3. **Candle data update** — for brand-new symbols: resolves a Dhan `securityId` (via `dhan.trade.security_id()`, the same scrip-master cache live order placement uses) and backfills 6 months of 15-min candles. For every symbol with a candle file: fetches today's intraday 15-min candles (in-progress candle at fetch time is necessarily incomplete until the 4:00 PM EOD fill corrects it).
 4. **Signal check (STRICT mode)** — `signal_engine.get_signals()` applies all three conditions above.
 5. **Write trade list** — `results/trades/trade_list_<date>.csv` (columns: `symbol`, `shares`, `ref_price` — see the capital-allocation caveat above; these sizing columns are for the notification only, not what actually gets bought).
 6. **Notify** — `pipeline/notify.py` sends the signal count + trade table to Telegram (or a failure message with the failed step + error, if any step raised).
@@ -279,6 +279,13 @@ python dhan/test/test_entry_limit_subset.py  # run_entry_limit --symbols subset 
 
 `test_all.py` runs each file as its own fresh subprocess rather than importing them together — several files apply process-wide mocks at import time that are only safe in isolation (see `test_all.py`'s own docstring).
 
+`pipeline/data_loader.py` (the Dhan candle-fetch module) has its own standalone test, same style, outside `dhan/test/` since it isn't Dhan-order-placement code:
+
+```bash
+python pipeline/test/test_data_loader.py   # date-chunking boundaries, epoch->IST conversion,
+                                            # columnar-response transpose, 429/failure-envelope handling
+```
+
 ---
 
 ## Repository Structure
@@ -288,7 +295,7 @@ volume-daily/
 ├── pipeline/
 │   ├── main.py                # Daily orchestrator — called by cron at 3:06 PM
 │   ├── fetch_market_cap.py    # Logs into Screener.in, exports market cap CSV
-│   ├── data_loader.py         # Upstox V3 — historical + intraday + EOD fill + market cap loader
+│   ├── data_loader.py         # Dhan /charts/intraday — historical + intraday + EOD fill + market cap loader
 │   ├── signal_engine.py       # Signal conditions (market cap / volume / return) — STRICT + PRORATED modes
 │   ├── notify.py              # All Telegram sends — pipeline success/failure, scan preview, trading-stage
 │   │                          #   alerts (entry/exit/summary), and live-monitor alerts (start/qualified/etc.)
@@ -321,10 +328,13 @@ volume-daily/
 │   └── setup_vm.sh             # One-time VM provisioning script
 │
 ├── data/
-│   ├── candles/                 # Per-symbol 15-min OHLCV CSV files (data only — no Upstox trading)
+│   ├── candles/                 # Per-symbol 15-min OHLCV CSV files, sourced from Dhan
 │   ├── instruments/
-│   │   ├── upstox_instruments.csv   # symbol → instrument_key mapping
-│   │   └── upstox_unmatched.csv     # symbols with no Upstox match
+│   │   ├── dhan_scrip_master.csv    # Dhan's own NSE scrip master — symbol → securityId/tick size,
+│   │   │                            #   auto-refreshed weekly (dhan/trade.py); source of truth for
+│   │   │                            #   both candle-fetch resolution and real order placement
+│   │   ├── dhan_unmatched.csv       # new symbols with no Dhan securityId match (rare)
+│   │   └── kite_nse_instruments.csv # unrelated — Zerodha/Kite side, not used by the Dhan pipeline
 │   ├── market_cap_daily/        # Daily Screener.in exports + mcap_status.json
 │   └── universe_combined.csv    # All symbols ever seen in the 1,500–5,000 Cr band
 │
@@ -391,7 +401,6 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 |---|---|
 | `SCREENER_EMAIL` | Screener.in login email (Premium account required for export) |
 | `SCREENER_PASSWORD` | Screener.in password |
-| `UPSTOX_ACCESS_TOKEN` | Upstox data token for candle fetches (from developer portal). Analytics only — no Upstox trading. |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
 | `TELEGRAM_CHAT_ID` | Group chat ID (negative integer for supergroups) |
 | `TELEGRAM_TOPIC_SIGNALS` | *(optional)* Forum topic ID for pipeline signal notifications |
@@ -411,9 +420,7 @@ Copy `.env.example` to `pipeline/.env` and fill in all values. This file is giti
 
 ### Morning Token Refresh (Required — Cannot Be Automated)
 
-The **candle data token** (`UPSTOX_ACCESS_TOKEN`) is long-lived — update it in `.env` only when it eventually expires.
-
-The **Dhan access token** expires every 24h, but **renews itself automatically** — `python -m dhan.auth --renew` runs at 8:00 AM and 8:00 PM daily and keeps it fresh with no manual step. A hand-generated token (**web.dhan.co → Profile → Access DhanHQ Trading APIs**) is only needed once, ever, or as a fallback if automated renewal has been failing:
+The **Dhan access token** — used for both candle data and live trading, one token for everything since the 2026-09-24 Upstox migration — expires every 24h, but **renews itself automatically** — `python -m dhan.auth --renew` runs at 8:00 AM and 8:00 PM daily and keeps it fresh with no manual step. A hand-generated token (**web.dhan.co → Profile → Access DhanHQ Trading APIs**) is only needed once, ever, or as a fallback if automated renewal has been failing:
 
 ```bash
 python -m dhan.auth <ACCESS_TOKEN>
@@ -569,4 +576,4 @@ Fully independent of the Zerodha cron lines above — separate log files, separa
 
 ---
 
-*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Upstox V3 API (data) · Dhan (execution, live monitoring) · Telegram alerts throughout · Dashboard published as a Claude Artifact*
+*Pipeline runs Mon–Fri · DigitalOcean Ubuntu 22.04 · Python 3.11 · Dhan (data, execution, live monitoring) · Telegram alerts throughout · Dashboard published as a Claude Artifact*
