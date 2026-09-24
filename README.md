@@ -333,8 +333,7 @@ volume-daily/
 │   │   ├── dhan_scrip_master.csv    # Dhan's own NSE scrip master — symbol → securityId/tick size,
 │   │   │                            #   auto-refreshed weekly (dhan/trade.py); source of truth for
 │   │   │                            #   both candle-fetch resolution and real order placement
-│   │   ├── dhan_unmatched.csv       # new symbols with no Dhan securityId match (rare)
-│   │   └── kite_nse_instruments.csv # unrelated — Zerodha/Kite side, not used by the Dhan pipeline
+│   │   └── dhan_unmatched.csv       # new symbols with no Dhan securityId match (rare; written on demand)
 │   ├── market_cap_daily/        # Daily Screener.in exports + mcap_status.json
 │   └── universe_combined.csv    # All symbols ever seen in the 1,500–5,000 Cr band
 │
