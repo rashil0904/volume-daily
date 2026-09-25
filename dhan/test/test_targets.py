@@ -1240,7 +1240,7 @@ def fake_order_status_p5(oid):
 
 with patch.object(rt, "_dhan_order_status", fake_order_status_p5), \
      patch.object(rt.time, "sleep", fake_sleep_p5):
-    price_safe, qty_safe = rt._poll_fill_safe("ORD-P5A", fallback_price=0.0, fallback_qty=0)
+    price_safe, qty_safe = rt._poll_fill_safe("ORD-P5A")
     price_strict, qty_strict, rejected_strict, reason_strict = rt._poll_fill_strict("ORD-P5B")
 
 check("(poll-5) _poll_fill_safe filled immediately, zero sleeps",
@@ -1248,6 +1248,31 @@ check("(poll-5) _poll_fill_safe filled immediately, zero sleeps",
 check("(poll-5) _poll_fill_strict filled immediately, zero sleeps, rejected=False",
       (price_strict, qty_strict, rejected_strict) == (55.0, 3, False) and sleep_calls_p5 == [],
       str(sleep_calls_p5))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-6) — _poll_fill_safe: genuine timeout (order stays PENDING) "
+      "is treated as NOT FILLED, never a fabricated fill at a fallback price/qty\n")
+# ─────────────────────────────────────────────────────────────────────────────
+# Confirmed live 2026-09-25: a FRONTSP mirrored-short entry order sat PENDING
+# for the full poll window (never REJECTED, never TRADED) and the old
+# fallback-on-timeout behavior recorded it as "SHORT OPENED" at the pre-order
+# LTP anyway -- a fictional entry price/P&L for an order that, as far as this
+# process could tell, never actually filled. _poll_fill_safe no longer takes
+# fallback_price/fallback_qty at all -- ANY non-TRADED, non-REJECTED outcome
+# (including a plain timeout) now returns (0.0, 0), identical to a confirmed
+# rejection, so every caller's existing "eq == 0 -> NOT FILLED" path catches
+# it instead of silently trusting a guess.
+
+def fake_order_status_p6(oid):
+    return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0.0}
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p6), \
+     patch.object(rt.time, "sleep", lambda secs: None):
+    price_p6, qty_p6 = rt._poll_fill_safe("ORD-P6")
+
+check("(poll-6) genuine timeout returns (0.0, 0) -- never a fabricated fallback fill",
+      (price_p6, qty_p6) == (0.0, 0), str((price_p6, qty_p6)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1578,10 +1603,19 @@ def fake_sell_s6(sym, exch, qty, **kw):
     sell_calls_s6.append((sym, kw.get("product")))
     return f"ORD-{kw.get('product')}"
 
+# First status check (the original order) -> REJECTED (settlement lag).
+# Second status check (the CNC retry, after the 30s wait) -> TRADED --
+# matches what actually happened live for RML on 2026-09-08 (the wait-and-
+# retry genuinely resolved it that time). See (safe-6b) below for the case
+# where the retry ALSO fails.
+_s6_calls = []
 def fake_order_status_s6(oid):
-    return {"orderStatus": "REJECTED",
-            "omsErrorDescription": "RMS:34126090811709:You are trying to sell more "
-                                   "than the quantity you currently hold."}
+    _s6_calls.append(oid)
+    if len(_s6_calls) == 1:
+        return {"orderStatus": "REJECTED",
+                "omsErrorDescription": "RMS:34126090811709:You are trying to sell more "
+                                       "than the quantity you currently hold."}
+    return {"orderStatus": "TRADED", "filledQty": 167, "averageTradedPrice": 1635.5}
 
 sleep_calls_s6 = []
 def fake_sleep_s6(secs):
@@ -1592,11 +1626,46 @@ with patch.object(rt, "sell", fake_sell_s6), \
      patch.object(rt.time, "sleep", fake_sleep_s6):
     result_s6 = rt._sell_margin_safe("RML", "NSE_EQ", 167, 1635.5, "CNC", dry_run=False)
 
-check("(safe-6) CNC order placed first, then a CNC retry",
+check("(safe-6) CNC order placed first, then a CNC retry -- no MTF escalation "
+      "since the retry itself succeeded",
       sell_calls_s6 == [("RML", "CNC"), ("RML", "CNC")], str(sell_calls_s6))
 check("(safe-6) returns the retry's order_id", result_s6 == "ORD-CNC", result_s6)
-check("(safe-6) waited 30s before the retry (after the initial 2s status-check wait)",
-      sleep_calls_s6 == [2, 30], str(sleep_calls_s6))
+check("(safe-6) waited 30s before the retry, then the standard 2s post-retry status check",
+      sleep_calls_s6 == [2, 30, 2], str(sleep_calls_s6))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (safe-6b) — _sell_margin_safe: CNC retry ALSO rejected with the same "
+      "settlement-lag message -> escalates to MTF once (confirmed live 2026-09-25, "
+      "RAYMONDREL -- see _sell_margin_safe's own docstring)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+sell_calls_s6b = []
+def fake_sell_s6b(sym, exch, qty, **kw):
+    sell_calls_s6b.append((sym, kw.get("product")))
+    return f"ORD-{kw.get('product')}"
+
+def fake_order_status_s6b(oid):
+    # Every status check comes back REJECTED with the same message -- neither
+    # the original CNC order nor its CNC retry ever actually filled.
+    return {"orderStatus": "REJECTED",
+            "omsErrorDescription": "RMS:X:You are trying to sell more than the "
+                                   "quantity you currently hold."}
+
+sleep_calls_s6b = []
+def fake_sleep_s6b(secs):
+    sleep_calls_s6b.append(secs)
+
+with patch.object(rt, "sell", fake_sell_s6b), \
+     patch.object(rt, "_dhan_order_status", fake_order_status_s6b), \
+     patch.object(rt.time, "sleep", fake_sleep_s6b):
+    result_s6b = rt._sell_margin_safe("RAYMONDREL", "NSE_EQ", 176, 710.05, "CNC", dry_run=False)
+
+check("(safe-6b) three sells attempted: CNC, CNC retry, then MTF escalation",
+      sell_calls_s6b == [("RAYMONDREL", "CNC"), ("RAYMONDREL", "CNC"), ("RAYMONDREL", "MTF")],
+      str(sell_calls_s6b))
+check("(safe-6b) returns the MTF escalation's order_id, not the failed CNC retry's",
+      result_s6b == "ORD-MTF", result_s6b)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

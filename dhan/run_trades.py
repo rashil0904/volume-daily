@@ -426,16 +426,33 @@ def _poll_fill(order_id: str, retries: int = 12, delay: float = 1.0) -> tuple[fl
     raise RuntimeError(f"Order {order_id} did not fill within {int(retries * delay)}s")
 
 
-def _poll_fill_safe(order_id: str,
-                    fallback_price: float, fallback_qty: int) -> tuple[float, int]:
+def _poll_fill_safe(order_id: str) -> tuple[float, int]:
+    """A genuine poll timeout (order still PENDING after every retry -- not
+    confirmed TRADED, not confirmed REJECTED) means the order's real fate is
+    UNKNOWN: it may still be resting, may fill later, or may already have
+    filled without this process seeing it. Previously this fell back to a
+    caller-supplied (fallback_price, fallback_qty) as if it were a real
+    fill -- confirmed live 2026-09-25 that this fabricates a position from a
+    guess: a FRONTSP mirrored-short entry that never actually filled got
+    logged as "SHORT OPENED" at a pre-order LTP, producing a fictional entry
+    price and P&L in positions_dhan_short.json (the real order sat PENDING
+    for ~36 minutes before eventually being cancelled). Treated identically
+    to a confirmed rejection now -- returns (0, 0) so every caller's
+    existing "eq == 0 -> NOT FILLED, manual review required" path catches
+    it, same as it always has for a real rejection. The message stays
+    distinct from a rejection's, though: unlike REJECTED/CANCELLED, this
+    order's true state is still genuinely unconfirmed and needs a human to
+    check Dhan directly, not just a routine skip."""
     try:
         return _poll_fill(order_id)
     except OrderRejected as exc:
         print(f"[dhan]   ORDER REJECTED — {exc}")
         return 0.0, 0
     except Exception as exc:
-        print(f"[dhan]   fill poll failed: {exc} — using fallback values")
-        return fallback_price, fallback_qty
+        print(f"[dhan]   !! POLL TIMEOUT (order status unknown -- NOT confirmed filled or "
+              f"rejected) — {exc}. Treating as not-filled rather than guessing a fill -- "
+              f"CHECK DHAN MANUALLY, this order may still be live or may have filled late.")
+        return 0.0, 0
 
 
 # WS-first fill confirmation -- PERMANENT as of 2026-09-18. Started as a
@@ -491,7 +508,7 @@ def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int)
                 break
         time.sleep(_WS_FIRST_POLL_INTERVAL)
 
-    return _poll_fill_safe(order_id, fallback_price, fallback_qty)
+    return _poll_fill_safe(order_id)
 
 
 def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
@@ -578,8 +595,41 @@ def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
             print(f"[dhan]   {product} SELL REJECTED ({lag_kind}) — waiting 30s "
                   f"then retrying as {product} again.")
             time.sleep(30)
-            return sell(sym, exch, qty, order_type=order_type, price=price,
-                       product=product, dry_run=dry_run)
+            retry_id = sell(sym, exch, qty, order_type=order_type, price=price,
+                            product=product, dry_run=dry_run)
+            if product != "CNC":
+                return retry_id
+
+            # CNC-only third attempt: confirmed live 2026-09-25 (RAYMONDREL)
+            # that the settlement-lag theory above doesn't always hold. Two
+            # separate CNC retries (the 9:16am exit, then the 11:59am
+            # force-exit, ~2h45m apart) both failed with the identical
+            # "trying to sell more than you hold" rejection, while a plain
+            # MTF sell for the SAME shares filled immediately the moment it
+            # was tried manually. Most likely explanation: an MTF-active
+            # account's overnight pledge/margin netting can silently
+            # reclassify a same-day CNC buy's shares into the MTF pledge
+            # pool by the next session, even though the original BUY order
+            # was placed and filled as CNC -- by then the position genuinely
+            # isn't CNC-sellable anymore, and no amount of waiting fixes
+            # that. Only tried after the CNC-retry-after-wait ALSO fails
+            # (not on the first rejection), so the original settlement-lag
+            # case this function was built for still gets its documented,
+            # previously-proven-live remedy first.
+            time.sleep(2)
+            try:
+                ro      = _dhan_order_status(retry_id)
+                rstatus = (ro.get("orderStatus") or "").upper()
+            except Exception:
+                return retry_id
+            if rstatus in ("REJECTED", "CANCELLED"):
+                rreason = (ro.get("omsErrorDescription") or "").lower()
+                if "trying to sell more than" in rreason:
+                    print(f"[dhan]   CNC retry ALSO REJECTED (same reason) — "
+                          f"trying MTF once before giving up.")
+                    return sell(sym, exch, qty, order_type=order_type, price=price,
+                               product="MTF", dry_run=dry_run)
+            return retry_id
 
     return order_id
 

@@ -2484,11 +2484,17 @@
     "actual_fill_price": 708.4741,
     "actual_fill_quantity": 176,
     "entry_order_id": "34126092475009",
-    "status": "open",
+    "status": "exited_manual",
     "entry_timestamp": "2026-09-24T15:21:04.661263+05:30",
     "product": "CNC",
     "target_order_id": "23126092512809",
-    "target_price": 828.9
+    "target_price": 828.9,
+    "exit_price_manual": 713.5029,
+    "exit_order_id_manual": "361260925300409",
+    "exit_timestamp_manual": "2026-09-25T12:00:05+05:30",
+    "exit_note": "Automated exit failed: 4 CNC sell attempts (09:15/09:15/11:59/11:59) all rejected by RMS ('trying to sell more than you hold') -- position was recorded as CNC but Dhan's real holding required MTF. Closed manually as an MTF MARKET sell.",
+    "realized_return_pct": 0.7098,
+    "realized_pnl": 885.06
   },
   {
     "broker": "dhan",
