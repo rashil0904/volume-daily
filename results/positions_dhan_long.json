@@ -2384,9 +2384,16 @@
     "actual_fill_price": 1515.4085,
     "actual_fill_quantity": 82,
     "entry_order_id": "limit_entry_multi",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-24T15:19:50.019902+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "target_order_id": "23126092511809",
+    "target_price": 1773.0,
+    "exit_price_916": 1533.8,
+    "exit_order_id_916": "22126092550609",
+    "exit_timestamp_916": "2026-09-25T09:16:03.728740+05:30",
+    "realized_return_pct": 1.2136,
+    "realized_pnl": 1508.1
   },
   {
     "broker": "dhan",
@@ -2397,9 +2404,16 @@
     "actual_fill_price": 155.3422,
     "actual_fill_quantity": 1614,
     "entry_order_id": "34126092474909",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-24T15:21:01.537280+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "32126092543709",
+    "target_price": 181.75,
+    "exit_price_1159": 157.11,
+    "exit_order_id_1159": "321260925391209",
+    "exit_timestamp_1159": "2026-09-25T11:59:33.701504+05:30",
+    "realized_return_pct": 1.138,
+    "realized_pnl": 2853.23
   },
   {
     "broker": "dhan",
@@ -2410,9 +2424,16 @@
     "actual_fill_price": 221.6698,
     "actual_fill_quantity": 1128,
     "entry_order_id": "321260924764809",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-24T15:21:02.497801+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126092511909",
+    "target_price": 259.35,
+    "exit_price_916": 223.36,
+    "exit_order_id_916": "34126092513009",
+    "exit_timestamp_916": "2026-09-25T09:16:04.450761+05:30",
+    "realized_return_pct": 0.7625,
+    "realized_pnl": 1906.55
   },
   {
     "broker": "dhan",
@@ -2423,9 +2444,16 @@
     "actual_fill_price": 304.3391,
     "actual_fill_quantity": 409,
     "entry_order_id": "221260924781709",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-24T15:21:03.210054+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "target_order_id": "32126092543609",
+    "target_price": 356.1,
+    "exit_price_916": 308.29,
+    "exit_order_id_916": "22126092550509",
+    "exit_timestamp_916": "2026-09-25T09:16:05.203494+05:30",
+    "realized_return_pct": 1.2982,
+    "realized_pnl": 1615.92
   },
   {
     "broker": "dhan",
@@ -2436,9 +2464,16 @@
     "actual_fill_price": 783.6132,
     "actual_fill_quantity": 319,
     "entry_order_id": "321260924764909",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-24T15:21:03.926337+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "target_order_id": "23126092512009",
+    "target_price": 916.85,
+    "exit_price_916": 824.01,
+    "exit_order_id_916": "32126092549509",
+    "exit_timestamp_916": "2026-09-25T09:16:05.922221+05:30",
+    "realized_return_pct": 5.1552,
+    "realized_pnl": 12886.58
   },
   {
     "broker": "dhan",
@@ -2451,6 +2486,86 @@
     "entry_order_id": "34126092475009",
     "status": "open",
     "entry_timestamp": "2026-09-24T15:21:04.661263+05:30",
+    "product": "CNC",
+    "target_order_id": "23126092512809",
+    "target_price": 828.9
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SANGAMIND",
+    "entry_date": "2026-09-25",
+    "reference_price": 617.55,
+    "shares_intended": 404,
+    "actual_fill_price": 617.5682,
+    "actual_fill_quantity": 404,
+    "entry_order_id": "limit_entry_multi",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:19:40.011822+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "BHAGERIA",
+    "entry_date": "2026-09-25",
+    "reference_price": 395.0,
+    "shares_intended": 316,
+    "actual_fill_price": 394.528,
+    "actual_fill_quantity": 316,
+    "entry_order_id": "limit_entry_multi",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:19:41.098318+05:30",
     "product": "CNC"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SHOPERSTOP",
+    "entry_date": "2026-09-25",
+    "reference_price": 423.0,
+    "shares_intended": 591,
+    "actual_fill_price": 422.7841,
+    "actual_fill_quantity": 591,
+    "entry_order_id": "limit_entry_multi",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:19:41.813043+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "DELTACORP",
+    "entry_date": "2026-09-25",
+    "reference_price": 76.82,
+    "shares_intended": 3254,
+    "actual_fill_price": 76.9342,
+    "actual_fill_quantity": 3254,
+    "entry_order_id": "321260925638609",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:21:00.603733+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SHANTIGOLD",
+    "entry_date": "2026-09-25",
+    "reference_price": 324.0,
+    "shares_intended": 771,
+    "actual_fill_price": 325.9933,
+    "actual_fill_quantity": 771,
+    "entry_order_id": "23126092590809",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:21:01.524999+05:30",
+    "product": "MTF"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "STEELCAS",
+    "entry_date": "2026-09-25",
+    "reference_price": 375.45,
+    "shares_intended": 665,
+    "actual_fill_price": 375.6216,
+    "actual_fill_quantity": 665,
+    "entry_order_id": "23126092590709",
+    "status": "open",
+    "entry_timestamp": "2026-09-25T15:21:02.321132+05:30",
+    "product": "MTF"
   }
 ]
