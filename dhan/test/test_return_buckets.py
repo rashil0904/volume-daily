@@ -100,9 +100,9 @@ check("(b5) 10-15 bucket's winner-exit fires at 9:18",
       rt.RETURN_BUCKETS["10-15"]["exit_916_fire"] == (9, 18, 0))
 check("(b6) 15-20 bucket's winner-exit fires at 9:44",
       rt.RETURN_BUCKETS["15-20"]["exit_916_fire"] == (9, 44, 0))
-check("(b7) 15-20 bucket's short square-off fires at 14:01 (before its own force-exit's "
-      "clock time of day -- i.e. 2:01pm, not 11:48am -- sanity-checking no am/pm mixup)",
-      rt.RETURN_BUCKETS["15-20"]["squareoff_fire"] == (14, 1, 0))
+check("(b7) 15-20 bucket's short square-off fires at 14:40 (after its own force-exit's "
+      "clock time of day -- i.e. 2:40pm, not 11:41am -- sanity-checking no am/pm mixup)",
+      rt.RETURN_BUCKETS["15-20"]["squareoff_fire"] == (14, 40, 0))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

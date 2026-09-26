@@ -332,18 +332,18 @@ RETURN_BUCKETS: dict[str, dict[str, tuple[int, int, int]]] = {
     },
     "5-10": {
         "exit_916_prep":  (9, 15, 50),  "exit_916_fire":  (9, 16, 0),
-        "exit_1159_prep": (10, 34, 50), "exit_1159_fire": (10, 35, 0),
-        "squareoff_prep": (14, 27, 50), "squareoff_fire": (14, 28, 0),
+        "exit_1159_prep": (10, 17, 50), "exit_1159_fire": (10, 18, 0),
+        "squareoff_prep": (14, 28, 50), "squareoff_fire": (14, 29, 0),
     },
     "10-15": {
         "exit_916_prep":  (9, 17, 50),  "exit_916_fire":  (9, 18, 0),
-        "exit_1159_prep": (10, 58, 50), "exit_1159_fire": (10, 59, 0),
+        "exit_1159_prep": (11, 58, 50), "exit_1159_fire": (11, 59, 0),
         "squareoff_prep": (14, 56, 50), "squareoff_fire": (14, 57, 0),
     },
     "15-20": {
         "exit_916_prep":  (9, 43, 50),  "exit_916_fire":  (9, 44, 0),
-        "exit_1159_prep": (11, 47, 50), "exit_1159_fire": (11, 48, 0),
-        "squareoff_prep": (14, 0, 50),  "squareoff_fire": (14, 1, 0),
+        "exit_1159_prep": (11, 40, 50), "exit_1159_fire": (11, 41, 0),
+        "squareoff_prep": (14, 39, 50), "squareoff_fire": (14, 40, 0),
     },
 }
 
