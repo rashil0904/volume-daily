@@ -364,8 +364,8 @@ row = store.positions[0]
 check("(c) row status partial_exit_916_nodata", row["status"] == "partial_exit_916_nodata")
 check("(c) row target_order_id updated to the fresh order", row["target_order_id"] == "TGT2-DELTA")
 check("(c) row target_price UNCHANGED (still 117.0)", row["target_price"] == 117.0)
-check("(c) mirrored short opened on the half sold (5 shares)",
-      open_short_calls_c == [("DELTA", 5, "916")], str(open_short_calls_c))
+check("(c) NO mirrored short -- half-sold at a 1% loss, below the 3% return gate",
+      open_short_calls_c == [], str(open_short_calls_c))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -556,8 +556,24 @@ check("(f2) cancel_order called before force-sell, in that order",
       call_order_f2 == [("cancel", "TGT-THETA"), ("sell", "THETA")], str(call_order_f2))
 row2 = store2.positions[0]
 check("(f2) status exited_1159 despite a loss (no P&L gate at 11:59)", row2["status"] == "exited_1159")
-check("(f2) mirrored short still opened even on a losing force-exit",
-      open_short_calls_f2 == [("THETA", 10, "1159")])
+check("(f2) NO mirrored short -- force-exited at a 10% loss, below the 3% return gate",
+      open_short_calls_f2 == [])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (f3) — LONG_RETURN_GATE_PCT boundary: exactly 3% opens, "
+      "2.99% doesn't\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+check("(f3) _long_return_pct: uses pos['realized_return_pct'] when present",
+      rt._long_return_pct({"pos": {"realized_return_pct": 3.0}}) == 3.0)
+check("(f3) _long_return_pct: falls back to (ep-fill_price)/fill_price*100 "
+      "when pos has no realized_return_pct yet (9:16 no-data-fallback case)",
+      round(rt._long_return_pct({"pos": {}, "fill_price": 100.0, "ep": 102.99}), 4) == 2.99)
+check("(f3) gate boundary: exactly LONG_RETURN_GATE_PCT (3.0) is NOT below the "
+      "gate -- short still opens", not (3.0 < rt.LONG_RETURN_GATE_PCT))
+check("(f3) gate boundary: 2.99 IS below the gate -- short skipped",
+      2.99 < rt.LONG_RETURN_GATE_PCT)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

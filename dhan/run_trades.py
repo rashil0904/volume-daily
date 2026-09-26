@@ -1085,6 +1085,25 @@ def _broker_short_qty(symbol: str) -> int:
 
 _SKIP_SHORTING_FILE = _RESULTS_DIR / ".skip_shorting.txt"
 
+# 2026-09-26 user decision: only mirror-short a long that actually worked --
+# below this return, skip the short entirely (previously every sold long
+# got mirrored regardless of how small or negative its return was).
+LONG_RETURN_GATE_PCT = 3.0
+
+
+def _long_return_pct(res: dict) -> float:
+    """Return% of the long being mirrored into a short, for the
+    LONG_RETURN_GATE_PCT gate below. Prefers pos["realized_return_pct"] --
+    already the correct blended figure for the 11:59 partial-exit case --
+    and falls back to a plain (ep-fill_price)/fill_price calc only for the
+    9:16 no-data-fallback branch, where the position isn't actually closed
+    yet so realized_return_pct is never set."""
+    pos = res.get("pos") or {}
+    if pos.get("realized_return_pct") is not None:
+        return pos["realized_return_pct"]
+    fill_price, ep = res.get("fill_price"), res.get("ep")
+    return (ep - fill_price) / fill_price * 100 if fill_price else 0.0
+
 
 def _shorting_skipped_today() -> bool:
     """Self-expiring kill switch for the mirrored-short add-on -- the file
@@ -2477,6 +2496,11 @@ def check_exit_916(dry_run: bool = False) -> None:
     # nothing else. Shares the same _BalanceTracker across every batch this
     # wave, same as before the wave split (Part 3).
     def _short_place_fn(res: dict) -> dict | None:
+        ret_pct = _long_return_pct(res)
+        if ret_pct < LONG_RETURN_GATE_PCT:
+            print(f"[dhan]   SHORT SKIP — {res['sym']}: long return {ret_pct:+.2f}% "
+                  f"below {LONG_RETURN_GATE_PCT:.0f}% gate, no mirrored short opened.")
+            return None
         return _open_short_place(res["sym"], res["eq"], "916", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance,
                                  precomputed_margins=margin_index)
@@ -2769,6 +2793,11 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # ── Wave 2 (batched-concurrent): open the mirrored short for everything
     # force-sold in Wave 1 -- see check_exit_916's matching Wave 2.
     def _short_place_fn(res: dict) -> dict | None:
+        ret_pct = _long_return_pct(res)
+        if ret_pct < LONG_RETURN_GATE_PCT:
+            print(f"[dhan]   SHORT SKIP — {res['sym']}: long return {ret_pct:+.2f}% "
+                  f"below {LONG_RETURN_GATE_PCT:.0f}% gate, no mirrored short opened.")
+            return None
         return _open_short_place(res["sym"], res["eq"], "1159", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance,
                                  precomputed_margins=margin_index)
