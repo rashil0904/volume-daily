@@ -233,6 +233,31 @@ def _load_symbols(trade_date: date) -> list[str]:
         return [r["symbol"].strip().upper() for r in csv.DictReader(f)]
 
 
+def _load_return_pct_map(trade_date: date) -> dict[str, float]:
+    """symbol -> return_pct off trade_list_<date>.csv's return_pct column
+    (added alongside symbol/shares/ref_price -- see pipeline/main.py's
+    FIELDNAMES). Independent read from _load_symbols -- same file, different
+    column -- kept separate so _load_symbols' existing callers (which only
+    ever wanted the symbol list) are untouched. A missing/unparsable value
+    is OMITTED from the map rather than defaulted to 0.0, so a lookup miss
+    unambiguously means "no return_pct for this symbol" (-> legacy bucket),
+    never "0.0, which happens to round into '5-10' via the classifier's
+    defensive floor"."""
+    path = _RESULTS_DIR / "trades" / f"trade_list_{trade_date.isoformat()}.csv"
+    if not path.exists():
+        sys.exit(f"[dhan] No trade list: {path}")
+    out: dict[str, float] = {}
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            raw = (r.get("return_pct") or "").strip()
+            if raw:
+                try:
+                    out[r["symbol"].strip().upper()] = float(raw)
+                except ValueError:
+                    pass
+    return out
+
+
 def _full_signal_count(trade_date: date) -> int:
     """The day's FULL signal count, straight off trade_list_<date>.csv's row
     count -- the single source of truth both run_entry_321 and
@@ -289,6 +314,63 @@ _EXIT_1159_PREP_AT  = (11, 58, 50)
 _EXIT_1159_FIRE_AT  = (11, 59, 0)
 _SQUAREOFF_PREP_AT  = (14, 38, 50)
 _SQUAREOFF_FIRE_AT  = (14, 39, 0)
+
+# 2026-09-26 user decision: bucket each long by its entry signal's own
+# return_pct (the gap-up % that made it a signal in the first place -- see
+# pipeline/signal_engine.py's return_pct, fixed at SIGNAL-SELECTION time,
+# never recomputed at exit) and give each bucket its own 3-stage exit
+# schedule instead of everyone sharing the one above. "legacy" reuses the
+# untouched constants above verbatim -- a PERMANENT fourth bucket for any
+# position with no return_bucket recorded (entered before this feature
+# shipped, or via run_entry_321's manual --symbol mode with no trade_list
+# row to look up), not a migration shim that goes away later.
+RETURN_BUCKETS: dict[str, dict[str, tuple[int, int, int]]] = {
+    "legacy": {
+        "exit_916_prep":  _EXIT_916_PREP_AT,   "exit_916_fire":  _EXIT_916_FIRE_AT,
+        "exit_1159_prep": _EXIT_1159_PREP_AT,  "exit_1159_fire": _EXIT_1159_FIRE_AT,
+        "squareoff_prep": _SQUAREOFF_PREP_AT,  "squareoff_fire": _SQUAREOFF_FIRE_AT,
+    },
+    "5-10": {
+        "exit_916_prep":  (9, 15, 50),  "exit_916_fire":  (9, 16, 0),
+        "exit_1159_prep": (10, 34, 50), "exit_1159_fire": (10, 35, 0),
+        "squareoff_prep": (14, 27, 50), "squareoff_fire": (14, 28, 0),
+    },
+    "10-15": {
+        "exit_916_prep":  (9, 17, 50),  "exit_916_fire":  (9, 18, 0),
+        "exit_1159_prep": (10, 58, 50), "exit_1159_fire": (10, 59, 0),
+        "squareoff_prep": (14, 56, 50), "squareoff_fire": (14, 57, 0),
+    },
+    "15-20": {
+        "exit_916_prep":  (9, 43, 50),  "exit_916_fire":  (9, 44, 0),
+        "exit_1159_prep": (11, 47, 50), "exit_1159_fire": (11, 48, 0),
+        "squareoff_prep": (14, 0, 50),  "squareoff_fire": (14, 1, 0),
+    },
+}
+
+
+def _return_bucket_for_pct(return_pct: float) -> str:
+    """Classifies a signal's return_pct into one of RETURN_BUCKETS' three
+    live-schedule buckets (never "legacy" -- that's a distinct concept, no
+    return_pct recorded at all, assigned by the caller instead). Ranges are
+    5.00-10.00 / 10.01-15.00 / 15.01-20.00+ -- i.e. each bucket's LOWER
+    bound is exclusive of the previous bucket's top: exactly 10.0 ->
+    "5-10" (not "10-15"), exactly 15.0 -> "10-15" (not "15-20"). Anything
+    above 20.0 also folds into "15-20" (no separate "20+" bucket exists,
+    per user decision). A value below 5.0 should be unreachable --
+    pipeline/signal_engine.py's RETURN_THRESHOLD=5.0 already filters these
+    out before a signal ever reaches trade_list.csv (the same floor that
+    makes the "5-10" bucket's own lower bound a non-issue) -- but is
+    defensively folded into "5-10" with a loud print rather than raised, so
+    a threshold-config drift elsewhere can't silently vanish a position
+    from every exit sweep."""
+    if return_pct < 5.0:
+        print(f"[dhan]   !! return_pct {return_pct:.2f}% below the expected "
+              f"5% floor -- bucketing into '5-10' defensively.")
+    if return_pct <= 10.0:
+        return "5-10"
+    if return_pct <= 15.0:
+        return "10-15"
+    return "15-20"
 
 
 def _hold_until(hh: int, mm: int, ss: int, label: str) -> None:
@@ -968,6 +1050,16 @@ def _open_short_pos(positions: list) -> list:
             and p.get("status") == "short_open"]
 
 
+def _bucket_of(p: dict) -> str:
+    """Single source of truth for which of the 4 exit-stage invocations
+    (legacy + RETURN_BUCKETS' 3 live buckets) claims a position/short --
+    centralizing this (instead of repeating p.get("return_bucket") or
+    "legacy" at every filter site) is what makes the 4-way partition
+    provable/testable. Missing key AND an explicit None both mean the same
+    thing here (no bucket recorded) -- both fold to "legacy"."""
+    return p.get("return_bucket") or "legacy"
+
+
 # ── Broker quantity cross-check (product-aware) ───────────────────────────────
 
 def _broker_qty(symbol: str, product: str) -> tuple[int, str]:
@@ -1350,7 +1442,8 @@ def _run_exit_wave1(tasks: list, cancel_fn, sell_fn, chunk_size: int | None = No
 
 def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
                       ltp: float | None, balance: "_BalanceTracker",
-                      precomputed_margins: dict[str, dict] | None = None) -> dict | None:
+                      precomputed_margins: dict[str, dict] | None = None,
+                      return_bucket: str | None = None) -> dict | None:
     """Wave 2 of the mirrored-short open (check_exit_916/force_exit_1159):
     shorting kill-switch check, INTRADAY margin check, thread-safe balance
     reservation (_BalanceTracker -- safe to call concurrently from multiple
@@ -1430,6 +1523,7 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
             "direction":             "short",
             "product":               "INTRADAY",
             "source_exit_stage":     source_stage,
+            "return_bucket":         return_bucket,
             "entry_date":            date.today().isoformat(),
             "entry_price":           round(ep, 4),
             "quantity":              eq,
@@ -1643,6 +1737,9 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         n          = 1
         capital    = capital if capital is not None else TOTAL_CAPITAL / 4
         allocation = capital
+        # No trade_list row to look up a return_pct from -- a manual
+        # --symbol entry always falls into the permanent "legacy" bucket.
+        return_pct_map: dict[str, float] = {}
     else:
         symbols = _load_symbols(trade_date)
         if not symbols:
@@ -1656,6 +1753,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         n          = _full_signal_count(trade_date)
         capital    = capital if capital is not None else TOTAL_CAPITAL
         allocation = compute_allocation(capital, n)
+        return_pct_map = _load_return_pct_map(trade_date)
 
     print(f"\n{'='*60}")
     print(f"[dhan] Entry {trade_date}{'  DRY RUN' if dry_run else ''}"
@@ -1784,9 +1882,12 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         # below Phase 1 for why (computing it here, before the 15:21:00 hold,
         # would anchor it to an LTP up to ~a minute stale by the time the
         # order actually fires).
+        return_pct    = return_pct_map.get(sym)
+        return_bucket = _return_bucket_for_pct(return_pct) if return_pct is not None else "legacy"
         ready.append({
             "symbol": sym, "ref": ref, "shares": shares, "product": product,
             "leverage": leverage, "margin_required": margin_required, "capital_base": capital_base,
+            "return_pct": return_pct, "return_bucket": return_bucket,
         })
 
     # ── Upper circuit fetched HERE, right after Phase 1, well before the
@@ -2012,6 +2113,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             "status":               "open",
             "entry_timestamp":      _ts(),
             "product":              product,
+            "return_pct":           res.get("return_pct"),
+            "return_bucket":        res.get("return_bucket", "legacy"),
         })
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", fill_price=fill_price,
@@ -2163,20 +2266,23 @@ def place_targets_915(dry_run: bool = False) -> None:
 # EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_916_mtf / force_exit_1159_mtf
 # ══════════════════════════════════════════════════════════════════════════════
 
-def check_exit_916(dry_run: bool = False) -> None:
+def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
+    bucket_label = bucket or "legacy"
+    sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
-    print(f"[dhan] Exit check 9:16am{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Exit check [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
     print(f"{'='*60}")
 
-    _hold_until(*_EXIT_916_PREP_AT, "check_exit_916 prep")
+    _hold_until(*sched["exit_916_prep"], f"check_exit_916[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 09:15:50: position load + Order Book snapshot +
-    # UC-cache read. None of this is price-dependent -- safe to resolve up to
-    # 10s before the fire instant below (see _hold_until's module note).
-    print(f"[dhan]   TIMING check_exit_916 prep-step start: {_ts()}")   # TEMP verification timing
+    # ── Prep step, pinned to 09:15:50 (legacy) / this bucket's own prep
+    # instant: position load + Order Book snapshot + UC-cache read. None of
+    # this is price-dependent -- safe to resolve up to 10s before the fire
+    # instant below (see _hold_until's module note).
+    print(f"[dhan]   TIMING check_exit_916[{bucket_label}] prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
-    open_ps   = _open_pos(positions)
-    print(f"[dhan] {len(open_ps)} open position(s)")
+    open_ps   = [p for p in _open_pos(positions) if _bucket_of(p) == bucket_label]
+    print(f"[dhan] {len(open_ps)} open position(s) in bucket {bucket_label}")
 
     if not open_ps:
         print("[dhan] No open positions — nothing to check.")
@@ -2212,13 +2318,13 @@ def check_exit_916(dry_run: bool = False) -> None:
     # hold" in this file.
     margin_index = _precompute_short_margins(open_ps)
 
-    _hold_until(*_EXIT_916_FIRE_AT, "check_exit_916 fire")
+    _hold_until(*sched["exit_916_fire"], f"check_exit_916[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 09:16:00: fresh LTP, then the actual
-    # decision/sell/short logic -- unchanged from here down except for what
-    # now reads from the prep step's already-fetched values instead of
-    # fetching them itself.
-    print(f"[dhan]   TIMING check_exit_916 fire-step start: {_ts()}")   # TEMP verification timing
+    # ── Fire step, pinned to 09:16:00 (legacy) / this bucket's own fire
+    # instant: fresh LTP, then the actual decision/sell/short logic --
+    # unchanged from here down except for what now reads from the prep
+    # step's already-fetched values instead of fetching them itself.
+    print(f"[dhan]   TIMING check_exit_916[{bucket_label}] fire-step start: {_ts()}")   # TEMP verification timing
 
     # One batched call for every open position's LTP, not one call per symbol
     # in the loop below -- Dhan's Quote APIs are 1 req/sec, so N sequential
@@ -2503,7 +2609,8 @@ def check_exit_916(dry_run: bool = False) -> None:
             return None
         return _open_short_place(res["sym"], res["eq"], "916", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance,
-                                 precomputed_margins=margin_index)
+                                 precomputed_margins=margin_index,
+                                 return_bucket=_bucket_of(res["pos"]))
 
     wave2_rows: list[dict] = []
     for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
@@ -2543,18 +2650,21 @@ def check_exit_916(dry_run: bool = False) -> None:
     _sync_pnl_workbook()
 
 
-def force_exit_1159(dry_run: bool = False) -> None:
+def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
+    bucket_label = bucket or "legacy"
+    sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
-    print(f"[dhan] Force exit 11:59am{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Force exit [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
     print(f"{'='*60}")
 
-    _hold_until(*_EXIT_1159_PREP_AT, "force_exit_1159 prep")
+    _hold_until(*sched["exit_1159_prep"], f"force_exit_1159[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 11:58:50 -- see check_exit_916's matching note.
-    print(f"[dhan]   TIMING force_exit_1159 prep-step start: {_ts()}")   # TEMP verification timing
+    # ── Prep step, pinned to 11:58:50 (legacy) / this bucket's own prep
+    # instant -- see check_exit_916's matching note.
+    print(f"[dhan]   TIMING force_exit_1159[{bucket_label}] prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
-    open_ps   = _open_pos(positions)
-    print(f"[dhan] {len(open_ps)} position(s) still open")
+    open_ps   = [p for p in _open_pos(positions) if _bucket_of(p) == bucket_label]
+    print(f"[dhan] {len(open_ps)} position(s) still open in bucket {bucket_label}")
 
     if not open_ps:
         print("[dhan] All positions already exited — nothing to force-close.")
@@ -2587,10 +2697,11 @@ def force_exit_1159(dry_run: bool = False) -> None:
     # here too -- see check_exit_916's matching note / _precompute_short_margins.
     margin_index = _precompute_short_margins(open_ps)
 
-    _hold_until(*_EXIT_1159_FIRE_AT, "force_exit_1159 fire")
+    _hold_until(*sched["exit_1159_fire"], f"force_exit_1159[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 11:59:00 -- see check_exit_916's matching note.
-    print(f"[dhan]   TIMING force_exit_1159 fire-step start: {_ts()}")   # TEMP verification timing
+    # ── Fire step, pinned to 11:59:00 (legacy) / this bucket's own fire
+    # instant -- see check_exit_916's matching note.
+    print(f"[dhan]   TIMING force_exit_1159[{bucket_label}] fire-step start: {_ts()}")   # TEMP verification timing
 
     n_force = 0
     dirty   = False
@@ -2800,7 +2911,8 @@ def force_exit_1159(dry_run: bool = False) -> None:
             return None
         return _open_short_place(res["sym"], res["eq"], "1159", dry_run,
                                  ltp=ltp_cache.get(res["sym"]), balance=short_balance,
-                                 precomputed_margins=margin_index)
+                                 precomputed_margins=margin_index,
+                                 return_bucket=_bucket_of(res["pos"]))
 
     wave2_rows: list[dict] = []
     for batch_results in _run_in_chunks(sold_tasks, _short_place_fn):
@@ -2862,23 +2974,26 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 # conditional one -- this always closes, regardless of P&L.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def square_off_239(dry_run: bool = False) -> None:
+def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
+    bucket_label = bucket or "legacy"
+    sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
-    print(f"[dhan] Short square-off 2:39pm{'  DRY RUN' if dry_run else ''}")
+    print(f"[dhan] Short square-off [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
     print(f"{'='*60}")
 
-    _hold_until(*_SQUAREOFF_PREP_AT, "square_off_239 prep")
+    _hold_until(*sched["squareoff_prep"], f"square_off_239[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 14:38:50: position load + Order Book snapshot +
-    # classification (cover_filled/stop_filled/neither_filled) from that
-    # snapshot -- pure in-memory, no live price needed for classification
-    # itself (only the neither_filled force-cover path below needs LTP,
-    # which is fetched at the fire instant). See check_exit_916/
-    # force_exit_1159's matching prep-step note.
-    print(f"[dhan]   TIMING square_off_239 prep-step start: {_ts()}")   # TEMP verification timing
+    # ── Prep step, pinned to 14:38:50 (legacy) / this bucket's own prep
+    # instant: position load + Order Book snapshot + classification
+    # (cover_filled/stop_filled/neither_filled) from that snapshot -- pure
+    # in-memory, no live price needed for classification itself (only the
+    # neither_filled force-cover path below needs LTP, which is fetched at
+    # the fire instant). See check_exit_916/force_exit_1159's matching
+    # prep-step note.
+    print(f"[dhan]   TIMING square_off_239[{bucket_label}] prep-step start: {_ts()}")   # TEMP verification timing
     positions   = _load_short_pos()
-    open_shorts = _open_short_pos(positions)
-    print(f"[dhan] {len(open_shorts)} open short position(s)")
+    open_shorts = [p for p in _open_short_pos(positions) if _bucket_of(p) == bucket_label]
+    print(f"[dhan] {len(open_shorts)} open short position(s) in bucket {bucket_label}")
 
     if not open_shorts:
         print("[dhan] No open shorts — nothing to square off.")
@@ -2965,15 +3080,16 @@ def square_off_239(dry_run: bool = False) -> None:
                            "qty": qty, "cover_oid": cover_oid, "stop_oid": stop_oid,
                            "cover_status": cover_status, "stop_status": stop_status})
 
-    _hold_until(*_SQUAREOFF_FIRE_AT, "square_off_239 fire")
+    _hold_until(*sched["squareoff_fire"], f"square_off_239[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 14:39:00: fresh LTP (only the neither_filled
+    # ── Fire step, pinned to 14:39:00 (legacy) / this bucket's own fire
+    # instant: fresh LTP (only the neither_filled
     # force-cover path below actually needs it, but fetching once up front
     # for every open short is still a single call either way -- unchanged
     # from before this restructuring, just moved to fire time instead of
     # running immediately after cron-start), then the cancel/force-cover
     # sequence.
-    print(f"[dhan]   TIMING square_off_239 fire-step start: {_ts()}")   # TEMP verification timing
+    print(f"[dhan]   TIMING square_off_239[{bucket_label}] fire-step start: {_ts()}")   # TEMP verification timing
     ltp_cache = get_ltp_batch([p["symbol"] for p in open_shorts])
 
     # ── Batches of MAX_ORDER_CALLS_PER_SECOND: cancel sub-step, then a
@@ -3944,6 +4060,14 @@ if __name__ == "__main__":
     parser.add_argument("--cnc-only", action="store_true",
                         help="Skip the MTF leverage check entirely -- buy every entry as CNC "
                              "using the full per-position allocation (--entry only).")
+    parser.add_argument("--bucket", default=None, choices=["5-10", "10-15", "15-20"],
+                        help="--exit-916/--exit-1159/--square-off-239 only: restrict this "
+                             "invocation to positions/shorts tagged with this return-bucket "
+                             "at entry (see RETURN_BUCKETS), using that bucket's own "
+                             "prep/fire times. Omitted means the legacy 9:16/11:59/2:39 "
+                             "schedule, permanently restricted to positions with NO "
+                             "return_bucket recorded (pre-feature positions, manual --symbol "
+                             "entries).")
     args = parser.parse_args()
 
     if args.shares is not None and args.symbol is None:
@@ -3956,6 +4080,8 @@ if __name__ == "__main__":
         sys.exit("[dhan] --fire-at is only valid with --entry-limit.")
     if args.prep_at is not None and not args.entry_limit:
         sys.exit("[dhan] --prep-at is only valid with --entry-limit.")
+    if args.bucket is not None and not (args.exit_916 or args.exit_1159 or args.square_off_239):
+        sys.exit("[dhan] --bucket is only valid with --exit-916/--exit-1159/--square-off-239.")
 
     symbols_list = ([s.strip() for s in args.symbols.split(",") if s.strip()]
                     if args.symbols else None)
@@ -4006,11 +4132,11 @@ if __name__ == "__main__":
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                           symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
         elif args.exit_916:
-            check_exit_916(dry_run=args.dry_run)
+            check_exit_916(dry_run=args.dry_run, bucket=args.bucket)
         elif args.exit_1159:
-            force_exit_1159(dry_run=args.dry_run)
+            force_exit_1159(dry_run=args.dry_run, bucket=args.bucket)
         elif args.square_off_239:
-            square_off_239(dry_run=args.dry_run)
+            square_off_239(dry_run=args.dry_run, bucket=args.bucket)
         else:
             place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:

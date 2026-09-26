@@ -174,7 +174,7 @@ def test_check_exit_916_ordering():
 
     kinds = [entry[0] for entry in log]
     check("prep-hold (09:15:50) is the very first thing logged",
-          log[0] == ("hold", 9, 15, 50, "check_exit_916 prep"), str(log[:3]))
+          log[0] == ("hold", 9, 15, 50, "check_exit_916[legacy] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     check("Order Book snapshot happens after the prep-hold, before any fire-hold",
@@ -182,7 +182,7 @@ def test_check_exit_916_ordering():
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
                         and e[1:4] == (9, 16, 0))
     check("fire-hold (09:16:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916 fire"))
+          log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916[legacy] fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     # get_ltp_batch now fires TWICE: once in prep (margin precompute's own
@@ -265,13 +265,13 @@ def test_force_exit_1159_ordering():
 
     kinds = [entry[0] for entry in log]
     check("prep-hold (11:58:50) is the very first thing logged",
-          log[0] == ("hold", 11, 58, 50, "force_exit_1159 prep"), str(log[:3]))
+          log[0] == ("hold", 11, 58, 50, "force_exit_1159[legacy] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
                         and e[1:4] == (11, 59, 0))
     check("fire-hold (11:59:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 11, 59, 0, "force_exit_1159 fire"))
+          log[fire_hold_idx] == ("hold", 11, 59, 0, "force_exit_1159[legacy] fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     # get_ltp_batch fires twice here too -- see check_exit_916_ordering's
@@ -333,13 +333,13 @@ def test_square_off_239_ordering():
 
     kinds = [entry[0] for entry in log]
     check("prep-hold (14:38:50) is the very first thing logged",
-          log[0] == ("hold", 14, 38, 50, "square_off_239 prep"), str(log[:3]))
+          log[0] == ("hold", 14, 38, 50, "square_off_239[legacy] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
                         and e[1:4] == (14, 39, 0))
     check("fire-hold (14:39:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 14, 39, 0, "square_off_239 fire"))
+          log[fire_hold_idx] == ("hold", 14, 39, 0, "square_off_239[legacy] fire"))
     check("Order Book snapshot (+ classification) happens BEFORE the fire-hold",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     check("get_ltp_batch (price-dependent) happens AFTER the fire-hold, never before",
@@ -387,6 +387,111 @@ def test_hold_until_far_future_returns_without_warning():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# [5] bucket= param -- each stage uses ITS bucket's own schedule, not the
+#     hardcoded legacy constants (2026-09-26 return-bucketed exit schedule)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_bucket_param_uses_bucket_schedule():
+    print("\n[5] bucket= param -- _hold_until calls use RETURN_BUCKETS[bucket], not legacy")
+
+    def run_with_bucket(stage_fn, bucket, position_factory, load_patch_name, save_patch_name,
+                        extra_patches):
+        log: list = []
+
+        def fake_hold_until(hh, mm, ss, label):
+            log.append(("hold", hh, mm, ss, label))
+
+        store = FakeStore([position_factory(return_bucket=bucket)])
+
+        def fake_load():
+            return store.load()
+
+        base_patches = [
+            patch.object(rt, "_hold_until", fake_hold_until),
+            patch.object(rt, load_patch_name, fake_load),
+            patch.object(rt, save_patch_name, store.save),
+            patch.object(rt, "_dhan_get_orders", lambda: []),
+        ]
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in base_patches:
+                stack.enter_context(p)
+            for p in extra_patches:
+                stack.enter_context(p)
+            stage_fn(dry_run=False, bucket=bucket)
+        return log
+
+    # -- check_exit_916(bucket="10-15") --
+    log_916 = run_with_bucket(
+        rt.check_exit_916, "10-15", make_long, "_load_long_pos", "_save_long_pos",
+        [
+            patch.object(rt, "_load_uc_cache", lambda: {}),
+            patch.object(rt, "get_ltp_batch", lambda syms: {s: 110.0 for s in syms}),
+            patch.object(rt, "_intraday_margin_check", lambda sym, qty, price: {"leverage": 5.0, "margin_required": 1.0}),
+            patch.object(rt, "sell", lambda *a, **kw: "SELL-B"),
+            patch.object(rt, "_poll_fill_ws_first", lambda oid, fp, fq: (110.0, fq)),
+            patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")),
+            patch.object(rt, "_open_short_place", lambda *a, **kw: None),
+            patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}),
+            patch.object(rt, "_available_balance", lambda: 10_000_000.0),
+            patch.object(rt.notify, "send_exit_916", MagicMock()),
+        ],
+    )
+    holds_916 = [e for e in log_916 if e[0] == "hold"]
+    check("check_exit_916(bucket='10-15') prep-hold matches RETURN_BUCKETS['10-15']['exit_916_prep']",
+          holds_916[0][1:4] == rt.RETURN_BUCKETS["10-15"]["exit_916_prep"], str(holds_916))
+    check("check_exit_916(bucket='10-15') prep-hold label includes the bucket name",
+          holds_916[0][4] == "check_exit_916[10-15] prep", str(holds_916))
+    check("check_exit_916(bucket='10-15') fire-hold matches RETURN_BUCKETS['10-15']['exit_916_fire'], "
+          "NOT the legacy _EXIT_916_FIRE_AT constant",
+          holds_916[1][1:4] == rt.RETURN_BUCKETS["10-15"]["exit_916_fire"]
+          and holds_916[1][1:4] != rt._EXIT_916_FIRE_AT, str(holds_916))
+
+    # -- force_exit_1159(bucket="15-20") --
+    log_1159 = run_with_bucket(
+        rt.force_exit_1159, "15-20", make_long, "_load_long_pos", "_save_long_pos",
+        [
+            patch.object(rt, "_load_uc_cache", lambda: {}),
+            patch.object(rt, "get_ltp_batch", lambda syms: {s: 90.0 for s in syms}),
+            patch.object(rt, "_intraday_margin_check", lambda sym, qty, price: {"leverage": 5.0, "margin_required": 1.0}),
+            patch.object(rt, "sell", lambda *a, **kw: "SELL-B"),
+            patch.object(rt, "_poll_fill_ws_first", lambda oid, fp, fq: (90.0, fq)),
+            patch.object(rt, "_broker_qty", lambda sym, product: (10, "NSE_EQ")),
+            patch.object(rt, "_open_short_place", lambda *a, **kw: None),
+            patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}),
+            patch.object(rt, "_available_balance", lambda: 10_000_000.0),
+            patch.object(rt.notify, "send_force_exit_1159", MagicMock()),
+        ],
+    )
+    holds_1159 = [e for e in log_1159 if e[0] == "hold"]
+    check("force_exit_1159(bucket='15-20') prep-hold matches RETURN_BUCKETS['15-20']['exit_1159_prep']",
+          holds_1159[0][1:4] == rt.RETURN_BUCKETS["15-20"]["exit_1159_prep"], str(holds_1159))
+    check("force_exit_1159(bucket='15-20') fire-hold matches RETURN_BUCKETS['15-20']['exit_1159_fire'], "
+          "NOT the legacy _EXIT_1159_FIRE_AT constant",
+          holds_1159[1][1:4] == rt.RETURN_BUCKETS["15-20"]["exit_1159_fire"]
+          and holds_1159[1][1:4] != rt._EXIT_1159_FIRE_AT, str(holds_1159))
+
+    # -- square_off_239(bucket="5-10") --
+    log_239 = run_with_bucket(
+        rt.square_off_239, "5-10", make_short, "_load_short_pos", "_save_short_pos",
+        [
+            patch.object(rt, "get_ltp_batch", lambda syms: {s: 105.0 for s in syms}),
+            patch.object(rt, "buy", lambda *a, **kw: "COVER-B"),
+            patch.object(rt, "_poll_fill_ws_first", lambda oid, fp, fq: (105.0, fq)),
+            patch.object(rt, "_broker_short_qty", lambda sym: 10),
+            patch.object(rt.notify, "send_square_off_239", MagicMock()),
+        ],
+    )
+    holds_239 = [e for e in log_239 if e[0] == "hold"]
+    check("square_off_239(bucket='5-10') prep-hold matches RETURN_BUCKETS['5-10']['squareoff_prep']",
+          holds_239[0][1:4] == rt.RETURN_BUCKETS["5-10"]["squareoff_prep"], str(holds_239))
+    check("square_off_239(bucket='5-10') fire-hold matches RETURN_BUCKETS['5-10']['squareoff_fire'], "
+          "NOT the legacy _SQUAREOFF_FIRE_AT constant",
+          holds_239[1][1:4] == rt.RETURN_BUCKETS["5-10"]["squareoff_fire"]
+          and holds_239[1][1:4] != rt._SQUAREOFF_FIRE_AT, str(holds_239))
+
+
+# ══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     test_check_exit_916_ordering()
@@ -394,6 +499,7 @@ if __name__ == "__main__":
     test_square_off_239_ordering()
     test_hold_until_late_warns_instead_of_silent()
     test_hold_until_far_future_returns_without_warning()
+    test_bucket_param_uses_bucket_schedule()
 
     print()
     if failures:

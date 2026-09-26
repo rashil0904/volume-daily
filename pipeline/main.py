@@ -64,7 +64,7 @@ TODAY       = date.today()
 BACKFILL_START = TODAY - relativedelta(months=6)
 TOTAL_CAPITAL = 500_000
 
-FIELDNAMES = ["symbol", "shares", "ref_price"]
+FIELDNAMES = ["symbol", "shares", "ref_price", "return_pct"]
 
 
 # ── Universe / instrument helpers ──────────────────────────────────────────────
@@ -189,9 +189,10 @@ def main():
             for s in raw_signals:
                 shares = compute_shares(allocation, s["ref_price"])
                 signals.append({
-                    "symbol":    s["symbol"],
-                    "shares":    shares,
-                    "ref_price": round(s["ref_price"], 2),
+                    "symbol":     s["symbol"],
+                    "shares":     shares,
+                    "ref_price":  round(s["ref_price"], 2),
+                    "return_pct": s["return_pct"],
                 })
 
             trade_path = TRADES_DIR / f"trade_list_{TODAY.isoformat()}.csv"
