@@ -2507,7 +2507,9 @@
     "entry_order_id": "limit_entry_multi",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:19:40.011822+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "return_pct": 6.37,
+    "return_bucket": "5-10"
   },
   {
     "broker": "dhan",
@@ -2520,7 +2522,9 @@
     "entry_order_id": "limit_entry_multi",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:19:41.098318+05:30",
-    "product": "CNC"
+    "product": "CNC",
+    "return_pct": 9.9,
+    "return_bucket": "5-10"
   },
   {
     "broker": "dhan",
@@ -2533,7 +2537,9 @@
     "entry_order_id": "limit_entry_multi",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:19:41.813043+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "return_pct": 9.7,
+    "return_bucket": "5-10"
   },
   {
     "broker": "dhan",
@@ -2546,7 +2552,9 @@
     "entry_order_id": "321260925638609",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:21:00.603733+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "return_pct": 5.75,
+    "return_bucket": "5-10"
   },
   {
     "broker": "dhan",
@@ -2559,7 +2567,9 @@
     "entry_order_id": "23126092590809",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:21:01.524999+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "return_pct": 16.96,
+    "return_bucket": "15-20"
   },
   {
     "broker": "dhan",
@@ -2572,6 +2582,8 @@
     "entry_order_id": "23126092590709",
     "status": "open",
     "entry_timestamp": "2026-09-25T15:21:02.321132+05:30",
-    "product": "MTF"
+    "product": "MTF",
+    "return_pct": 5.25,
+    "return_bucket": "5-10"
   }
 ]
