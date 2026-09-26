@@ -35,6 +35,7 @@ import csv
 import json
 import math
 import os
+import statistics
 import sys
 import threading
 import time
@@ -542,6 +543,57 @@ def _poll_fill_safe(order_id: str) -> tuple[float, int]:
 _WS_FIRST_TIMEOUT       = 3.0
 _WS_FIRST_POLL_INTERVAL = 0.15
 
+# WAVE1_TIMING instrumentation -- added 2026-09-27, LOGGING-ONLY, to validate
+# (or refute) a hypothesis raised by a real ~5.5s gap observed between Wave 1
+# (exit sell) and Wave 2 (mirrored short-open) confirmations: that N
+# concurrent _poll_fill_ws_first threads independently re-reading/re-parsing
+# the same order_update_cache.json file every _WS_FIRST_POLL_INTERVAL ticks
+# in lockstep pushes at least one thread's confirmation close to the full
+# _WS_FIRST_TIMEOUT, even when the real fill was written to disk within
+# milliseconds. This purely times the EXISTING call pattern (same reads,
+# same sleep, same WS-first-then-REST-fallback order, same retry counts) --
+# it changes no return value and no control flow. _wave1_timing_inflight is
+# a simple concurrent-caller counter (not a literal "Wave 1" marker -- this
+# same instrumentation fires for every _poll_fill_ws_first call site: Wave 1
+# exit sells, Wave 2 short-opens, square_off_239's force-covers, and
+# run_entry_limit's cutoff sweep): whichever call happens to bring it back
+# to 0 is, by construction, the last of whatever concurrent batch was
+# in-flight, so it flushes and prints that batch's aggregate summary. A
+# fully sequential caller (e.g. run_entry_limit polling one symbol at a
+# time) still gets a real n=1 "batch" summary every call -- no batch is too
+# small to log.
+_wave1_timing_lock     = threading.Lock()
+_wave1_timing_inflight = 0
+_wave1_timing_records: list[dict] = []
+
+
+def _emit_wave1_timing_batch_summary() -> None:
+    """Prints one WAVE1_TIMING batch summary line for whatever's accumulated
+    in _wave1_timing_records, then clears it for the next batch. Must be
+    called with _wave1_timing_lock already held (see _poll_fill_ws_first) --
+    not thread-safe on its own. cumulative_read_s vs wall_s is the key
+    parallelism-loss signal: if wall_s is much bigger than cumulative_read_s
+    PLUS the expected total sleep time, something other than sleeping or
+    reading is eating the difference (e.g. GIL contention delaying threads
+    waking from time.sleep(), or delaying the read call itself)."""
+    records = _wave1_timing_records
+    if not records:
+        return
+    n                 = len(records)
+    totals            = [r["total_elapsed_s"] for r in records]
+    over_half_timeout = sum(1 for r in records if r["ws_elapsed_s"] > _WS_FIRST_TIMEOUT * 0.5)
+    cumulative_read_s = sum(r["read_total_ms"] for r in records) / 1000.0
+    batch_start       = min(r["poll_start"] for r in records)
+    wall_s            = max(r["poll_start"] + r["total_elapsed_s"] for r in records) - batch_start
+
+    print(f"[dhan]   WAVE1_TIMING batch n={n} "
+          f"min_s={min(totals):.3f} max_s={max(totals):.3f} "
+          f"mean_s={statistics.mean(totals):.3f} median_s={statistics.median(totals):.3f} "
+          f"over_50pct_timeout={over_half_timeout}/{n} "
+          f"cumulative_read_s={cumulative_read_s:.3f} wall_s={wall_s:.3f}")
+
+    records.clear()
+
 
 def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int) -> tuple[float, int]:
     """Drop-in replacement for _poll_fill_safe at exit/short-open/cover call
@@ -559,12 +611,35 @@ def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int)
     behavior is byte-for-byte unchanged from the pure-REST path. Any other
     outcome (no cache entry yet, ambiguous status, cache file missing/stale)
     falls through to _poll_fill_safe exactly as if this function didn't
-    exist."""
+    exist.
+
+    WAVE1_TIMING: this call is instrumented (logging-only, see the module
+    note above _wave1_timing_lock) to time each cache read/parse and the
+    overall confirmation path -- purely observational, no effect on the
+    return value or the logic above."""
+    global _wave1_timing_inflight
+
+    poll_start  = time.monotonic()
+    thread_name = threading.current_thread().name
+    with _wave1_timing_lock:
+        _wave1_timing_inflight += 1
+
+    attempt_num: int = 0
+    attempt_read_ms: list[float] = []
+
     from dhan.order_update_feed import FileBackedOrderCache
     cache = FileBackedOrderCache()
     deadline = time.monotonic() + _WS_FIRST_TIMEOUT
+    result: tuple[float, int] | None = None
+    outcome = "ws_timeout"   # overwritten below if resolved a different way
     while time.monotonic() < deadline:
+        attempt_num += 1
+        _read_t0 = time.monotonic()
         entry = cache.get_cached(order_id)
+        _read_ms = (time.monotonic() - _read_t0) * 1000.0
+        attempt_read_ms.append(_read_ms)
+        print(f"[dhan]   WAVE1_TIMING attempt order_id={order_id} thread={thread_name} "
+              f"n={attempt_num} read_ms={_read_ms:.2f}")
         if entry is not None:
             status = (entry.get("status") or "").upper()
             if status == "TRADED":
@@ -572,12 +647,56 @@ def _poll_fill_ws_first(order_id: str, fallback_price: float, fallback_qty: int)
                 qty   = int(entry.get("filled_qty") or fallback_qty)
                 print(f"[dhan]   WS-FIRST: {order_id} confirmed via websocket "
                       f"(avg_price={price}, filled_qty={qty}) — skipping REST poll.")
-                return price, qty
+                outcome = "ws_traded"
+                result = (price, qty)
+                break
             if status in ("REJECTED", "CANCELLED", "EXPIRED"):
+                outcome = "ws_terminal_early_break"
                 break
         time.sleep(_WS_FIRST_POLL_INTERVAL)
 
-    return _poll_fill_safe(order_id)
+    ws_elapsed_s = time.monotonic() - poll_start
+
+    rest_elapsed_s = 0.0
+    path = "ws"
+    if result is None:
+        path = "rest"
+        _rest_t0 = time.monotonic()
+        result = _poll_fill_safe(order_id)
+        rest_elapsed_s = time.monotonic() - _rest_t0
+
+    total_elapsed_s = ws_elapsed_s + rest_elapsed_s
+    read_total_ms   = sum(attempt_read_ms)
+    read_avg_ms     = (read_total_ms / len(attempt_read_ms)) if attempt_read_ms else 0.0
+    # Every attempt sleeps _WS_FIRST_POLL_INTERVAL afterward EXCEPT the one
+    # that breaks the loop (ws_traded/ws_terminal_early_break) -- a plain
+    # ws_timeout exhausts every attempt's sleep, never breaking early.
+    n_sleeps         = attempt_num - (0 if outcome == "ws_timeout" else 1)
+    expected_sleep_s = n_sleeps * _WS_FIRST_POLL_INTERVAL
+    unaccounted_s    = max(0.0, ws_elapsed_s - (read_total_ms / 1000.0) - expected_sleep_s)
+    pct_of_timeout   = (ws_elapsed_s / _WS_FIRST_TIMEOUT) * 100.0
+
+    print(f"[dhan]   WAVE1_TIMING order order_id={order_id} thread={thread_name} "
+          f"path={path} outcome={outcome} n_attempts={attempt_num} "
+          f"read_total_ms={read_total_ms:.2f} read_avg_ms={read_avg_ms:.2f} "
+          f"ws_elapsed_s={ws_elapsed_s:.3f} ({pct_of_timeout:.0f}% of {_WS_FIRST_TIMEOUT:.1f}s budget) "
+          f"unaccounted_s={unaccounted_s:.3f} rest_elapsed_s={rest_elapsed_s:.3f} "
+          f"total_s={total_elapsed_s:.3f}")
+
+    record = {
+        "order_id": order_id, "thread": thread_name, "path": path,
+        "outcome": outcome, "n_attempts": attempt_num,
+        "read_total_ms": read_total_ms, "ws_elapsed_s": ws_elapsed_s,
+        "rest_elapsed_s": rest_elapsed_s, "total_elapsed_s": total_elapsed_s,
+        "poll_start": poll_start,
+    }
+    with _wave1_timing_lock:
+        _wave1_timing_records.append(record)
+        _wave1_timing_inflight -= 1
+        if _wave1_timing_inflight == 0:
+            _emit_wave1_timing_batch_summary()
+
+    return result
 
 
 def _sell_margin_safe(sym: str, exch: str, qty: int, price: float, product: str,
