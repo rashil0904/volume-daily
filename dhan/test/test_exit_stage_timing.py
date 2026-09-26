@@ -3,7 +3,7 @@
 test_exit_stage_timing.py -- standalone verifier for the two-pinned-wall-clock-
 instant staging holds added to check_exit_916/force_exit_1159/square_off_239
 (_hold_until, reusing run_entry_321's own _seconds_until mechanism -- see
-run_trades.py's module note above _EXIT_916_PREP_AT).
+run_trades.py's module note above RETURN_BUCKETS).
 
 Each of these three stages now has a prep-check hold (position load + Order
 Book snapshot + UC-cache read -- none of it price-dependent) followed by a
@@ -96,6 +96,9 @@ def make_long(**overrides):
         # mocking surface small and focused on the staging-hold ordering,
         # not on unrelated MTF retry mechanics already covered elsewhere.
         "product": "CNC",
+        # Default bucket matches scenarios 1-3's default check_exit_916(...,
+        # bucket="5-10") call -- override when testing a specific bucket.
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -109,6 +112,7 @@ def make_short(**overrides):
         "entry_order_id": "S1", "status": "short_open",
         "entry_timestamp": "2026-08-17T09:25:00+05:30",
         "cover_target_order_id": None, "stop_order_id": None,
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -170,11 +174,11 @@ def test_check_exit_916_ordering():
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
          patch.object(rt.notify, "send_exit_916", MagicMock()):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     kinds = [entry[0] for entry in log]
     check("prep-hold (09:15:50) is the very first thing logged",
-          log[0] == ("hold", 9, 15, 50, "check_exit_916[legacy] prep"), str(log[:3]))
+          log[0] == ("hold", 9, 15, 50, "check_exit_916[5-10] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     check("Order Book snapshot happens after the prep-hold, before any fire-hold",
@@ -182,7 +186,7 @@ def test_check_exit_916_ordering():
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
                         and e[1:4] == (9, 16, 0))
     check("fire-hold (09:16:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916[legacy] fire"))
+          log[fire_hold_idx] == ("hold", 9, 16, 0, "check_exit_916[5-10] fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     # get_ltp_batch now fires TWICE: once in prep (margin precompute's own
@@ -217,7 +221,10 @@ def test_force_exit_1159_ordering():
     def fake_hold_until(hh, mm, ss, label):
         log.append(("hold", hh, mm, ss, label))
 
-    store = FakeStore([make_long()])
+    # "10-15" bucket's exit_1159 times (11:58:50/11:59:00) happen to match
+    # this scenario's original hardcoded assertions -- chosen to keep the
+    # diff minimal, not for any other reason.
+    store = FakeStore([make_long(return_bucket="10-15")])
 
     def fake_load_long_pos():
         log.append(("load_positions",))
@@ -261,17 +268,17 @@ def test_force_exit_1159_ordering():
          patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
          patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
          patch.object(rt.notify, "send_force_exit_1159", MagicMock()):
-        rt.force_exit_1159(dry_run=False)
+        rt.force_exit_1159(dry_run=False, bucket="10-15")
 
     kinds = [entry[0] for entry in log]
     check("prep-hold (11:58:50) is the very first thing logged",
-          log[0] == ("hold", 11, 58, 50, "force_exit_1159[legacy] prep"), str(log[:3]))
+          log[0] == ("hold", 11, 58, 50, "force_exit_1159[10-15] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
                         and e[1:4] == (11, 59, 0))
     check("fire-hold (11:59:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 11, 59, 0, "force_exit_1159[legacy] fire"))
+          log[fire_hold_idx] == ("hold", 11, 59, 0, "force_exit_1159[10-15] fire"))
     check("Order Book snapshot happens BEFORE the fire-hold, not after",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     # get_ltp_batch fires twice here too -- see check_exit_916_ordering's
@@ -288,7 +295,7 @@ def test_force_exit_1159_ordering():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# [3] square_off_239 -- prep (14:38:50) strictly before fire (14:39:00)
+# [3] square_off_239 -- prep (14:28:50) strictly before fire (14:29:00)
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_square_off_239_ordering():
@@ -329,17 +336,17 @@ def test_square_off_239_ordering():
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt, "_broker_short_qty", lambda sym: 10), \
          patch.object(rt.notify, "send_square_off_239", MagicMock()):
-        rt.square_off_239(dry_run=False)
+        rt.square_off_239(dry_run=False, bucket="5-10")
 
     kinds = [entry[0] for entry in log]
-    check("prep-hold (14:38:50) is the very first thing logged",
-          log[0] == ("hold", 14, 38, 50, "square_off_239[legacy] prep"), str(log[:3]))
+    check("prep-hold (14:28:50) is the very first thing logged",
+          log[0] == ("hold", 14, 28, 50, "square_off_239[5-10] prep"), str(log[:3]))
     check("position load happens after the prep-hold",
           kinds.index("load_positions") > kinds.index("hold"), str(kinds))
     fire_hold_idx = next(i for i, e in enumerate(log) if e[0] == "hold"
-                        and e[1:4] == (14, 39, 0))
-    check("fire-hold (14:39:00) is logged, after the prep-hold",
-          log[fire_hold_idx] == ("hold", 14, 39, 0, "square_off_239[legacy] fire"))
+                        and e[1:4] == (14, 29, 0))
+    check("fire-hold (14:29:00) is logged, after the prep-hold",
+          log[fire_hold_idx] == ("hold", 14, 29, 0, "square_off_239[5-10] fire"))
     check("Order Book snapshot (+ classification) happens BEFORE the fire-hold",
           kinds.index("get_orders") < fire_hold_idx, str(kinds))
     check("get_ltp_batch (price-dependent) happens AFTER the fire-hold, never before",
@@ -387,12 +394,12 @@ def test_hold_until_far_future_returns_without_warning():
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# [5] bucket= param -- each stage uses ITS bucket's own schedule, not the
-#     hardcoded legacy constants (2026-09-26 return-bucketed exit schedule)
+# [5] bucket= param -- each stage uses ITS bucket's own schedule
+#     (2026-09-26 return-bucketed exit schedule)
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_bucket_param_uses_bucket_schedule():
-    print("\n[5] bucket= param -- _hold_until calls use RETURN_BUCKETS[bucket], not legacy")
+    print("\n[5] bucket= param -- _hold_until calls use RETURN_BUCKETS[bucket]")
 
     def run_with_bucket(stage_fn, bucket, position_factory, load_patch_name, save_patch_name,
                         extra_patches):
@@ -442,10 +449,8 @@ def test_bucket_param_uses_bucket_schedule():
           holds_916[0][1:4] == rt.RETURN_BUCKETS["10-15"]["exit_916_prep"], str(holds_916))
     check("check_exit_916(bucket='10-15') prep-hold label includes the bucket name",
           holds_916[0][4] == "check_exit_916[10-15] prep", str(holds_916))
-    check("check_exit_916(bucket='10-15') fire-hold matches RETURN_BUCKETS['10-15']['exit_916_fire'], "
-          "NOT the legacy _EXIT_916_FIRE_AT constant",
-          holds_916[1][1:4] == rt.RETURN_BUCKETS["10-15"]["exit_916_fire"]
-          and holds_916[1][1:4] != rt._EXIT_916_FIRE_AT, str(holds_916))
+    check("check_exit_916(bucket='10-15') fire-hold matches RETURN_BUCKETS['10-15']['exit_916_fire']",
+          holds_916[1][1:4] == rt.RETURN_BUCKETS["10-15"]["exit_916_fire"], str(holds_916))
 
     # -- force_exit_1159(bucket="15-20") --
     log_1159 = run_with_bucket(
@@ -466,10 +471,8 @@ def test_bucket_param_uses_bucket_schedule():
     holds_1159 = [e for e in log_1159 if e[0] == "hold"]
     check("force_exit_1159(bucket='15-20') prep-hold matches RETURN_BUCKETS['15-20']['exit_1159_prep']",
           holds_1159[0][1:4] == rt.RETURN_BUCKETS["15-20"]["exit_1159_prep"], str(holds_1159))
-    check("force_exit_1159(bucket='15-20') fire-hold matches RETURN_BUCKETS['15-20']['exit_1159_fire'], "
-          "NOT the legacy _EXIT_1159_FIRE_AT constant",
-          holds_1159[1][1:4] == rt.RETURN_BUCKETS["15-20"]["exit_1159_fire"]
-          and holds_1159[1][1:4] != rt._EXIT_1159_FIRE_AT, str(holds_1159))
+    check("force_exit_1159(bucket='15-20') fire-hold matches RETURN_BUCKETS['15-20']['exit_1159_fire']",
+          holds_1159[1][1:4] == rt.RETURN_BUCKETS["15-20"]["exit_1159_fire"], str(holds_1159))
 
     # -- square_off_239(bucket="5-10") --
     log_239 = run_with_bucket(
@@ -485,10 +488,8 @@ def test_bucket_param_uses_bucket_schedule():
     holds_239 = [e for e in log_239 if e[0] == "hold"]
     check("square_off_239(bucket='5-10') prep-hold matches RETURN_BUCKETS['5-10']['squareoff_prep']",
           holds_239[0][1:4] == rt.RETURN_BUCKETS["5-10"]["squareoff_prep"], str(holds_239))
-    check("square_off_239(bucket='5-10') fire-hold matches RETURN_BUCKETS['5-10']['squareoff_fire'], "
-          "NOT the legacy _SQUAREOFF_FIRE_AT constant",
-          holds_239[1][1:4] == rt.RETURN_BUCKETS["5-10"]["squareoff_fire"]
-          and holds_239[1][1:4] != rt._SQUAREOFF_FIRE_AT, str(holds_239))
+    check("square_off_239(bucket='5-10') fire-hold matches RETURN_BUCKETS['5-10']['squareoff_fire']",
+          holds_239[1][1:4] == rt.RETURN_BUCKETS["5-10"]["squareoff_fire"], str(holds_239))
 
 
 # ══════════════════════════════════════════════════════════════════════════

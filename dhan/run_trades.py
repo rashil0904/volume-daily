@@ -240,9 +240,9 @@ def _load_return_pct_map(trade_date: date) -> dict[str, float]:
     column -- kept separate so _load_symbols' existing callers (which only
     ever wanted the symbol list) are untouched. A missing/unparsable value
     is OMITTED from the map rather than defaulted to 0.0, so a lookup miss
-    unambiguously means "no return_pct for this symbol" (-> legacy bucket),
-    never "0.0, which happens to round into '5-10' via the classifier's
-    defensive floor"."""
+    unambiguously means "no return_pct for this symbol" (-> caller skips
+    the symbol entirely, no bucket can be assigned), never "0.0, which
+    happens to round into '5-10' via the classifier's defensive floor"."""
     path = _RESULTS_DIR / "trades" / f"trade_list_{trade_date.isoformat()}.csv"
     if not path.exists():
         sys.exit(f"[dhan] No trade list: {path}")
@@ -308,28 +308,15 @@ def _seconds_until(hh: int, mm: int, ss: int, now: datetime | None = None) -> fl
 # The 10s gap is deliberate slack for a slow GET /orders call on a bad-network
 # day -- see _hold_until's own docstring for what happens if prep still runs
 # past the fire point despite that buffer.
-_EXIT_916_PREP_AT   = (9, 15, 50)
-_EXIT_916_FIRE_AT   = (9, 16, 0)
-_EXIT_1159_PREP_AT  = (11, 58, 50)
-_EXIT_1159_FIRE_AT  = (11, 59, 0)
-_SQUAREOFF_PREP_AT  = (14, 38, 50)
-_SQUAREOFF_FIRE_AT  = (14, 39, 0)
-
-# 2026-09-26 user decision: bucket each long by its entry signal's own
-# return_pct (the gap-up % that made it a signal in the first place -- see
-# pipeline/signal_engine.py's return_pct, fixed at SIGNAL-SELECTION time,
-# never recomputed at exit) and give each bucket its own 3-stage exit
-# schedule instead of everyone sharing the one above. "legacy" reuses the
-# untouched constants above verbatim -- a PERMANENT fourth bucket for any
-# position with no return_bucket recorded (entered before this feature
-# shipped, or via run_entry_321's manual --symbol mode with no trade_list
-# row to look up), not a migration shim that goes away later.
+# 2026-09-26 user decision, legacy fallback removed 2026-09-27: bucket each
+# long by its entry signal's own return_pct (the gap-up % that made it a
+# signal in the first place -- see pipeline/signal_engine.py's return_pct,
+# fixed at SIGNAL-SELECTION time, never recomputed at exit) and give each
+# bucket its own 3-stage exit schedule. Every position (trade-list entry via
+# run_entry_321/run_entry_limit, or a manual --symbol entry with --bucket
+# given explicitly) is guaranteed one of these 3 real buckets -- there is no
+# fallback/default bucket.
 RETURN_BUCKETS: dict[str, dict[str, tuple[int, int, int]]] = {
-    "legacy": {
-        "exit_916_prep":  _EXIT_916_PREP_AT,   "exit_916_fire":  _EXIT_916_FIRE_AT,
-        "exit_1159_prep": _EXIT_1159_PREP_AT,  "exit_1159_fire": _EXIT_1159_FIRE_AT,
-        "squareoff_prep": _SQUAREOFF_PREP_AT,  "squareoff_fire": _SQUAREOFF_FIRE_AT,
-    },
     "5-10": {
         "exit_916_prep":  (9, 15, 50),  "exit_916_fire":  (9, 16, 0),
         "exit_1159_prep": (10, 17, 50), "exit_1159_fire": (10, 18, 0),
@@ -1050,14 +1037,16 @@ def _open_short_pos(positions: list) -> list:
             and p.get("status") == "short_open"]
 
 
-def _bucket_of(p: dict) -> str:
-    """Single source of truth for which of the 4 exit-stage invocations
-    (legacy + RETURN_BUCKETS' 3 live buckets) claims a position/short --
-    centralizing this (instead of repeating p.get("return_bucket") or
-    "legacy" at every filter site) is what makes the 4-way partition
-    provable/testable. Missing key AND an explicit None both mean the same
-    thing here (no bucket recorded) -- both fold to "legacy"."""
-    return p.get("return_bucket") or "legacy"
+def _bucket_of(p: dict) -> str | None:
+    """Single source of truth for which of RETURN_BUCKETS' 3 live buckets
+    claims a position/short -- centralizing this is what makes the 3-way
+    partition provable/testable. Every position created by run_entry_321/
+    run_entry_limit (trade-list entry, or manual --symbol with --bucket
+    given explicitly) is guaranteed a real value here. Returns None only for
+    a short opened via the standalone/manual _open_short()/_open_short_core()
+    path (not reachable from any real cron/CLI trigger), which then
+    correctly matches no bucket rather than crashing or getting mis-tagged."""
+    return p.get("return_bucket")
 
 
 # ── Broker quantity cross-check (product-aware) ───────────────────────────────
@@ -1699,10 +1688,11 @@ def _append_log(trade_date: date, row: dict) -> None:
 
 def _sync_pnl_workbook() -> None:
     """Regenerates results/strategy_pnl_simple.xlsx from the latest
-    positions_dhan_long.json + positions_dhan_short.json -- called after
-    every pipeline stage (321/916/1159/239) so it stays current. Loaded by
-    file path (not a package import, neither results/ nor the repo root is
-    one)."""
+    positions_dhan_long.json + positions_dhan_short.json. Takes ~60s (real
+    Dhan charges-API resync), so it runs ONCE a day via its own --sync-pnl
+    cron invocation after market close, not inline in any entry/exit stage.
+    Loaded by file path (not a package import, neither results/ nor the
+    repo root is one)."""
     try:
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -1720,11 +1710,16 @@ def _sync_pnl_workbook() -> None:
 
 def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
                   capital: float | None = None, symbol: str | None = None,
-                  shares_override: int | None = None, cnc_only: bool = False) -> None:
+                  shares_override: int | None = None, cnc_only: bool = False,
+                  bucket: str | None = None) -> None:
     if trade_date is None:
         trade_date = date.today()
 
     manual_mode = symbol is not None
+
+    if manual_mode and bucket is None:
+        sys.exit("[dhan] Manual --symbol entries require --bucket (5-10/10-15/15-20) "
+                  "-- no legacy fallback.")
 
     if not manual_mode:
         # Must run before positions are loaded just below -- see
@@ -1738,7 +1733,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         capital    = capital if capital is not None else TOTAL_CAPITAL / 4
         allocation = capital
         # No trade_list row to look up a return_pct from -- a manual
-        # --symbol entry always falls into the permanent "legacy" bucket.
+        # --symbol entry uses the --bucket given explicitly at entry time.
         return_pct_map: dict[str, float] = {}
     else:
         symbols = _load_symbols(trade_date)
@@ -1882,8 +1877,17 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         # below Phase 1 for why (computing it here, before the 15:21:00 hold,
         # would anchor it to an LTP up to ~a minute stale by the time the
         # order actually fires).
-        return_pct    = return_pct_map.get(sym)
-        return_bucket = _return_bucket_for_pct(return_pct) if return_pct is not None else "legacy"
+        if manual_mode:
+            return_pct    = None
+            return_bucket = bucket
+        else:
+            return_pct = return_pct_map.get(sym)
+            if return_pct is None:
+                print(f"[dhan]   SKIP — no return_pct recorded for {sym} in today's "
+                      f"trade list (can't assign an exit bucket).")
+                n_skipped += 1
+                continue
+            return_bucket = _return_bucket_for_pct(return_pct)
         ready.append({
             "symbol": sym, "ref": ref, "shares": shares, "product": product,
             "leverage": leverage, "margin_required": margin_required, "capital_base": capital_base,
@@ -2114,7 +2118,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
             "entry_timestamp":      _ts(),
             "product":              product,
             "return_pct":           res.get("return_pct"),
-            "return_bucket":        res.get("return_bucket", "legacy"),
+            "return_bucket":        res.get("return_bucket"),
         })
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", fill_price=fill_price,
@@ -2129,7 +2133,6 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
 
     print(f"\n[dhan] Entry complete. Entered: {n_entered}  Skipped: {n_skipped}")
     print(f"[dhan] Log written to {_log_path(trade_date)}")
-    _sync_pnl_workbook()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2266,8 +2269,10 @@ def place_targets_915(dry_run: bool = False) -> None:
 # EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_916_mtf / force_exit_1159_mtf
 # ══════════════════════════════════════════════════════════════════════════════
 
-def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
-    bucket_label = bucket or "legacy"
+def check_exit_916(dry_run: bool = False, bucket: str = None) -> None:
+    if bucket is None:
+        sys.exit("[dhan] check_exit_916 requires --bucket (5-10/10-15/15-20) -- no legacy fallback.")
+    bucket_label = bucket
     sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
     print(f"[dhan] Exit check [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
@@ -2275,10 +2280,10 @@ def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["exit_916_prep"], f"check_exit_916[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 09:15:50 (legacy) / this bucket's own prep
-    # instant: position load + Order Book snapshot + UC-cache read. None of
-    # this is price-dependent -- safe to resolve up to 10s before the fire
-    # instant below (see _hold_until's module note).
+    # ── Prep step, pinned to this bucket's own prep instant: position load +
+    # Order Book snapshot + UC-cache read. None of this is price-dependent --
+    # safe to resolve up to 10s before the fire instant below (see
+    # _hold_until's module note).
     print(f"[dhan]   TIMING check_exit_916[{bucket_label}] prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
     open_ps   = [p for p in _open_pos(positions) if _bucket_of(p) == bucket_label]
@@ -2286,7 +2291,6 @@ def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
 
     if not open_ps:
         print("[dhan] No open positions — nothing to check.")
-        _sync_pnl_workbook()
         return
 
     # ── Target-status pre-check (single call): every open position's target
@@ -2320,10 +2324,10 @@ def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["exit_916_fire"], f"check_exit_916[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 09:16:00 (legacy) / this bucket's own fire
-    # instant: fresh LTP, then the actual decision/sell/short logic --
-    # unchanged from here down except for what now reads from the prep
-    # step's already-fetched values instead of fetching them itself.
+    # ── Fire step, pinned to this bucket's own fire instant: fresh LTP,
+    # then the actual decision/sell/short logic -- unchanged from here down
+    # except for what now reads from the prep step's already-fetched values
+    # instead of fetching them itself.
     print(f"[dhan]   TIMING check_exit_916[{bucket_label}] fire-step start: {_ts()}")   # TEMP verification timing
 
     # One batched call for every open position's LTP, not one call per symbol
@@ -2647,11 +2651,12 @@ def check_exit_916(dry_run: bool = False, bucket: str | None = None) -> None:
         _save_short_pos(short_positions)
 
     print(f"\n[dhan] Exit check 9:16am complete.")
-    _sync_pnl_workbook()
 
 
-def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
-    bucket_label = bucket or "legacy"
+def force_exit_1159(dry_run: bool = False, bucket: str = None) -> None:
+    if bucket is None:
+        sys.exit("[dhan] force_exit_1159 requires --bucket (5-10/10-15/15-20) -- no legacy fallback.")
+    bucket_label = bucket
     sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
     print(f"[dhan] Force exit [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
@@ -2659,8 +2664,8 @@ def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["exit_1159_prep"], f"force_exit_1159[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 11:58:50 (legacy) / this bucket's own prep
-    # instant -- see check_exit_916's matching note.
+    # ── Prep step, pinned to this bucket's own prep instant -- see
+    # check_exit_916's matching note.
     print(f"[dhan]   TIMING force_exit_1159[{bucket_label}] prep-step start: {_ts()}")   # TEMP verification timing
     positions = _load_long_pos()
     open_ps   = [p for p in _open_pos(positions) if _bucket_of(p) == bucket_label]
@@ -2673,7 +2678,6 @@ def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
         except Exception as exc:
             print(f"  [notify] nothing_open_at_1159 failed: {exc}", file=sys.stderr)
         _daily_summary(positions, 0, dry_run)
-        _sync_pnl_workbook()
         return
 
     # ── Target-status pre-check (single call) -- see the matching comment in
@@ -2699,8 +2703,8 @@ def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["exit_1159_fire"], f"force_exit_1159[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 11:59:00 (legacy) / this bucket's own fire
-    # instant -- see check_exit_916's matching note.
+    # ── Fire step, pinned to this bucket's own fire instant -- see
+    # check_exit_916's matching note.
     print(f"[dhan]   TIMING force_exit_1159[{bucket_label}] fire-step start: {_ts()}")   # TEMP verification timing
 
     n_force = 0
@@ -2943,7 +2947,6 @@ def force_exit_1159(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _daily_summary(positions, n_force, dry_run)
     print(f"\n[dhan] Force exit 11:59am complete. Force-exited: {n_force}.")
-    _sync_pnl_workbook()
 
 
 def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
@@ -2974,8 +2977,10 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
 # conditional one -- this always closes, regardless of P&L.
 # ══════════════════════════════════════════════════════════════════════════════
 
-def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
-    bucket_label = bucket or "legacy"
+def square_off_239(dry_run: bool = False, bucket: str = None) -> None:
+    if bucket is None:
+        sys.exit("[dhan] square_off_239 requires --bucket (5-10/10-15/15-20) -- no legacy fallback.")
+    bucket_label = bucket
     sched        = RETURN_BUCKETS[bucket_label]
     print(f"\n{'='*60}")
     print(f"[dhan] Short square-off [{bucket_label}]{'  DRY RUN' if dry_run else ''}")
@@ -2983,8 +2988,8 @@ def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["squareoff_prep"], f"square_off_239[{bucket_label}] prep")
 
-    # ── Prep step, pinned to 14:38:50 (legacy) / this bucket's own prep
-    # instant: position load + Order Book snapshot + classification
+    # ── Prep step, pinned to this bucket's own prep instant: position load
+    # + Order Book snapshot + classification
     # (cover_filled/stop_filled/neither_filled) from that snapshot -- pure
     # in-memory, no live price needed for classification itself (only the
     # neither_filled force-cover path below needs LTP, which is fetched at
@@ -2997,7 +3002,6 @@ def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
 
     if not open_shorts:
         print("[dhan] No open shorts — nothing to square off.")
-        _sync_pnl_workbook()
         return
 
     n_closed = 0
@@ -3082,8 +3086,8 @@ def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
 
     _hold_until(*sched["squareoff_fire"], f"square_off_239[{bucket_label}] fire")
 
-    # ── Fire step, pinned to 14:39:00 (legacy) / this bucket's own fire
-    # instant: fresh LTP (only the neither_filled
+    # ── Fire step, pinned to this bucket's own fire instant: fresh LTP
+    # (only the neither_filled
     # force-cover path below actually needs it, but fetching once up front
     # for every open short is still a single call either way -- unchanged
     # from before this restructuring, just moved to fire time instead of
@@ -3258,7 +3262,6 @@ def square_off_239(dry_run: bool = False, bucket: str | None = None) -> None:
             time.sleep(BATCH_SLEEP_SECONDS)
 
     print(f"\n[dhan] Short square-off complete. Closed: {n_closed}.")
-    _sync_pnl_workbook()
 
 
 
@@ -3392,19 +3395,23 @@ class _LimitSymState:
 
     __slots__ = (
         "symbol", "initial_desired", "tranche_size", "product", "ref",
-        "capital_base", "filled_total", "vwap_num",
+        "capital_base", "return_pct", "return_bucket", "filled_total", "vwap_num",
         "active_oid", "active_oid_qty", "active_oid_credited", "active_bid",
         "done",
     )
 
     def __init__(self, symbol: str, initial_desired: int, product: str,
-                 ref: float, capital_base: float) -> None:
+                 ref: float, capital_base: float,
+                 return_pct: float | None = None,
+                 return_bucket: str | None = None) -> None:
         self.symbol              = symbol
         self.initial_desired     = initial_desired
         self.tranche_size        = max(1, initial_desired // LIMIT_ENTRY_TRANCHE_DIVISOR)
         self.product             = product
         self.ref                 = ref
         self.capital_base        = capital_base
+        self.return_pct          = return_pct
+        self.return_bucket       = return_bucket
         self.filled_total        = 0
         self.vwap_num            = 0.0
         self.active_oid:   str | None = None
@@ -3432,6 +3439,7 @@ def run_entry_limit(
     cnc_only:        bool                     = False,
     prep_at:         tuple[int, int, int]      = None,
     fire_at:         tuple[int, int, int]      = None,
+    bucket:          str                      = None,
 ) -> None:
     """Semi-aggressive tranched limit-order entry running from ~3:06 PM to
     3:20 PM IST (LIMIT_ENTRY_CUTOFF_HHMM).  At cutoff, cancels all open
@@ -3485,6 +3493,12 @@ def run_entry_limit(
     capital     = capital or TOTAL_CAPITAL
     manual_mode = symbol is not None
     subset_mode = symbols is not None
+
+    if manual_mode and bucket is None:
+        sys.exit("[dhan] Manual --symbol entries require --bucket (5-10/10-15/15-20) "
+                  "-- no legacy fallback.")
+
+    return_pct_map: dict[str, float] = {} if manual_mode else _load_return_pct_map(trade_date)
 
     print(f"\n{'='*60}")
     print(f"[dhan] Limit Entry {'  DRY RUN' if dry_run else ''}")
@@ -3564,6 +3578,17 @@ def run_entry_limit(
             continue
         ref, _ = cached
 
+        if manual_mode:
+            return_pct    = None
+            return_bucket = bucket
+        else:
+            return_pct = return_pct_map.get(sym)
+            if return_pct is None:
+                print(f"[dhan]   SKIP {sym}: no return_pct recorded in today's trade list "
+                      f"(can't assign an exit bucket).")
+                continue
+            return_bucket = _return_bucket_for_pct(return_pct)
+
         if manual_mode and shares_override:
             shares       = shares_override
             product      = "CNC"
@@ -3614,7 +3639,8 @@ def run_entry_limit(
         print(f"[dhan]   {sym}: {shares}× ref ₹{ref:,.2f} [{product}]  "
               f"tranche={max(1, shares // LIMIT_ENTRY_TRANCHE_DIVISOR)}  "
               f"margin ₹{margin_req:,.2f}  balance left ₹{available_balance:,.2f}")
-        states[sym] = _LimitSymState(sym, shares, product, ref, capital_base)
+        states[sym] = _LimitSymState(sym, shares, product, ref, capital_base,
+                                      return_pct, return_bucket)
 
     if not states:
         print("[dhan] No tradeable symbols after sizing — exiting.")
@@ -3977,6 +4003,8 @@ def run_entry_limit(
                 "status":               "open",
                 "entry_timestamp":      _ts(),
                 "product":              st.product,
+                "return_pct":           st.return_pct,
+                "return_bucket":        st.return_bucket,
             })
 
         try:
@@ -4012,7 +4040,6 @@ def run_entry_limit(
     print(f"\n[dhan] Limit entry complete. "
           f"Entered: {n_entered}  Partial: {n_partial}  Zero-filled: {n_zero}")
     print(f"[dhan] Log: {_log_path(trade_date)}")
-    _sync_pnl_workbook()
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -4029,6 +4056,10 @@ if __name__ == "__main__":
                      help="Square off shorts opened from 916/1159 exits (unconditional, 2:39pm)")
     grp.add_argument("--place-targets", action="store_true",
                      help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
+    grp.add_argument("--sync-pnl",      action="store_true",
+                     help="Regenerate results/strategy_pnl_simple.xlsx from the latest "
+                          "position files. Run once after market close (~3:45pm), not "
+                          "inline in any entry/exit stage.")
     parser.add_argument("--dry-run",  action="store_true", help="Simulate without placing orders")
     parser.add_argument("--date",     default=None, help="Trade date YYYY-MM-DD (--entry only; defaults to today)")
     parser.add_argument("--capital",  type=float, default=None,
@@ -4061,13 +4092,15 @@ if __name__ == "__main__":
                         help="Skip the MTF leverage check entirely -- buy every entry as CNC "
                              "using the full per-position allocation (--entry only).")
     parser.add_argument("--bucket", default=None, choices=["5-10", "10-15", "15-20"],
-                        help="--exit-916/--exit-1159/--square-off-239 only: restrict this "
-                             "invocation to positions/shorts tagged with this return-bucket "
-                             "at entry (see RETURN_BUCKETS), using that bucket's own "
-                             "prep/fire times. Omitted means the legacy 9:16/11:59/2:39 "
-                             "schedule, permanently restricted to positions with NO "
-                             "return_bucket recorded (pre-feature positions, manual --symbol "
-                             "entries).")
+                        help="With --exit-916/--exit-1159/--square-off-239: REQUIRED -- "
+                             "restrict this invocation to positions/shorts tagged with this "
+                             "return-bucket at entry (see RETURN_BUCKETS), using that "
+                             "bucket's own prep/fire times. With --entry/--entry-limit "
+                             "--symbol (manual single-stock entry): REQUIRED -- the exit "
+                             "bucket this position will be tagged with (no return_pct to "
+                             "classify it from). Not valid in any other combination -- "
+                             "trade-list entries compute their own bucket per-symbol from "
+                             "return_pct. No legacy/default fallback.")
     args = parser.parse_args()
 
     if args.shares is not None and args.symbol is None:
@@ -4080,8 +4113,17 @@ if __name__ == "__main__":
         sys.exit("[dhan] --fire-at is only valid with --entry-limit.")
     if args.prep_at is not None and not args.entry_limit:
         sys.exit("[dhan] --prep-at is only valid with --entry-limit.")
-    if args.bucket is not None and not (args.exit_916 or args.exit_1159 or args.square_off_239):
-        sys.exit("[dhan] --bucket is only valid with --exit-916/--exit-1159/--square-off-239.")
+    _bucket_scope_exit          = args.exit_916 or args.exit_1159 or args.square_off_239
+    _bucket_scope_manual_entry  = (args.entry or args.entry_limit) and args.symbol is not None
+    if _bucket_scope_exit and args.bucket is None:
+        sys.exit("[dhan] --bucket is required with --exit-916/--exit-1159/--square-off-239 "
+                  "(no legacy fallback).")
+    if _bucket_scope_manual_entry and args.bucket is None:
+        sys.exit("[dhan] --bucket is required with --symbol (manual entries need an "
+                  "explicit exit bucket; no legacy fallback).")
+    if args.bucket is not None and not (_bucket_scope_exit or _bucket_scope_manual_entry):
+        sys.exit("[dhan] --bucket is only valid with --exit-916/--exit-1159/--square-off-239, "
+                  "or --entry/--entry-limit --symbol.")
 
     symbols_list = ([s.strip() for s in args.symbols.split(",") if s.strip()]
                     if args.symbols else None)
@@ -4127,16 +4169,20 @@ if __name__ == "__main__":
             run_entry_limit(trade_date=td, dry_run=args.dry_run, capital=args.capital,
                             symbol=args.symbol, symbols=symbols_list,
                             shares_override=args.shares, cnc_only=args.cnc_only,
-                            prep_at=prep_at_tuple, fire_at=fire_at_tuple)
+                            prep_at=prep_at_tuple, fire_at=fire_at_tuple,
+                            bucket=args.bucket)
         elif args.entry:
             run_entry_321(trade_date=td, dry_run=args.dry_run, capital=args.capital,
-                          symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only)
+                          symbol=args.symbol, shares_override=args.shares, cnc_only=args.cnc_only,
+                          bucket=args.bucket)
         elif args.exit_916:
             check_exit_916(dry_run=args.dry_run, bucket=args.bucket)
         elif args.exit_1159:
             force_exit_1159(dry_run=args.dry_run, bucket=args.bucket)
         elif args.square_off_239:
             square_off_239(dry_run=args.dry_run, bucket=args.bucket)
+        elif args.sync_pnl:
+            _sync_pnl_workbook()
         else:
             place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:

@@ -5,14 +5,19 @@ schedule added to dhan/run_trades.py (2026-09-26): RETURN_BUCKETS,
 _return_bucket_for_pct, _bucket_of, _load_return_pct_map, and the
 return_bucket propagation through _open_short_place.
 
-The single highest-stakes property tested here is the 4-way PARTITION
+The single highest-stakes property tested here is the 3-way PARTITION
 invariant: every open long position / open short must be claimed by
-EXACTLY ONE of the 4 exit-stage invocations (legacy + "5-10" + "10-15" +
-"15-20") -- never zero (stranded, never exited) and never more than one
+EXACTLY ONE of the 3 exit-stage invocations ("5-10" + "10-15" + "15-20")
+-- never zero (stranded, never exited) and never more than one
 (double-sold). check_exit_916/force_exit_1159/square_off_239 all filter via
 `[p for p in _open_pos(positions) if _bucket_of(p) == bucket_label]` (or
 _open_short_pos for shorts) -- this file replicates that exact expression
-against a synthetic position set spanning all 4 buckets.
+against a synthetic position set spanning all 3 buckets.
+
+The "legacy" fourth bucket (an untagged-position fallback riding the
+original hardcoded 9:16/11:59/2:39 schedule) was removed 2026-09-27 once
+run_entry_321 AND run_entry_limit both guaranteed every entry (trade-list
+or manual --symbol with --bucket given explicitly) a real bucket.
 
 Mirrors test_targets.py's standalone script style (no pytest in this repo).
 
@@ -74,27 +79,25 @@ check("(a7) exactly 15.0% -> '10-15' (NOT '15-20')", rt._return_bucket_for_pct(1
 check("(a8) 15.01% -> '15-20'",         rt._return_bucket_for_pct(15.01) == "15-20")
 check("(a9) 20.0% -> '15-20'",          rt._return_bucket_for_pct(20.0) == "15-20")
 check("(a10) 37.0% (>20%) -> '15-20'",  rt._return_bucket_for_pct(37.0) == "15-20")
-check("(a11) never returns 'legacy'",
-      all(rt._return_bucket_for_pct(x) != "legacy" for x in (0.0, 5.0, 10.0, 15.0, 20.0, 99.0)))
+check("(a11) always returns one of the 3 real buckets",
+      all(rt._return_bucket_for_pct(x) in ("5-10", "10-15", "15-20")
+          for x in (0.0, 5.0, 10.0, 15.0, 20.0, 99.0)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 print("\nScenario (b) — RETURN_BUCKETS structural checks\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-check("(b1) all 4 buckets present", set(rt.RETURN_BUCKETS) == {"legacy", "5-10", "10-15", "15-20"})
-check("(b2) legacy bucket reuses the untouched module constants exactly",
-      rt.RETURN_BUCKETS["legacy"]["exit_916_prep"]  == rt._EXIT_916_PREP_AT
-      and rt.RETURN_BUCKETS["legacy"]["exit_916_fire"]  == rt._EXIT_916_FIRE_AT
-      and rt.RETURN_BUCKETS["legacy"]["exit_1159_prep"] == rt._EXIT_1159_PREP_AT
-      and rt.RETURN_BUCKETS["legacy"]["exit_1159_fire"] == rt._EXIT_1159_FIRE_AT
-      and rt.RETURN_BUCKETS["legacy"]["squareoff_prep"] == rt._SQUAREOFF_PREP_AT
-      and rt.RETURN_BUCKETS["legacy"]["squareoff_fire"] == rt._SQUAREOFF_FIRE_AT)
+check("(b1) exactly the 3 real buckets present", set(rt.RETURN_BUCKETS) == {"5-10", "10-15", "15-20"})
+check("(b2) the six legacy module constants no longer exist on the module",
+      not any(hasattr(rt, name) for name in
+              ("_EXIT_916_PREP_AT", "_EXIT_916_FIRE_AT", "_EXIT_1159_PREP_AT",
+               "_EXIT_1159_FIRE_AT", "_SQUAREOFF_PREP_AT", "_SQUAREOFF_FIRE_AT")))
 check("(b3) every bucket has all 6 schedule keys",
       all(set(v) == {"exit_916_prep", "exit_916_fire", "exit_1159_prep",
                      "exit_1159_fire", "squareoff_prep", "squareoff_fire"}
           for v in rt.RETURN_BUCKETS.values()))
-check("(b4) 5-10 bucket's winner-exit fires at 9:16 (matches legacy's time)",
+check("(b4) 5-10 bucket's winner-exit fires at 9:16",
       rt.RETURN_BUCKETS["5-10"]["exit_916_fire"] == (9, 16, 0))
 check("(b5) 10-15 bucket's winner-exit fires at 9:18",
       rt.RETURN_BUCKETS["10-15"]["exit_916_fire"] == (9, 18, 0))
@@ -109,9 +112,10 @@ check("(b7) 15-20 bucket's short square-off fires at 14:40 (after its own force-
 print("\nScenario (c) — _bucket_of\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
-check("(c1) no return_bucket key at all -> legacy", rt._bucket_of({}) == "legacy")
-check("(c2) return_bucket explicitly None -> legacy", rt._bucket_of({"return_bucket": None}) == "legacy")
-check("(c3) return_bucket explicitly '' -> legacy", rt._bucket_of({"return_bucket": ""}) == "legacy")
+check("(c1) no return_bucket key at all -> None", rt._bucket_of({}) is None)
+check("(c2) return_bucket explicitly None -> None", rt._bucket_of({"return_bucket": None}) is None)
+check("(c3) return_bucket explicitly '' -> falsy (matches no real bucket)",
+      not rt._bucket_of({"return_bucket": ""}))
 check("(c4) recorded bucket passes through unchanged",
       rt._bucket_of({"return_bucket": "10-15"}) == "10-15")
 
@@ -119,13 +123,14 @@ check("(c4) recorded bucket passes through unchanged",
 # ─────────────────────────────────────────────────────────────────────────────
 print("\nScenario (d) — partition/completeness invariant (long positions)\n")
 # ─────────────────────────────────────────────────────────────────────────────
-# One synthetic long per bucket (incl. legacy), run through the EXACT filter
-# expression check_exit_916/force_exit_1159 use. Every position must be
-# claimed by exactly one of the 4 invocations -- no orphans, no double-claims.
+# One synthetic long per bucket, run through the EXACT filter expression
+# check_exit_916/force_exit_1159 use. Every position must be claimed by
+# exactly one of the 3 invocations -- no orphans, no double-claims. Every
+# real position is guaranteed a real bucket (run_entry_321/run_entry_limit
+# both require one), so an untagged position is no longer a valid input --
+# not modeled here.
 
 synthetic_longs = [
-    {"broker": "dhan", "status": "open", "symbol": "LEGACY1"},                       # no key at all
-    {"broker": "dhan", "status": "open", "symbol": "LEGACY2", "return_bucket": None}, # explicit None
     {"broker": "dhan", "status": "open", "symbol": "A", "return_bucket": "5-10"},
     {"broker": "dhan", "status": "open", "symbol": "B", "return_bucket": "10-15"},
     {"broker": "dhan", "status": "open", "symbol": "C", "return_bucket": "15-20"},
@@ -133,16 +138,16 @@ synthetic_longs = [
 ]
 
 open_ps = rt._open_pos(synthetic_longs)
-check("(d1) _open_pos claims all 6 synthetic positions (both eligible statuses)",
-      len(open_ps) == 6, str(open_ps))
+check("(d1) _open_pos claims all 4 synthetic positions (both eligible statuses)",
+      len(open_ps) == 4, str(open_ps))
 
-invocation_labels = ["legacy", "5-10", "10-15", "15-20"]
+invocation_labels = ["5-10", "10-15", "15-20"]
 claimed_longs = {
     label: [p for p in open_ps if rt._bucket_of(p) == label]
     for label in invocation_labels
 }
 
-check("(d2) every position claimed exactly once across the 4 invocations",
+check("(d2) every position claimed exactly once across the 3 invocations",
       sum(len(v) for v in claimed_longs.values()) == len(open_ps),
       {k: [p["symbol"] for p in v] for k, v in claimed_longs.items()})
 
@@ -151,10 +156,8 @@ for v in claimed_longs.values():
     seen_syms.extend(p["symbol"] for p in v)
 check("(d3) no position claimed by more than one bucket invocation",
       len(seen_syms) == len(set(seen_syms)), seen_syms)
-check("(d4) union of all 4 invocations covers every open position",
+check("(d4) union of all 3 invocations covers every open position",
       set(seen_syms) == {p["symbol"] for p in open_ps})
-check("(d5) legacy invocation claims exactly LEGACY1 + LEGACY2",
-      {p["symbol"] for p in claimed_longs["legacy"]} == {"LEGACY1", "LEGACY2"})
 check("(d6) '5-10' invocation claims exactly A + D",
       {p["symbol"] for p in claimed_longs["5-10"]} == {"A", "D"})
 
@@ -164,7 +167,6 @@ print("\nScenario (e) — partition/completeness invariant (short positions)\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 synthetic_shorts = [
-    {"broker": "dhan", "status": "short_open", "symbol": "SLEGACY"},
     {"broker": "dhan", "status": "short_open", "symbol": "SA", "return_bucket": "5-10"},
     {"broker": "dhan", "status": "short_open", "symbol": "SB", "return_bucket": "10-15"},
     {"broker": "dhan", "status": "short_open", "symbol": "SC", "return_bucket": "15-20"},
@@ -210,7 +212,9 @@ check("(f3) _bucket_of resolves the threaded row to '10-15'",
       row_f is not None and rt._bucket_of(row_f) == "10-15")
 
 # No return_bucket passed (the standalone manual _open_short()/_open_short_core()
-# call shape) -- must default to None, which _bucket_of reads as "legacy".
+# call shape, not reachable from any real cron/CLI trigger) -- must default
+# to None, which _bucket_of correctly resolves to "matches no bucket"
+# rather than crashing or getting mis-tagged.
 with patch.object(rt, "sell", fake_sell_f), \
      patch.object(rt, "_shorting_skipped_today", lambda: False), \
      patch.object(rt.notify, "send_short_open", MagicMock()):
@@ -221,8 +225,8 @@ with patch.object(rt, "sell", fake_sell_f), \
     )
 check("(f4) return_bucket omitted -> row's return_bucket is None",
       row_f_default is not None and row_f_default["return_bucket"] is None)
-check("(f5) _bucket_of resolves the un-tagged row to 'legacy' (safe default)",
-      row_f_default is not None and rt._bucket_of(row_f_default) == "legacy")
+check("(f5) _bucket_of resolves the un-tagged row to None (matches no bucket)",
+      row_f_default is not None and rt._bucket_of(row_f_default) is None)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -154,6 +154,7 @@ def test_entry_parallel_timing_and_resilience():
     store = FakeStore(positions=[])
 
     with patch.object(rt, "_load_symbols", return_value=list(symbols)), \
+         patch.object(rt, "_load_return_pct_map", lambda trade_date: {s: 7.0 for s in symbols}), \
          patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
          patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "security_id", lambda sym: "999"), \
@@ -215,6 +216,7 @@ def test_entry_at_uc_bids_at_uc_price():
     store = FakeStore(positions=[])
 
     with patch.object(rt, "_load_symbols", return_value=list(symbols)), \
+         patch.object(rt, "_load_return_pct_map", lambda trade_date: {s: 7.0 for s in symbols}), \
          patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
          patch.object(rt, "get_ltp_batch", lambda syms: dict(ltp_by_sym)), \
          patch.object(rt, "security_id", lambda sym: "999"), \
@@ -272,6 +274,7 @@ def test_entry_mtf_ineligible_retries_as_cnc():
     store = FakeStore(positions=[])
 
     with patch.object(rt, "_load_symbols", return_value=list(symbols)), \
+         patch.object(rt, "_load_return_pct_map", lambda trade_date: {s: 7.0 for s in symbols}), \
          patch.object(rt, "get_reference_price", lambda sym: (100.0, 1520)), \
          patch.object(rt, "get_ltp_batch", lambda syms: {s: 100.0 for s in syms}), \
          patch.object(rt, "security_id", lambda sym: "999"), \
@@ -329,6 +332,10 @@ def make_long(sym, **overrides):
         # real 2s pre-check wait still genuinely happens (unmocked -- it uses
         # the real time module) and is accounted for in expected_ceiling.
         "product": "CNC",
+        # This file tests parallel-phase timing/resilience, not bucket
+        # classification -- a single fixed bucket, matched by the one
+        # check_exit_916 call below passing bucket="5-10", suffices.
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -373,7 +380,7 @@ def test_exit_parallel_timing_and_resilience():
          patch.object(rt.notify, "send_exit_916"):
 
         start = time.monotonic()
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
         elapsed = time.monotonic() - start
 
     # 8 symbols split into chunks of MAX_ORDER_CALLS_PER_SECOND for Wave 1

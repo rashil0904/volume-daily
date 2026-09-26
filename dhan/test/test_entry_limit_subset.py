@@ -82,13 +82,14 @@ class FakeStore:
         self.save_count += 1
 
 
-def write_trade_list(trades_dir: Path, trade_date: date, symbols: list[str]) -> None:
+def write_trade_list(trades_dir: Path, trade_date: date, symbols: list[str],
+                     return_pct: float = 7.0) -> None:
     trades_dir.mkdir(parents=True, exist_ok=True)
     with open(trades_dir / f"trade_list_{trade_date.isoformat()}.csv", "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["symbol", "shares", "ref_price"])
+        w.writerow(["symbol", "shares", "ref_price", "return_pct"])
         for sym in symbols:
-            w.writerow([sym, 100, 100.0])
+            w.writerow([sym, 100, 100.0, return_pct])
 
 
 def fresh_tmp_root() -> Path:
@@ -157,7 +158,7 @@ def entry_limit_fakes(ref_price=100.0, leverage=3.0):
 
 def run_entry_limit_with_fakes(trade_date, tmp_root, store, *, symbol=None, symbols=None,
                                 capital=None, allocation_spy=None, prep_at=None, fire_at=None,
-                                hold_spy=None, ref_price_fn=None):
+                                hold_spy=None, ref_price_fn=None, bucket=None):
     fakes = entry_limit_fakes()
     if ref_price_fn is not None:
         fakes["get_reference_price"] = ref_price_fn
@@ -181,7 +182,8 @@ def run_entry_limit_with_fakes(trade_date, tmp_root, store, *, symbol=None, symb
         for p in patches:
             stack.enter_context(p)
         rt.run_entry_limit(trade_date=trade_date, dry_run=False, capital=capital,
-                           symbol=symbol, symbols=symbols, prep_at=prep_at, fire_at=fire_at)
+                           symbol=symbol, symbols=symbols, prep_at=prep_at, fire_at=fire_at,
+                           bucket=bucket)
 
 
 def run_entry_321_with_fakes(trade_date, tmp_root, store, *, capital=None,
@@ -312,7 +314,7 @@ store4 = FakeStore()
 spy4, calls4 = make_allocation_spy()
 
 run_entry_limit_with_fakes(TD4, tmp4, store4, symbol="ZZZ", capital=250_000.0,
-                           allocation_spy=spy4)
+                           allocation_spy=spy4, bucket="5-10")
 
 check("manual --symbol mode: compute_allocation never called (capital used directly)",
       calls4 == [], str(calls4))

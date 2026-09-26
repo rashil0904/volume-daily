@@ -117,6 +117,11 @@ def make_long(**overrides):
         "actual_fill_price": 100.0, "actual_fill_quantity": 10,
         "entry_order_id": "E1", "status": "open",
         "entry_timestamp": "2026-08-17T15:21:00+05:30", "product": "MTF",
+        # This file tests exit-stage mechanics (fills, targets, notify), not
+        # bucket classification (that's test_return_buckets.py's job) -- a
+        # single fixed bucket, matched by every check_exit_916/etc. call
+        # below passing bucket="5-10", is all that's needed here.
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -129,6 +134,7 @@ def make_short(**overrides):
         "entry_date": "2026-08-17", "entry_price": 100.0, "quantity": 10,
         "entry_order_id": "S1", "status": "short_open",
         "entry_timestamp": "2026-08-17T09:25:00+05:30",
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -275,7 +281,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_b), \
      patch.object(rt, "_open_short", fake_open_short_b), \
      patch.object(rt.notify, "send_target_hit", MagicMock()):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(b) target status resolved from ONE batched _dhan_get_orders() call, not per-order",
       get_orders_calls_b == [1], str(get_orders_calls_b))
@@ -348,7 +354,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt.time, "sleep", lambda secs: None), \
      patch.object(rt.notify, "send_exit_916_nodata", MagicMock()), \
      patch.object(rt.notify, "send_target_placed", MagicMock()):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(c) cancel_order was called for the stale target", cancel_calls_c == ["TGT-DELTA"])
 half_sells_c = [c for c in sell_calls_c if c[4] != 117.0]
@@ -419,7 +425,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.time, "sleep", lambda secs: None), \
      patch.object(rt.notify, "send_exit_916", MagicMock()):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(d) cancel_order called before the LIMIT sell, in that order",
       call_order_d == [("cancel", "TGT-EPS"), ("sell", "EPSILON", "LIMIT", 104.45)], str(call_order_d))
@@ -460,7 +466,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "get_ltp", fake_get_ltp_e), \
      patch.object(rt, "get_ltp_batch", lambda syms: {"ZETA": 98.0}), \
      patch.object(rt, "sell", fake_sell_e):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(e) cancel_order NEVER called", cancel_calls_e == [])
 check("(e) sell() NEVER called", sell_calls_e == [])
@@ -502,7 +508,7 @@ with patch.object(rt, "_load_long_pos", store1.load), \
      patch.object(rt.notify, "send_target_hit", MagicMock()), \
      patch.object(rt.notify, "send_nothing_open_at_1159", MagicMock()), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
-    rt.force_exit_1159(dry_run=False)
+    rt.force_exit_1159(dry_run=False, bucket="5-10")
 
 check("(f1) sell() never called when target already TRADED", sell_calls_f1 == [])
 row1 = store1.positions[0]
@@ -550,7 +556,7 @@ with patch.object(rt, "_load_long_pos", store2.load), \
      patch.object(rt.time, "sleep", lambda secs: None), \
      patch.object(rt.notify, "send_force_exit_1159", MagicMock()), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
-    rt.force_exit_1159(dry_run=False)
+    rt.force_exit_1159(dry_run=False, bucket="5-10")
 
 check("(f2) cancel_order called before force-sell, in that order",
       call_order_f2 == [("cancel", "TGT-THETA"), ("sell", "THETA")], str(call_order_f2))
@@ -721,7 +727,7 @@ with patch.object(rt, "_load_short_pos", store_h1.load), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_cover_target_hit", MagicMock()):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(h1) buy() never called when cover target already TRADED", buy_calls_h1 == [])
 row_h1 = store_h1.positions[0]
@@ -758,7 +764,7 @@ with patch.object(rt, "_load_short_pos", store_h2.load), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(h2) cancel_order called before the force-cover, in that order",
       call_order_h2 == [("cancel", "COVERTGT-L"), ("buy", "LAMBDA")], str(call_order_h2))
@@ -805,7 +811,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "sell", fake_sell_i), \
      patch.object(rt, "get_ltp", fake_get_ltp_i), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(i) cancel_order never called", cancel_calls_i == [])
 check("(i) sell() never called", sell_calls_i == [])
@@ -826,7 +832,7 @@ with patch.object(rt, "_load_long_pos", store_nu.load), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_nu.append(1) or "X"), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
-    rt.force_exit_1159(dry_run=False)
+    rt.force_exit_1159(dry_run=False, bucket="5-10")
 check("(i-1159) _dhan_get_orders raise -> sell() never called, position skipped", sell_calls_nu == [])
 
 
@@ -850,7 +856,7 @@ with patch.object(rt, "_load_long_pos", store_im.load), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_im.append(1) or "SHOULD-NOT-HAPPEN"), \
      patch.object(rt, "get_ltp", lambda sym: 999.0), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(i-missing) sell() never called", sell_calls_im == [])
 row_im = store_im.positions[0]
@@ -868,7 +874,7 @@ with patch.object(rt, "_load_long_pos", store_im2.load), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_im2.append(1) or "SHOULD-NOT-HAPPEN"), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_daily_summary", MagicMock()):
-    rt.force_exit_1159(dry_run=False)
+    rt.force_exit_1159(dry_run=False, bucket="5-10")
 check("(i-missing-1159) sell() never called, position skipped", sell_calls_im2 == [])
 row_im2 = store_im2.positions[0]
 check("(i-missing-1159) status still open", row_im2["status"] == "open")
@@ -907,7 +913,7 @@ with patch.object(rt, "_load_long_pos", store_multi.load), \
      patch.object(rt, "get_ltp_batch", lambda syms: {"PI-B": 98.0}), \
      patch.object(rt, "sell", lambda *a, **kw: sell_calls_multi.append(1) or "SHOULD-NOT-HAPPEN"), \
      patch.object(rt.notify, "send_target_hit", MagicMock()):
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(i-multi) _dhan_get_orders called EXACTLY ONCE for 3 open positions",
       get_orders_call_count_multi == [1], str(get_orders_call_count_multi))
@@ -943,7 +949,7 @@ with patch.object(rt, "_load_short_pos", store_xi.load), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_manual_review",
                   lambda **kw: manual_review_calls_xi.append(kw)):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 check("(i-239) Order Book fetch raise -> buy() never called, position skipped",
       buy_calls_nu == [])
 check("(i-239) position left completely untouched (still short_open)",
@@ -989,7 +995,7 @@ with patch.object(rt, "_load_short_pos", store_slc.load), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_cover_target_hit", MagicMock()):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(sl-a) stop-loss order was cancelled", cancel_calls_slc == ["STOPLOSS-RHO"])
 check("(sl-a) force-cover buy() never called", buy_calls_slc == [])
@@ -1035,7 +1041,7 @@ with patch.object(rt, "_load_short_pos", store_sld.load), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_short_stoploss_hit", MagicMock()):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(sl-b) cover-target order was cancelled", cancel_calls_sld == ["COVERTGT-SIG"])
 check("(sl-b) force-cover buy() never called", buy_calls_sld == [])
@@ -1083,7 +1089,7 @@ with patch.object(rt, "_load_short_pos", store_sle.load), \
      patch.object(rt, "_broker_short_qty", lambda sym: 10), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_239", MagicMock()):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(sl-c) BOTH orders cancelled",
       set(cancel_calls_sle) == {"COVERTGT-TAU", "STOPLOSS-TAU"}, str(cancel_calls_sle))
@@ -1131,7 +1137,7 @@ with patch.object(rt, "_load_short_pos", store_slf.load), \
      patch.object(rt, "get_ltp_batch", lambda syms: {}), \
      patch.object(rt.notify, "send_square_off_manual_review",
                   lambda **kw: manual_review_calls_slf.append(kw)):
-    rt.square_off_239(dry_run=False)
+    rt.square_off_239(dry_run=False, bucket="5-10")
 
 check("(sl-d) NEITHER order cancelled (no automatic pick)", cancel_calls_slf == [])
 check("(sl-d) force-cover buy() never called", buy_calls_slf == [])
@@ -1304,9 +1310,9 @@ tmp_trades_dir_bal.mkdir(parents=True, exist_ok=True)
 TODAY_BAL = date.today().isoformat()
 with open(tmp_trades_dir_bal / f"trade_list_{TODAY_BAL}.csv", "w", newline="") as f:
     w = csv.writer(f)
-    w.writerow(["symbol", "shares", "ref_price"])
-    w.writerow(["BIGCO", 100, 100.0])
-    w.writerow(["SMALLCO", 100, 100.0])
+    w.writerow(["symbol", "shares", "ref_price", "return_pct"])
+    w.writerow(["BIGCO", 100, 100.0, 7.0])
+    w.writerow(["SMALLCO", 100, 100.0, 7.0])
 
 # Compute the SAME shares/margin the real function will, rather than
 # hardcoding a guess -- both symbols have identical ref price so both need
@@ -1453,7 +1459,7 @@ _bal_short_patches = [
 with ExitStack() as _stack:
     for _p in _bal_short_patches:
         _stack.enter_context(_p)
-    rt.check_exit_916(dry_run=False)
+    rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(bal-short) _available_balance() called EXACTLY ONCE for the whole batch "
       "(not once per short)", balance_calls_bs == [1], str(balance_calls_bs))

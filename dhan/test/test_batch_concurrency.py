@@ -107,6 +107,10 @@ def make_long(sym, **overrides):
         "entry_order_id": f"E-{sym}", "status": "open",
         "entry_timestamp": "2026-08-26T15:21:00+05:30",
         "product": "CNC",
+        # This file tests batching/concurrency mechanics, not bucket
+        # classification -- a single fixed bucket, matched by every
+        # check_exit_916/etc. call below passing bucket="5-10", suffices.
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -121,6 +125,7 @@ def make_short(sym, **overrides):
         "cover_target_order_id": f"COVER-{sym}", "cover_target_price": 95.0,
         "stop_order_id": f"STOP-{sym}", "stop_trigger_price": 130.0,
         "entry_timestamp": "2026-08-26T09:25:00+05:30",
+        "return_bucket": "5-10",
     }
     row.update(overrides)
     return row
@@ -344,7 +349,7 @@ def test_quote_batching_call_counts():
              patch.object(rt.time, "sleep", lambda secs: None), \
              patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
              patch.object(rt.notify, "send_short_open", lambda **kw: None):
-            rt.check_exit_916(dry_run=False)
+            rt.check_exit_916(dry_run=False, bucket="5-10")
 
         check(f"N={n}: get_ltp_batch called EXACTLY TWICE (prep margin-precompute "
               f"+ fire decision, never once per position)",
@@ -434,7 +439,7 @@ def test_combined_exit_and_short_budget():
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     check(f"peak concurrent order-calls ({peak_count}) never exceeded "
           f"MAX_ORDER_CALLS_PER_SECOND ({rt.MAX_ORDER_CALLS_PER_SECOND}) across "
@@ -526,7 +531,7 @@ def test_one_write_per_wave_no_lost_writes():
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.time, "sleep", lambda secs: None), \
          patch.object(rt.notify, "send_exit_916", lambda **kw: None):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
     check(f"all {n} positions present in the final saved state (none lost across "
@@ -581,7 +586,7 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "sell", lambda sym, exch, qty, **kw: f"SELL-{sym}"), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_916", lambda **kw: None):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     by_sym = {p["symbol"]: p for p in long_store.positions}
     check("(916) the crashing position was left untouched (still open), "
@@ -623,7 +628,7 @@ def test_exception_isolation_within_batch():
          patch.object(rt, "buy", fake_buy), \
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe_sq), \
          patch.object(rt.notify, "send_square_off_239", lambda **kw: None):
-        rt.square_off_239(dry_run=False)
+        rt.square_off_239(dry_run=False, bucket="5-10")
 
     by_sym_sq = {p["symbol"]: p for p in sq_store.positions}
     check("(239) the crashing position was left untouched (still short_open)",
@@ -703,7 +708,7 @@ def test_short_anchor_uses_batched_ltp_cache():
          patch.object(rt.time, "sleep", lambda secs: None), \
          patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
          patch.object(rt.notify, "send_short_open", lambda **kw: None):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     check("get_ltp_batch called exactly twice (prep margin-precompute + fire "
           "decision), both covering this symbol",
@@ -796,7 +801,7 @@ def _run_wave_ordering_case(stage_fn, n, make_positions, extra_patches=None):
     with ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
-        stage_fn(dry_run=False)
+        stage_fn(dry_run=False, bucket="5-10")
 
     return events, long_store, short_store
 
@@ -914,7 +919,7 @@ def test_wave1_mixed_fallback_and_full_same_batch():
          patch.object(rt, "_poll_fill_ws_first", fake_poll_fill_safe), \
          patch.object(rt.notify, "send_exit_916", lambda **kw: None), \
          patch.object(rt.notify, "send_exit_916_nodata", lambda **kw: None):
-        rt.check_exit_916(dry_run=False)
+        rt.check_exit_916(dry_run=False, bucket="5-10")
 
     cancel_idx = events.indices("cancel")
     sell_idx   = events.indices("sell")
@@ -997,7 +1002,7 @@ def test_square_off_single_order_book_call_and_both_filled_exclusion():
          patch.object(rt.notify, "send_square_off_239", lambda **kw: None), \
          patch.object(rt.notify, "send_square_off_manual_review",
                       lambda **kw: manual_review_calls.append(kw)):
-        rt.square_off_239(dry_run=False)
+        rt.square_off_239(dry_run=False, bucket="5-10")
 
     check("_dhan_get_orders() called EXACTLY ONCE for the whole run "
           "(not once per position)", get_orders_calls[0] == 1, str(get_orders_calls))
