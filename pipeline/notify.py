@@ -80,7 +80,7 @@ def _count_signals(trade_list_path: Path) -> int:
         return sum(1 for _ in csv.DictReader(f))
 
 
-_TOTAL_CAPITAL = 500_000
+_TOTAL_CAPITAL = 1_500_000
 
 
 def _text_trade_table(path: Path) -> str:

@@ -62,7 +62,7 @@ TRADES_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY       = date.today()
 BACKFILL_START = TODAY - relativedelta(months=6)
-TOTAL_CAPITAL = 500_000
+TOTAL_CAPITAL = 1_500_000
 
 FIELDNAMES = ["symbol", "shares", "ref_price", "return_pct"]
 
