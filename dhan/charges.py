@@ -123,11 +123,46 @@ def _load_all_positions() -> list[dict]:
     return positions
 
 
+def _oid_list(entry_order_id) -> list[str]:
+    """Normalizes a position's entry_order_id into a flat list of real
+    order-id strings, for uniform per-id lookups against trade_index.
+    run_entry_321 (and every exit leg) saves a single order-id string.
+    run_entry_limit saves a LIST -- every real LIMIT tranche + the cutoff
+    MARKET sweep, each its own distinct Dhan orderId (see
+    _LimitSymState.entry_order_ids in run_trades.py; replaced the old
+    unmatchable "limit_entry_multi" placeholder, confirmed live 2026-09-28
+    to permanently strand that leg's real charges at 0). None/""/[] -> []."""
+    if not entry_order_id:
+        return []
+    return entry_order_id if isinstance(entry_order_id, list) else [entry_order_id]
+
+
+def _oid_key(entry_order_id) -> str | None:
+    """Canonical, hashable, single-string form of entry_order_id, for use as
+    a dict key (mtf_interest_allocation_index's per-position weighting) --
+    a list isn't hashable, so a tranche entry's multiple real order ids get
+    joined into one "+"-separated string; a plain single-id string passes
+    through unchanged. Both the writer (mtf_interest_allocation_index) and
+    the reader (position_charge_summary) must derive this the same way, so
+    they agree on the same key for the same position."""
+    ids = _oid_list(entry_order_id)
+    return "+".join(ids) if ids else None
+
+
 def product_map() -> dict[str, str]:
-    """entry_order_id -> product ("MTF"/"CNC"/...) from both position files."""
+    """order_id -> product ("MTF"/"CNC"/...) from both position files, one
+    entry per real order id -- a tranche entry's entry_order_id is a LIST
+    (see _oid_list), so it contributes one map entry per tranche/sweep
+    order, all pointing at the same position's product."""
     positions = _load_all_positions()
-    return {p["entry_order_id"]: p["product"] for p in positions
-            if p.get("entry_order_id") and p.get("product")}
+    out: dict[str, str] = {}
+    for p in positions:
+        product = p.get("product")
+        if not product:
+            continue
+        for oid in _oid_list(p.get("entry_order_id")):
+            out[oid] = product
+    return out
 
 
 def is_delivery_buy(trade: dict, products: dict[str, str]) -> bool:
@@ -350,12 +385,18 @@ def tracked_order_ids() -> set[str]:
     stages/fields picked up automatically without editing this function
     again -- and it's what makes --tracked-only actually show the shorting
     leg's 916/1159 short-open SELL and 2:39 cover BUY, not just the original
-    3:21 entry BUY."""
+    3:21 entry BUY. entry_order_id specifically may be a LIST rather than a
+    single string (a run_entry_limit tranche entry -- see _oid_list), so
+    each key's value is fanned out into the set rather than added whole."""
     positions = _load_all_positions()
     ids = set()
     for p in positions:
         for key, val in p.items():
-            if "order_id" in key and val:
+            if "order_id" not in key or not val:
+                continue
+            if isinstance(val, list):
+                ids.update(val)
+            else:
                 ids.add(val)
     return ids
 
@@ -472,18 +513,22 @@ def calendar_days_held(entry_date_str: str, as_of: date) -> int:
 
 def mtf_interest_allocation_index(positions: list[dict], from_date: str,
                                   to_date: str | None = None) -> dict[str, float]:
-    """entry_order_id -> real MTF interest allocated to that position, built
-    from real ledger billing periods (see mtf_interest_periods) rather than
-    the pure formula estimate. Unlike DP/pledge (see dp_ledger_total's
-    docstring for why that one can't be split back to positions), MTF
-    interest genuinely IS proportional to (funded amount x days held x
-    slab rate) per position -- the existing formula's own model -- so
-    scaling every position's formula weight to make the period's positions
-    sum to the REAL billed total is a sound, non-fabricated allocation: any
-    systematic error in day-counting or a stale funded-amount snapshot
-    applies identically to every position sharing a period and cancels out
-    of the ratio, only the correctly-real GRAND TOTAL for the period
-    matters for where the money actually lands.
+    """_oid_key(entry_order_id) -> real MTF interest allocated to that
+    position (a single order-id string passes through _oid_key unchanged;
+    a tranche entry's list of ids becomes one "+"-joined dict key, since a
+    list itself isn't hashable -- position_charge_summary looks this index
+    up with the exact same _oid_key() derivation, so both sides agree),
+    built from real ledger billing periods (see mtf_interest_periods)
+    rather than the pure formula estimate. Unlike DP/pledge (see
+    dp_ledger_total's docstring for why that one can't be split back to
+    positions), MTF interest genuinely IS proportional to (funded amount x
+    days held x slab rate) per position -- the existing formula's own
+    model -- so scaling every position's formula weight to make the
+    period's positions sum to the REAL billed total is a sound,
+    non-fabricated allocation: any systematic error in day-counting or a
+    stale funded-amount snapshot applies identically to every position
+    sharing a period and cancels out of the ratio, only the correctly-real
+    GRAND TOTAL for the period matters for where the money actually lands.
 
     Only MTF long positions (never short -- shorts are always INTRADAY,
     see position_charge_summary) are considered. A position with zero
@@ -523,7 +568,7 @@ def mtf_interest_allocation_index(positions: list[dict], from_date: str,
                 rate   = mtf_daily_rate_pct(funded)
             except (RuntimeError, EnvironmentError):
                 continue
-            weights[pos["entry_order_id"]] = funded * (rate / 100) * overlap_days
+            weights[_oid_key(pos["entry_order_id"])] = funded * (rate / 100) * overlap_days
 
         total_weight = sum(weights.values())
         if total_weight <= 0:
@@ -562,7 +607,7 @@ _EXIT_PRICE_FIELD = {
 }
 
 
-def _leg_charges(oid: str | None, qty, price, product: str, side: str,
+def _leg_charges(oid, qty, price, product: str, side: str,
                  trade_index: dict[str, dict]) -> tuple[float, str]:
     """Real API charges for one leg if trade_index has them, else 0.0/"pending"
     -- no rate-card estimate, real Dhan trade-book figures only (removed
@@ -575,13 +620,31 @@ def _leg_charges(oid: str | None, qty, price, product: str, side: str,
     common case for a same-day position, not an error path. Deliberately
     takes an already-built index rather than looking the order up itself --
     see position_charge_summary for why a per-leg fallback fetch here would
-    be actively dangerous, not just slower."""
+    be actively dangerous, not just slower.
+
+    oid may be a single order-id string OR a list of order ids (a tranched
+    entry funded by several separate LIMIT orders + a MARKET cutoff sweep,
+    each its own distinct orderId -- see run_trades.py's run_entry_limit and
+    _oid_list above). Sums real charges across every id that resolves;
+    "api" only once EVERY id has a trade-book match, "pending" if any are
+    still missing -- same meaning as the single-id case ("pending" = keep
+    checking on a later run), just reported per-leg instead of per-order,
+    and the running partial sum is real data worth showing in the meantime
+    rather than withholding it until the very last id resolves too."""
     if not (qty and price):
         return 0.0, "none"
-    if oid:
-        trade = trade_index.get(oid)
+    total = 0.0
+    any_resolved = False
+    all_resolved = True
+    for one_id in _oid_list(oid):
+        trade = trade_index.get(one_id)
         if trade is not None and _has_charge_fields(trade):
-            return trade_api_charges(trade), "api"
+            total += trade_api_charges(trade)
+            any_resolved = True
+        else:
+            all_resolved = False
+    if any_resolved:
+        return total, "api" if all_resolved else "pending"
     return 0.0, "pending"
 
 
@@ -682,7 +745,7 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
     interest = 0.0
     interest_source = "none"
     if not is_short and product == "MTF":
-        entry_oid_for_interest = pos.get("entry_order_id")
+        entry_oid_for_interest = _oid_key(pos.get("entry_order_id"))
         if interest_index is not None and entry_oid_for_interest in interest_index:
             interest = interest_index[entry_oid_for_interest]
             interest_source = "api"
@@ -740,13 +803,13 @@ def position_charge_breakdown(pos: dict, trade_index: dict[str, dict] | None = N
     summary = position_charge_summary(pos, trade_index, interest_index)
 
     status     = pos.get("status", "")
-    entry_oid  = pos.get("entry_order_id")
+    entry_oid  = pos.get("entry_order_id")   # str | list[str] | None -- see _oid_list
     exit_field = _EXIT_ORDER_ID_FIELD.get(status)
-    exit_oid   = pos.get(exit_field) if exit_field else None
+    exit_oid   = pos.get(exit_field) if exit_field else None   # always a single string
 
     categories = {label: 0.0 for _, label in _CHARGE_FIELDS}
-    for oid in (entry_oid, exit_oid):
-        trade = trade_index.get(oid) if oid else None
+    for oid in (*_oid_list(entry_oid), *_oid_list(exit_oid)):
+        trade = trade_index.get(oid)
         if trade is None:
             continue
         for field, label in _CHARGE_FIELDS:

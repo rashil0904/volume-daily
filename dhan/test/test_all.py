@@ -44,6 +44,7 @@ TEST_FILES = [
     "test_order_update_feed.py",
     "test_entry_limit_subset.py",
     "test_return_buckets.py",
+    "test_charges.py",
 ]
 
 PASS = "\033[32mPASS\033[0m"

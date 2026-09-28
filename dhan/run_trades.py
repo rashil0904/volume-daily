@@ -3548,13 +3548,29 @@ class _LimitSymState:
     we have already credited.  Prevents double-counting when the same order
     appears across multiple status-check ticks with a growing filledQty
     (partial fills before final TRADED confirmation).  Reset to 0 whenever
-    active_oid is cleared."""
+    active_oid is cleared.
+
+    entry_order_ids: every real Dhan order id ever placed for this symbol
+    across the whole entry (every LIMIT tranche + the final MARKET cutoff
+    sweep, if any) -- appended at PLACEMENT time, not fill time, so a
+    tranche that got cancelled/replaced for a better bid with zero fill
+    still ends up in the list. That's harmless for charge lookups (a
+    zero-fill order has no trade-book charge record to find anyway, see
+    dhan/charges.py's _leg_charges), and simpler than tracking a separate
+    "did this one actually fill" moment. Confirmed live 2026-09-28: before
+    this field existed, every run_entry_limit position was saved with the
+    literal placeholder entry_order_id="limit_entry_multi", which can never
+    match a real Dhan orderId -- permanently stranding that leg's real
+    brokerage/STT/exchange/SEBI/stamp/GST charges at 0/"pending" forever,
+    not just until the next day's trade-book sync like a genuine same-day
+    pending leg. This list is what actually gets saved as entry_order_id
+    now (see run_entry_limit's position-write loop)."""
 
     __slots__ = (
         "symbol", "initial_desired", "tranche_size", "product", "ref",
         "capital_base", "return_pct", "return_bucket", "filled_total", "vwap_num",
         "active_oid", "active_oid_qty", "active_oid_credited", "active_bid",
-        "done",
+        "entry_order_ids", "done",
     )
 
     def __init__(self, symbol: str, initial_desired: int, product: str,
@@ -3575,6 +3591,7 @@ class _LimitSymState:
         self.active_oid_qty      = 0
         self.active_oid_credited = 0
         self.active_bid          = 0.0
+        self.entry_order_ids: list[str] = []
         self.done                = False
 
     @property
@@ -3917,6 +3934,8 @@ def run_entry_limit(
                         elif r["qty"] > 0:
                             st.vwap_num    += r["price"] * r["qty"]
                             st.filled_total += r["qty"]
+                        if r["oid"]:
+                            st.entry_order_ids.append(r["oid"])
                         st.done = True
 
             for sym in active:
@@ -4095,6 +4114,7 @@ def run_entry_limit(
                         st.active_oid_qty      = qty
                         st.active_oid_credited = 0
                         st.active_bid          = bid
+                        st.entry_order_ids.append(oid)
 
         # Step 6: sleep until next recal tick
         elapsed = time.monotonic() - tick_start
@@ -4133,6 +4153,20 @@ def run_entry_limit(
               + ("  PARTIAL" if is_partial else "  FULL")
               + ("  (DRY RUN)" if dry_run else ""))
 
+        # The real order id(s) that funded this fill (every LIMIT tranche +
+        # the cutoff MARKET sweep, if any) -- see _LimitSymState.entry_order_ids'
+        # own docstring for why this replaced the old "limit_entry_multi"
+        # placeholder, which could never be matched back to a real charge
+        # record. oid_display is a "+"-joined string for the CSV log/notify
+        # (both plain-text contexts); the saved position itself keeps the
+        # real LIST (see below) so dhan/charges.py can look each id up
+        # individually. st.entry_order_ids should never actually be empty
+        # here (filled_total > 0 implies at least one order contributed),
+        # but the placeholder stays as a defensive fallback, not a silent []
+        # that would make charge lookups look like "0 order ids" instead of
+        # "something's wrong."
+        oid_display = "+".join(st.entry_order_ids) if st.entry_order_ids else "limit_entry_multi"
+
         _append_log(trade_date, {
             "timestamp":       _ts(),
             "symbol":          sym,
@@ -4141,7 +4175,7 @@ def run_entry_limit(
             "fill_price":      round(avg_price, 4),
             "leverage":        0.0,
             "margin_required": round(st.ref * fill_qty, 2),
-            "order_id":        "limit_entry_multi",
+            "order_id":        oid_display,
             "status":          "dry_run" if dry_run else "filled",
             "product":         st.product,
             "capital_base":    st.capital_base,
@@ -4156,7 +4190,7 @@ def run_entry_limit(
                 "shares_intended":      st.initial_desired,
                 "actual_fill_price":    round(avg_price, 4),
                 "actual_fill_quantity": fill_qty,
-                "entry_order_id":       "limit_entry_multi",
+                "entry_order_id":       st.entry_order_ids or "limit_entry_multi",
                 "status":               "open",
                 "entry_timestamp":      _ts(),
                 "product":              st.product,
@@ -4167,7 +4201,7 @@ def run_entry_limit(
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{st.product}]",
                               fill_price=avg_price, shares=fill_qty,
-                              order_id="limit_entry_multi", dry_run=dry_run)
+                              order_id=oid_display, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry notify failed: {exc}", file=sys.stderr)
 

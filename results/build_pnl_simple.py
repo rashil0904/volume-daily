@@ -171,6 +171,11 @@ def _position_to_trade_row(position: dict) -> dict | None:
 
     exit_date, exit_price = _extract_exit(position)
     entry_order_id = position.get("entry_order_id") or ""
+    # A tranche entry (run_entry_limit) stores entry_order_id as a LIST --
+    # every real LIMIT/MARKET order that funded it, see dhan/charges.py's
+    # _oid_list -- joined into one readable id for display here.
+    if isinstance(entry_order_id, list):
+        entry_order_id = "+".join(entry_order_id)
     trade_id = f"DHAN-{entry_order_id}" if entry_order_id else f"DHAN-{symbol}-{entry_date}"
 
     return {
