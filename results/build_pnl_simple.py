@@ -401,9 +401,7 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
 DW_FIRST_ROW = 4
 DW_LAST_ROW  = 403
 DW_HEADERS   = ["Date", "Long Gross P&L", "Short Gross P&L", "Total Gross P&L",
-                "Long Net P&L", "Short Net P&L", "Total Net P&L",
-                "Cumulative Net P&L", "Equity", "Peak Equity",
-                "Drawdown (₹)", "Drawdown (%)"]
+                "Long Net P&L", "Short Net P&L", "Total Net P&L"]
 
 
 def build_day_wise(ws) -> None:
@@ -418,7 +416,7 @@ def build_day_wise(ws) -> None:
         ws.cell(row=3, column=col, value=header)
     style_header_row(ws, 3, len(DW_HEADERS))
 
-    widths = [14, 16, 16, 16, 16, 16, 16, 18, 14, 14, 15, 14]
+    widths = [14, 16, 16, 16, 16, 16, 16]
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
@@ -446,35 +444,17 @@ def build_day_wise(ws) -> None:
         f_formula = (f'={g}SUMIFS({tl}!$L$4:$L$503,{tl}!$G$4:$G$503,$A{r},'
                      f'{tl}!$C$4:$C$503,"SHORT"))')
         g_formula = f'=IF($A{r}="","",$E{r}+$F{r})'
-        prev = "0" if r == DW_FIRST_ROW else f"$H{r-1}"
-        h_formula = f'={g}{prev}+IF($G{r}="",0,$G{r}))'
-        # Equity = Base Capital ('Total PnL'!$B$3) + cumulative net P&L so far.
-        i_formula = f"={g}'Total PnL'!$B$3+$H{r})"
-        # Peak Equity = running high-water mark of Equity, from the first row
-        # through this one -- a plain MAX() over a growing range; blank rows
-        # below real data are ignored by MAX(), not treated as 0.
-        j_formula = f"={g}MAX($I$4:$I{r}))"
-        k_formula = f"={g}$I{r}-$J{r})"   # Drawdown (₹), always <= 0
-        l_formula = f'={g}IF($J{r}=0,"",$K{r}/$J{r}))'  # Drawdown (%), relative to peak
 
         for col_letter, formula in (
             ("B", b_formula), ("C", c_formula), ("D", d_formula),
             ("E", e_formula), ("F", f_formula), ("G", g_formula),
-            ("H", h_formula), ("I", i_formula), ("J", j_formula),
-            ("K", k_formula),
         ):
             cell = ws[f"{col_letter}{r}"]
             cell.value = formula
             style_formula(cell, INR)
 
-        cell_l = ws[f"L{r}"]; cell_l.value = l_formula; style_formula(cell_l, PCT)
-
     ws.conditional_formatting.add(
         f"G{DW_FIRST_ROW}:G{DW_LAST_ROW}",
-        CellIsRule(operator="lessThan", formula=["0"], font=RED_FONT),
-    )
-    ws.conditional_formatting.add(
-        f"K{DW_FIRST_ROW}:L{DW_LAST_ROW}",
         CellIsRule(operator="lessThan", formula=["0"], font=RED_FONT),
     )
 
@@ -955,7 +935,7 @@ def build_monthly_weekly(ws, trades: list[dict] | None = None) -> None:
 #   Row 9     spacer
 #   Row 10    Band: DETAILED STATS
 #   Row 11    secondary table header (Metric / Value)
-#   Rows12-22 secondary stats (Total Trades ... Max Drawdown %)
+#   Rows12-20 secondary stats (Total Trades ... Gross P&L %)
 #
 # The 3 charts (equity curve, win/loss pie, gross-vs-net bar) that used to
 # sit below this were removed 2026-09-28 at the user's request -- see git
@@ -969,7 +949,7 @@ CARD_NUM_BOTTOM = 8
 BAND_STATS      = 10
 STATS_HDR_ROW   = 11
 STATS_FIRST_ROW = 12
-STATS_LAST_ROW  = 22
+STATS_LAST_ROW  = 20
 DASHBOARD_COLS  = 16  # A..P
 
 BAND_FONT = Font(name=FONT_NAME, bold=True, size=11, color="FF1F3864")
@@ -1007,8 +987,6 @@ STATS_ROWS = [
     (18, "Worst Trade (₹)",  "=IFERROR(MIN('Trade Log'!$L$4:$L$503),\"\")", INR, True),
     (19, "Gross P&L (₹)",    "=SUM('Trade Log'!$I$4:$I$503)", INR, False),
     (20, "Gross P&L (%)",    '=IF($B$3=0,"",$C$19/$B$3)', PCT, False),
-    (21, "Max Drawdown (₹)", "=IFERROR(MIN('Day Wise PnL'!$K$4:$K$403),\"\")", INR, False),
-    (22, "Max Drawdown (%)", "=IFERROR(MIN('Day Wise PnL'!$L$4:$L$403),\"\")", PCT, False),
 ]
 
 
