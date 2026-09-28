@@ -838,7 +838,20 @@ def _poll_fill_strict(order_id: str) -> tuple[float, int, bool, str]:
     no-liquidity timeout, NOR on a genuine rejection for an unrelated reason
     like a circuit-limit breach -- see the reason string) can check the
     third element: True only for a genuine broker-confirmed
-    REJECTED/CANCELLED/EXPIRED, False for an unconfirmed timeout."""
+    REJECTED/CANCELLED/EXPIRED, False for an unconfirmed timeout.
+
+    An unconfirmed timeout is NOT left ambiguous at the broker anymore --
+    see the except Exception branch below. Confirmed live 2026-09-28
+    (RSYSTEMS): run_entry_limit's cutoff-sweep MARKET order sat unconfirmed
+    for the full poll window on a stock queued at its upper circuit (slow to
+    match, not rejected), so this function correctly declined to record a
+    fill -- but the order itself was left live at the broker with nobody
+    tracking it. One minute later run_entry_321's safety net saw no recorded
+    position and placed an independent full-size duplicate; ~4 minutes after
+    THAT, both orders traded for real, leaving a doubled 2122-share position
+    neither process knew existed. A human caught and unwound the excess
+    manually. The fix: on an unconfirmed timeout, actively resolve the
+    order's fate via cancel instead of walking away from it."""
     try:
         price, qty = _poll_fill(order_id)
         return price, qty, False, ""
@@ -846,9 +859,34 @@ def _poll_fill_strict(order_id: str) -> tuple[float, int, bool, str]:
         print(f"[dhan]   ORDER REJECTED — {exc}")
         return 0.0, 0, True, str(exc)
     except Exception as exc:
-        print(f"[dhan]   fill poll failed: {exc} — NOT recording as filled "
-              f"(order may still be pending at the broker; check manually)")
-        return 0.0, 0, False, ""
+        print(f"[dhan]   fill poll failed: {exc} — attempting to cancel {order_id} "
+              f"to resolve its fate before giving up.")
+        try:
+            _dhan_cancel_order(order_id)
+            print(f"[dhan]   {order_id} cancelled — confirmed it had NOT filled.")
+            return 0.0, 0, False, ""
+        except Exception as cancel_exc:
+            # A cancel can only fail like this if the order is no longer
+            # cancellable -- i.e. it already TRADED (or was already
+            # REJECTED/CANCELLED, in which case the recheck below just
+            # confirms 0/0 same as before). Either way, one more real status
+            # check recovers the truth instead of guessing.
+            print(f"[dhan]   cancel failed ({cancel_exc}) — likely already traded; "
+                  f"re-checking status.")
+            try:
+                o      = _dhan_order_status(order_id)
+                status = (o.get("orderStatus") or "").upper()
+                if status == "TRADED":
+                    price = float(o.get("averageTradedPrice") or 0)
+                    qty   = int(o.get("filledQty") or 0)
+                    print(f"[dhan]   {order_id} had actually TRADED ({qty}× ₹{price:,.2f}) "
+                          f"— recording the real fill instead of losing it.")
+                    return price, qty, False, ""
+            except Exception:
+                pass
+            print(f"[dhan]   {order_id} fate still unresolved after cancel+recheck "
+                  f"— NOT recording as filled (check manually).")
+            return 0.0, 0, False, ""
 
 
 # ── Margin / funds checks ──────────────────────────────────────────────────────

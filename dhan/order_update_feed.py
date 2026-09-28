@@ -448,8 +448,8 @@ def enable_validation_logging(feed: OrderUpdateFeed, target_module=None):
             _spawn_validation_thread(feed, order_id, poll_wall_after, "strict")
         return result
 
-    def wrapped_safe(order_id, fallback_price, fallback_qty):
-        result = real_safe(order_id, fallback_price, fallback_qty)
+    def wrapped_safe(order_id):
+        result = real_safe(order_id)
         poll_wall_after = datetime.now(_IST)
         price, qty = result[0], result[1]
         if qty <= 0:

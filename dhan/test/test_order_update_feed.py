@@ -281,13 +281,13 @@ def test_validation_websocket_missed():
         printed.append(" ".join(str(x) for x in a))
         real_print(*a, **kw)
 
-    with patch.object(rt, "_poll_fill_safe", lambda oid, fp, fq: (100.0, fq)), \
+    with patch.object(rt, "_poll_fill_safe", lambda oid: (100.0, 10)), \
          patch.object(ouf, "_VALIDATION_GRACE_SECONDS", 0.2), \
          patch.object(ouf, "_VALIDATION_POLL_INTERVAL", 0.02), \
          patch("builtins.print", spy_print):
         restore = ouf.enable_validation_logging(feed)
         try:
-            result = rt._poll_fill_safe("B3", 100.0, 10)
+            result = rt._poll_fill_safe("B3")
             check("(3c) wrapped _poll_fill_safe still returns the real result unchanged",
                   result == (100.0, 10), str(result))
             ok = wait_until(lambda: any("[WS_VALIDATION]" in l and "B3" in l for l in printed),
@@ -347,7 +347,7 @@ def test_pending_threads_tracked_and_joined():
         pass
     fake_module = FakeModule()
     fake_module._poll_fill_strict = lambda oid: (100.0, 10, False, "")
-    fake_module._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+    fake_module._poll_fill_safe   = lambda oid: (0.0, 0)
 
     feed = ouf.OrderUpdateFeed("CID", "TOKEN")
     # No cache entry for this order_id -- forces the deferred thread to run
@@ -393,7 +393,7 @@ def test_join_pending_validations_bounded_by_timeout():
         pass
     fake_module = FakeModule()
     fake_module._poll_fill_strict = lambda oid: (100.0, 10, False, "")
-    fake_module._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+    fake_module._poll_fill_safe   = lambda oid: (0.0, 0)
 
     feed = ouf.OrderUpdateFeed("CID", "TOKEN")
     with patch.object(ouf, "_VALIDATION_GRACE_SECONDS", 10.0), \
@@ -437,7 +437,7 @@ def test_target_module_patches_the_actually_running_module():
     # Simulate run_trades.py's own top-level _poll_fill_strict/_poll_fill_safe --
     # functions defined directly in the module that's executing as __main__.
     main_mod._poll_fill_strict = fake_poll_fill_strict
-    main_mod._poll_fill_safe   = lambda oid, fp, fq: (fp, fq)
+    main_mod._poll_fill_safe   = lambda oid: (0.0, 0)
 
     feed = ouf.OrderUpdateFeed("CID", "TOKEN")
     printed = []

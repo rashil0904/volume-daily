@@ -1298,6 +1298,74 @@ check("(poll-6) genuine timeout returns (0.0, 0) -- never a fabricated fallback 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-7) — _poll_fill_strict: an unconfirmed timeout now actively "
+      "resolves the order's fate via cancel, instead of walking away and leaving it "
+      "live at the broker (the exact gap that let RSYSTEMS double-buy, 2026-09-28)\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fake_order_status_p7(oid):
+    return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0.0}
+
+cancel_calls_p7 = []
+def fake_cancel_p7(oid):
+    cancel_calls_p7.append(oid)
+    return oid
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p7), \
+     patch.object(rt, "_dhan_cancel_order", fake_cancel_p7), \
+     patch.object(rt.time, "sleep", lambda secs: None):
+    price_p7, qty_p7, rejected_p7, reason_p7 = rt._poll_fill_strict("ORD-P7")
+
+check("(poll-7) a clean cancel confirms the order truly hadn't filled -> (0.0, 0, False, '')",
+      (price_p7, qty_p7, rejected_p7) == (0.0, 0, False), str((price_p7, qty_p7, rejected_p7)))
+check("(poll-7) the still-live order was actually cancelled, not just abandoned",
+      cancel_calls_p7 == ["ORD-P7"], str(cancel_calls_p7))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-8) — _poll_fill_strict: cancel FAILS (order already traded at "
+      "the broker) -- the real fill is recovered via a recheck, not silently lost\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fake_order_status_p8(oid):
+    return {"orderStatus": "TRADED", "filledQty": 1061, "averageTradedPrice": 282.74}
+
+def fake_cancel_fails_p8(oid):
+    raise RuntimeError("[trade] Cancel failed: order already executed")
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p8), \
+     patch.object(rt, "_dhan_cancel_order", fake_cancel_fails_p8), \
+     patch.object(rt.time, "sleep", lambda secs: None):
+    price_p8, qty_p8, rejected_p8, reason_p8 = rt._poll_fill_strict("ORD-P8")
+
+check("(poll-8) cancel-fails-because-already-traded recovers the REAL fill via recheck, "
+      "not a lost/zeroed-out result",
+      (price_p8, qty_p8, rejected_p8) == (282.74, 1061, False),
+      str((price_p8, qty_p8, rejected_p8)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+print("\nScenario (poll-9) — _poll_fill_strict: cancel fails AND the recheck is still "
+      "inconclusive -- falls back to NOT FILLED rather than guessing\n")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def fake_order_status_p9(oid):
+    return {"orderStatus": "PENDING", "filledQty": 0, "averageTradedPrice": 0.0}
+
+def fake_cancel_fails_p9(oid):
+    raise RuntimeError("[trade] Cancel failed: network error")
+
+with patch.object(rt, "_dhan_order_status", fake_order_status_p9), \
+     patch.object(rt, "_dhan_cancel_order", fake_cancel_fails_p9), \
+     patch.object(rt.time, "sleep", lambda secs: None):
+    price_p9, qty_p9, rejected_p9, reason_p9 = rt._poll_fill_strict("ORD-P9")
+
+check("(poll-9) still genuinely unresolved after cancel+recheck -> (0.0, 0, False, ''), "
+      "never a guess",
+      (price_p9, qty_p9, rejected_p9) == (0.0, 0, False), str((price_p9, qty_p9, rejected_p9)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 print("\nScenario (bal-entry) — run_entry_321: balance fetched ONCE for the whole run, "
       "tracked locally as each order is placed (not re-fetched per symbol)\n")
 # ─────────────────────────────────────────────────────────────────────────────
