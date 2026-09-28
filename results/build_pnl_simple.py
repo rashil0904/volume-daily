@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-build_pnl_simple.py -- generates strategy_pnl_simple.xlsx, a minimal 4-sheet
-P&L tracker for a live NSE intraday strategy that trades both long and short
+build_pnl_simple.py -- generates strategy_pnl_simple.xlsx, an 8-sheet P&L
+tracker for a live NSE intraday strategy that trades both long and short
 positions.
 
-Sheet order: Total PnL, Trade Log, Day Wise PnL, Position Type Stats, Company Stats.
+Sheet order: Total PnL, Trade Log, Day Wise PnL, Position Type Stats,
+Bucket Stats, Company Stats, Charges, Monthly & Weekly PnL.
 Every computed cell is a formula string -- openpyxl never pre-computes a
 value in Python. Formulas avoid XLOOKUP/XMATCH/SORT/FILTER/UNIQUE/SEQUENCE
 for LibreOffice/Google Sheets compatibility; MAXIFS/MINIFS are written as
@@ -18,7 +19,7 @@ Usage:
 import json
 import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -30,12 +31,6 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.rule import CellIsRule, FormulaRule, DataBarRule
-from openpyxl.chart import LineChart, BarChart, PieChart, Reference
-from openpyxl.chart.series import SeriesLabel
-from openpyxl.chart.marker import DataPoint
-from openpyxl.chart.shapes import GraphicalProperties
-from openpyxl.chart.axis import ChartLines
-from openpyxl.drawing.line import LineProperties
 
 RESULTS_DIR = Path(__file__).resolve().parent
 OUT_PATH    = RESULTS_DIR / "strategy_pnl_simple.xlsx"
@@ -50,9 +45,11 @@ DHAN_POSITIONS_SHORT_PATH = RESULTS_DIR / "positions_dhan_short.json"
 PNL_START_DATE = "2026-08-19"
 
 # ── Number formats ──────────────────────────────────────────────────────────
-INR   = '₹#,##0;(₹#,##0);"-"'
+# Every non-integer figure in the workbook shows exactly 2 decimal places --
+# INR and PCT both round to 2 digits; NUM (trade/win/loss counts) stays a
+# plain integer since a count of trades has no fractional meaning.
+INR   = '₹#,##0.00;(₹#,##0.00);"-"'
 PCT   = '0.00%;(0.00%);"-"'
-PCT1  = '0.0%;(0.0%);"-"'
 NUM   = '#,##0;(#,##0);"-"'
 PRICE = '#,##0.00'
 DATE  = 'yyyy-mm-dd'
@@ -135,8 +132,8 @@ def style_example(cell, number_format: str | None = None) -> None:
 TL_FIRST_ROW = 4
 TL_LAST_ROW  = 503
 TL_HEADERS   = ["Trade ID", "Symbol", "Position", "Entry Date", "Entry Price",
-                "Qty", "Exit Date", "Exit Price", "Gross P&L", "Costs",
-                "Net P&L", "Net Return %", "Status"]
+                "Qty", "Exit Date", "Exit Price", "Gross P&L", "Gross Return %",
+                "Costs", "Net P&L", "Net Return %", "Status", "Return Bucket"]
 
 
 def _extract_exit(position: dict) -> tuple[str | None, float | None]:
@@ -181,6 +178,15 @@ def _position_to_trade_row(position: dict) -> dict | None:
         "entry_date": date.fromisoformat(entry_date), "entry_price": float(entry_price), "qty": int(qty),
         "exit_date": date.fromisoformat(exit_date) if exit_date else None,
         "exit_price": exit_price,
+        # return_bucket only exists on positions entered after the
+        # return-bucketed exit schedule shipped (2026-09-26) -- older trades
+        # get the literal "Untagged" here (NOT ""/blank -- COUNTIFS/SUMIFS
+        # matching a blank/"" criteria against another FORMULA-computed
+        # range at Trade Log's 500-row scale is unreliable in LibreOffice,
+        # confirmed via a direct repro: it silently undercounts to 0 even
+        # when real matches exist. An explicit literal sidesteps that
+        # engine quirk entirely -- see Bucket Stats' matching note).
+        "bucket": position.get("return_bucket") or "Untagged",
     }
 
 
@@ -207,6 +213,21 @@ def _live_cost(position: dict, trade_index: dict[str, dict],
     try:
         return dhan_charges.position_charge_summary(
             position, trade_index, interest_index)["total_charges"]
+    except Exception:
+        return None
+
+
+def _live_charge_breakdown(position: dict, trade_index: dict[str, dict],
+                           interest_index: dict[str, float]) -> dict | None:
+    """Per-category charge split (Brokerage/STT/Exchange/SEBI/Stamp/GST/DP/
+    Pledge/MTF Interest) for the Charges sheet, via
+    dhan.charges.position_charge_breakdown() -- same real-API-only,
+    no-guessed-numbers rules as _live_cost (see its own docstring), just
+    exposing the categories individually instead of one total. Returns None
+    on ANY failure, same reasoning as _live_cost: a blank row means "no
+    charge data yet," never a guessed number."""
+    try:
+        return dhan_charges.position_charge_breakdown(position, trade_index, interest_index)
     except Exception:
         return None
 
@@ -252,9 +273,13 @@ def load_trades_from_positions() -> list[dict]:
         if row is None:
             continue
         row["cost"] = _live_cost(pos, trade_index, interest_index)
+        row["charges"] = _live_charge_breakdown(pos, trade_index, interest_index)
         trades.append(row)
 
-    trades.sort(key=lambda t: (t["entry_date"], t["symbol"]))
+    # Sorted by exit date -- still-open positions (no exit yet) have none,
+    # so they sort after every closed trade rather than colliding with a
+    # placeholder date; symbol is just the tiebreak within either group.
+    trades.sort(key=lambda t: (t["exit_date"] is None, t["exit_date"] or date.max, t["symbol"]))
     return trades
 
 
@@ -267,7 +292,7 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
     set_title_subtitle(
         ws, "Trade Log",
         "One row per position -- long and short trades are logged separately. "
-        "Fill columns A-H and J; formulas compute I, K, L, M.",
+        "Fill columns A-H, K and O; formulas compute I, J, L, M, N.",
         len(TL_HEADERS),
     )
 
@@ -275,16 +300,16 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
         ws.cell(row=3, column=col, value=header)
     style_header_row(ws, 3, len(TL_HEADERS))
 
-    widths = [26, 14, 10, 12, 12, 9, 12, 12, 12, 10, 12, 12, 10]
+    widths = [26, 14, 10, 12, 12, 9, 12, 12, 12, 13, 10, 12, 12, 10, 14]
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
-    manual_fmts = {"D": DATE, "E": PRICE, "F": NUM, "G": DATE, "H": PRICE, "J": INR}
+    manual_fmts = {"D": DATE, "E": PRICE, "F": NUM, "G": DATE, "H": PRICE, "K": INR}
     synced_rows: dict[int, dict] = {}
 
     if trades:
         # Auto-synced from real Dhan fills -- still input-styled (blue/yellow)
-        # since Costs (J) stays user-editable and everything regenerates from
+        # since Costs (K) stays user-editable and everything regenerates from
         # position JSON on every run anyway.
         for offset, trade in enumerate(trades[: TL_LAST_ROW - TL_FIRST_ROW + 1]):
             r = TL_FIRST_ROW + offset
@@ -293,7 +318,8 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
                 "A": trade["id"], "B": trade["symbol"], "C": trade["position"],
                 "D": trade["entry_date"], "E": trade["entry_price"], "F": trade["qty"],
                 "G": trade["exit_date"] or "", "H": trade["exit_price"] if trade["exit_price"] is not None else "",
-                "J": trade["cost"] if trade.get("cost") is not None else 0,
+                "K": trade["cost"] if trade.get("cost") is not None else 0,
+                "O": trade.get("bucket") or "",
             }
             for col_letter, val in row_vals.items():
                 cell = ws[f"{col_letter}{r}"]
@@ -307,12 +333,14 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
                 "symbol": "RELIANCE", "position": "LONG",
                 "entry_date": date(2026, 7, 31), "entry_price": 2500.00, "qty": 100,
                 "exit_date": date(2026, 8, 1), "exit_price": 2550.00, "costs": 150,
+                "bucket": "10-15",
             },
             {
                 "id": "EX-SHORT-1 (EXAMPLE — delete before real use)",
                 "symbol": "TCS", "position": "SHORT",
                 "entry_date": date(2026, 7, 31), "entry_price": 3600.00, "qty": 50,
                 "exit_date": date(2026, 8, 1), "exit_price": 3550.00, "costs": 100,
+                "bucket": "5-10",
             },
         ]
         for offset, ex in enumerate(examples):
@@ -320,7 +348,8 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
             row_vals = {
                 "A": ex["id"], "B": ex["symbol"], "C": ex["position"],
                 "D": ex["entry_date"], "E": ex["entry_price"], "F": ex["qty"],
-                "G": ex["exit_date"], "H": ex["exit_price"], "J": ex["costs"],
+                "G": ex["exit_date"], "H": ex["exit_price"], "K": ex["costs"],
+                "O": ex["bucket"],
             }
             for col_letter, val in row_vals.items():
                 cell = ws[f"{col_letter}{r}"]
@@ -330,34 +359,41 @@ def build_trade_log(ws, trades: list[dict] | None = None) -> None:
     # Manual input styling (for every row not already synced/example above) + formulas, rows 4-503.
     for r in range(TL_FIRST_ROW, TL_LAST_ROW + 1):
         if r not in synced_rows and not (not trades and r in (4, 5)):
-            for col_letter in ("A", "B", "C", "D", "E", "F", "G", "H", "J"):
+            for col_letter in ("A", "B", "C", "D", "E", "F", "G", "H", "K", "O"):
                 cell = ws[f"{col_letter}{r}"]
                 style_input(cell, manual_fmts.get(col_letter))
 
         i_formula = (f'=IF(OR($B{r}="",$H{r}=""),"",'
                      f'IF($C{r}="LONG",($H{r}-$E{r})*$F{r},($E{r}-$H{r})*$F{r}))')
-        k_formula = f'=IF(OR($B{r}="",$I{r}=""),"",$I{r}-IF($J{r}="",0,$J{r}))'
-        l_formula = f'=IF(OR($B{r}="",$K{r}="",$E{r}=0,$F{r}=0),"",$K{r}/($E{r}*$F{r}))'
-        m_formula = f'=IF($B{r}="","",IF($H{r}="","Open","Closed"))'
+        j_formula = f'=IF(OR($B{r}="",$I{r}="",$E{r}=0,$F{r}=0),"",$I{r}/($E{r}*$F{r}))'
+        l_formula = f'=IF(OR($B{r}="",$I{r}=""),"",$I{r}-IF($K{r}="",0,$K{r}))'
+        m_formula = f'=IF(OR($B{r}="",$L{r}="",$E{r}=0,$F{r}=0),"",$L{r}/($E{r}*$F{r}))'
+        n_formula = f'=IF($B{r}="","",IF($H{r}="","Open","Closed"))'
 
         cell_i = ws[f"I{r}"]; cell_i.value = i_formula; style_formula(cell_i, INR)
-        cell_k = ws[f"K{r}"]; cell_k.value = k_formula; style_formula(cell_k, INR)
-        cell_l = ws[f"L{r}"]; cell_l.value = l_formula; style_formula(cell_l, PCT)
-        cell_m = ws[f"M{r}"]; cell_m.value = m_formula; style_formula(cell_m)
+        cell_j = ws[f"J{r}"]; cell_j.value = j_formula; style_formula(cell_j, PCT)
+        cell_l = ws[f"L{r}"]; cell_l.value = l_formula; style_formula(cell_l, INR)
+        cell_m = ws[f"M{r}"]; cell_m.value = m_formula; style_formula(cell_m, PCT)
+        cell_n = ws[f"N{r}"]; cell_n.value = n_formula; style_formula(cell_n)
 
     # Data validation: Position dropdown.
     dv = DataValidation(type="list", formula1='"LONG,SHORT"', allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(f"C{TL_FIRST_ROW}:C{TL_LAST_ROW}")
 
+    # Data validation: Return Bucket dropdown.
+    dv_bucket = DataValidation(type="list", formula1='"5-10,10-15,15-20,Untagged"', allow_blank=True)
+    ws.add_data_validation(dv_bucket)
+    dv_bucket.add(f"O{TL_FIRST_ROW}:O{TL_LAST_ROW}")
+
     # Conditional formatting: Net P&L < 0 -> red font.
     ws.conditional_formatting.add(
-        f"K{TL_FIRST_ROW}:K{TL_LAST_ROW}",
+        f"L{TL_FIRST_ROW}:L{TL_LAST_ROW}",
         CellIsRule(operator="lessThan", formula=["0"], font=RED_FONT),
     )
 
     ws.freeze_panes = "C4"
-    ws.auto_filter.ref = f"A3:M{TL_LAST_ROW}"
+    ws.auto_filter.ref = f"A3:O{TL_LAST_ROW}"
 
 
 # ── Sheet 3: Day Wise PnL ────────────────────────────────────────────────────
@@ -366,7 +402,8 @@ DW_FIRST_ROW = 4
 DW_LAST_ROW  = 403
 DW_HEADERS   = ["Date", "Long Gross P&L", "Short Gross P&L", "Total Gross P&L",
                 "Long Net P&L", "Short Net P&L", "Total Net P&L",
-                "Cumulative Net P&L"]
+                "Cumulative Net P&L", "Equity", "Peak Equity",
+                "Drawdown (₹)", "Drawdown (%)"]
 
 
 def build_day_wise(ws) -> None:
@@ -381,7 +418,7 @@ def build_day_wise(ws) -> None:
         ws.cell(row=3, column=col, value=header)
     style_header_row(ws, 3, len(DW_HEADERS))
 
-    widths = [14, 16, 16, 16, 16, 16, 16, 18]
+    widths = [14, 16, 16, 16, 16, 16, 16, 18, 14, 14, 15, 14]
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
@@ -404,25 +441,40 @@ def build_day_wise(ws) -> None:
         c_formula = (f'={g}SUMIFS({tl}!$I$4:$I$503,{tl}!$G$4:$G$503,$A{r},'
                      f'{tl}!$C$4:$C$503,"SHORT"))')
         d_formula = f'=IF($A{r}="","",$B{r}+$C{r})'
-        e_formula = (f'={g}SUMIFS({tl}!$K$4:$K$503,{tl}!$G$4:$G$503,$A{r},'
+        e_formula = (f'={g}SUMIFS({tl}!$L$4:$L$503,{tl}!$G$4:$G$503,$A{r},'
                      f'{tl}!$C$4:$C$503,"LONG"))')
-        f_formula = (f'={g}SUMIFS({tl}!$K$4:$K$503,{tl}!$G$4:$G$503,$A{r},'
+        f_formula = (f'={g}SUMIFS({tl}!$L$4:$L$503,{tl}!$G$4:$G$503,$A{r},'
                      f'{tl}!$C$4:$C$503,"SHORT"))')
         g_formula = f'=IF($A{r}="","",$E{r}+$F{r})'
         prev = "0" if r == DW_FIRST_ROW else f"$H{r-1}"
         h_formula = f'={g}{prev}+IF($G{r}="",0,$G{r}))'
+        # Equity = Base Capital ('Total PnL'!$B$3) + cumulative net P&L so far.
+        i_formula = f"={g}'Total PnL'!$B$3+$H{r})"
+        # Peak Equity = running high-water mark of Equity, from the first row
+        # through this one -- a plain MAX() over a growing range; blank rows
+        # below real data are ignored by MAX(), not treated as 0.
+        j_formula = f"={g}MAX($I$4:$I{r}))"
+        k_formula = f"={g}$I{r}-$J{r})"   # Drawdown (₹), always <= 0
+        l_formula = f'={g}IF($J{r}=0,"",$K{r}/$J{r}))'  # Drawdown (%), relative to peak
 
         for col_letter, formula in (
             ("B", b_formula), ("C", c_formula), ("D", d_formula),
             ("E", e_formula), ("F", f_formula), ("G", g_formula),
-            ("H", h_formula),
+            ("H", h_formula), ("I", i_formula), ("J", j_formula),
+            ("K", k_formula),
         ):
             cell = ws[f"{col_letter}{r}"]
             cell.value = formula
             style_formula(cell, INR)
 
+        cell_l = ws[f"L{r}"]; cell_l.value = l_formula; style_formula(cell_l, PCT)
+
     ws.conditional_formatting.add(
         f"G{DW_FIRST_ROW}:G{DW_LAST_ROW}",
+        CellIsRule(operator="lessThan", formula=["0"], font=RED_FONT),
+    )
+    ws.conditional_formatting.add(
+        f"K{DW_FIRST_ROW}:L{DW_LAST_ROW}",
         CellIsRule(operator="lessThan", formula=["0"], font=RED_FONT),
     )
 
@@ -432,7 +484,8 @@ def build_day_wise(ws) -> None:
 # ── Sheet 4: Position Type Stats ─────────────────────────────────────────────
 
 PS_HEADERS = ["Position", "Trades", "Wins", "Losses", "Win Rate", "Gross P&L",
-              "Net P&L", "Avg Net P&L / Trade", "Best Trade", "Worst Trade"]
+              "Net P&L", "Avg Net P&L / Trade", "Best Trade", "Worst Trade",
+              "Profit Factor"]
 
 
 def build_position_stats(ws) -> None:
@@ -446,27 +499,29 @@ def build_position_stats(ws) -> None:
         ws.cell(row=3, column=col, value=header)
     style_header_row(ws, 3, len(PS_HEADERS))
 
-    widths = [12, 10, 9, 10, 11, 14, 14, 16, 14, 14]
+    widths = [12, 10, 9, 10, 11, 14, 14, 16, 14, 14, 14]
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
     tl = "'Trade Log'"
-    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT1, "F": INR, "G": INR,
-               "H": INR, "I": INR, "J": INR}
+    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT, "F": INR, "G": INR,
+               "H": INR, "I": INR, "J": INR, "K": XMULT}
 
     for r, position in ((4, "LONG"), (5, "SHORT")):
         cell_a = ws[f"A{r}"]; cell_a.value = position; style_formula(cell_a)
 
         formulas = {
             "B": f"=COUNTIF({tl}!$C$4:$C$503,$A{r})",
-            "C": f'=COUNTIFS({tl}!$C$4:$C$503,$A{r},{tl}!$K$4:$K$503,">0")',
-            "D": f'=COUNTIFS({tl}!$C$4:$C$503,$A{r},{tl}!$K$4:$K$503,"<0")',
+            "C": f'=COUNTIFS({tl}!$C$4:$C$503,$A{r},{tl}!$L$4:$L$503,">0")',
+            "D": f'=COUNTIFS({tl}!$C$4:$C$503,$A{r},{tl}!$L$4:$L$503,"<0")',
             "E": f'=IFERROR($C{r}/$B{r},"")',
             "F": f"=SUMIF({tl}!$C$4:$C$503,$A{r},{tl}!$I$4:$I$503)",
-            "G": f"=SUMIF({tl}!$C$4:$C$503,$A{r},{tl}!$K$4:$K$503)",
+            "G": f"=SUMIF({tl}!$C$4:$C$503,$A{r},{tl}!$L$4:$L$503)",
             "H": f'=IFERROR($G{r}/$B{r},"")',
-            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$K$4:$K$503,{tl}!$C$4:$C$503,$A{r}),"")',
-            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$K$4:$K$503,{tl}!$C$4:$C$503,$A{r}),"")',
+            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$L$4:$L$503,{tl}!$C$4:$C$503,$A{r}),"")',
+            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$L$4:$L$503,{tl}!$C$4:$C$503,$A{r}),"")',
+            "K": (f'=IFERROR(SUMIFS({tl}!$L$4:$L$503,{tl}!$C$4:$C$503,$A{r},{tl}!$L$4:$L$503,">0")/'
+                  f'ABS(SUMIFS({tl}!$L$4:$L$503,{tl}!$C$4:$C$503,$A{r},{tl}!$L$4:$L$503,"<0")),"")'),
         }
         for col_letter, formula in formulas.items():
             cell = ws[f"{col_letter}{r}"]
@@ -486,6 +541,99 @@ def build_position_stats(ws) -> None:
         "F": "=SUM(F4:F5)",
         "G": "=SUM(G4:G5)",
         "H": f'=IFERROR(G{total_row}/B{total_row},"")',
+        "K": (f'=IFERROR(SUMIF({tl}!$L$4:$L$503,">0")/'
+              f'ABS(SUMIF({tl}!$L$4:$L$503,"<0")),"")'),
+    }
+    for col_letter, formula in total_formulas.items():
+        cell = ws[f"{col_letter}{total_row}"]
+        cell.value = formula
+        cell.font = TOTAL_FONT
+        cell.number_format = col_fmt[col_letter]
+
+
+# ── Sheet: Bucket Stats ──────────────────────────────────────────────────────
+# Same shape as Position Type Stats, grouped by Trade Log's Return Bucket (O)
+# column instead of Position (C). "Untagged" catches trades with no
+# return_bucket at all -- every trade entered before the return-bucketed
+# exit schedule shipped (2026-09-26); real bucket data (and therefore
+# meaningful bucket-wise stats) only exists for trades entered from then on.
+
+BK_HEADERS = ["Bucket", "Trades", "Wins", "Losses", "Win Rate", "Gross P&L",
+              "Net P&L", "Avg Net P&L / Trade", "Best Trade", "Worst Trade",
+              "Profit Factor"]
+BK_BUCKETS = ["5-10", "10-15", "15-20", "Untagged"]
+
+
+def build_bucket_stats(ws) -> None:
+    set_title_subtitle(
+        ws, "Bucket Stats",
+        "Performance by entry-signal return bucket (5-10% / 10-15% / 15-20%), "
+        "computed straight from Trade Log. Untagged = entered before the "
+        "return-bucketed exit schedule shipped (2026-09-26).",
+        len(BK_HEADERS),
+    )
+
+    for col, header in enumerate(BK_HEADERS, start=1):
+        ws.cell(row=3, column=col, value=header)
+    style_header_row(ws, 3, len(BK_HEADERS))
+
+    widths = [12, 10, 9, 10, 11, 14, 14, 16, 14, 14, 14]
+    for col, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    tl = "'Trade Log'"
+    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT, "F": INR, "G": INR,
+               "H": INR, "I": INR, "J": INR, "K": XMULT}
+
+    def _row_formulas(r: int) -> dict:
+        # $A{r} -- every row (including "Untagged") matches a real, always-
+        # populated literal in Trade Log's O column. Deliberately NOT a
+        # blank/"" criteria: COUNTIFS/SUMIFS matching blank against another
+        # FORMULA-computed range at Trade Log's 500-row scale is unreliable
+        # in LibreOffice (confirmed via direct repro -- silently undercounts
+        # to 0 even when real matches exist), which is why untagged trades
+        # are tagged with the literal "Untagged" in Trade Log rather than
+        # left blank -- see _position_to_trade_row's own note.
+        criteria = f"$A{r}"
+        return {
+            "B": f"=COUNTIF({tl}!$O$4:$O$503,{criteria})",
+            "C": f'=COUNTIFS({tl}!$O$4:$O$503,{criteria},{tl}!$L$4:$L$503,">0")',
+            "D": f'=COUNTIFS({tl}!$O$4:$O$503,{criteria},{tl}!$L$4:$L$503,"<0")',
+            "E": f'=IFERROR($C{r}/$B{r},"")',
+            "F": f"=SUMIF({tl}!$O$4:$O$503,{criteria},{tl}!$I$4:$I$503)",
+            "G": f"=SUMIF({tl}!$O$4:$O$503,{criteria},{tl}!$L$4:$L$503)",
+            "H": f'=IFERROR($G{r}/$B{r},"")',
+            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$L$4:$L$503,{tl}!$O$4:$O$503,{criteria}),"")',
+            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$L$4:$L$503,{tl}!$O$4:$O$503,{criteria}),"")',
+            "K": (f'=IFERROR(SUMIFS({tl}!$L$4:$L$503,{tl}!$O$4:$O$503,{criteria},{tl}!$L$4:$L$503,">0")/'
+                  f'ABS(SUMIFS({tl}!$L$4:$L$503,{tl}!$O$4:$O$503,{criteria},{tl}!$L$4:$L$503,"<0")),"")'),
+        }
+
+    for offset, bucket in enumerate(BK_BUCKETS):
+        r = 4 + offset
+        cell_a = ws[f"A{r}"]; cell_a.value = bucket; style_formula(cell_a)
+        for col_letter, formula in _row_formulas(r).items():
+            cell = ws[f"{col_letter}{r}"]
+            cell.value = formula
+            style_formula(cell, col_fmt[col_letter])
+
+    # TOTAL row.
+    total_row = 4 + len(BK_BUCKETS)
+    first_data_row = 4
+    last_data_row = total_row - 1
+    ws[f"A{total_row}"] = "TOTAL"
+    ws[f"A{total_row}"].font = TOTAL_FONT
+
+    total_formulas = {
+        "B": f"=SUM(B{first_data_row}:B{last_data_row})",
+        "C": f"=SUM(C{first_data_row}:C{last_data_row})",
+        "D": f"=SUM(D{first_data_row}:D{last_data_row})",
+        "E": f'=IFERROR(C{total_row}/B{total_row},"")',
+        "F": f"=SUM(F{first_data_row}:F{last_data_row})",
+        "G": f"=SUM(G{first_data_row}:G{last_data_row})",
+        "H": f'=IFERROR(G{total_row}/B{total_row},"")',
+        "K": (f'=IFERROR(SUMIF({tl}!$L$4:$L$503,">0")/'
+              f'ABS(SUMIF({tl}!$L$4:$L$503,"<0")),"")'),
     }
     for col_letter, formula in total_formulas.items():
         cell = ws[f"{col_letter}{total_row}"]
@@ -524,7 +672,7 @@ def build_company_stats(ws, trades: list[dict]) -> None:
         ws.column_dimensions[get_column_letter(col)].width = w
 
     tl = "'Trade Log'"
-    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT1, "F": INR, "G": INR,
+    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT, "F": INR, "G": INR,
                "H": INR, "I": INR, "J": INR}
 
     symbols = sorted({t["symbol"] for t in (trades or [])})
@@ -536,14 +684,14 @@ def build_company_stats(ws, trades: list[dict]) -> None:
 
         formulas = {
             "B": f"=COUNTIF({tl}!$B$4:$B$503,$A{r})",
-            "C": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503,">0")',
-            "D": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503,"<0")',
+            "C": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$L$4:$L$503,">0")',
+            "D": f'=COUNTIFS({tl}!$B$4:$B$503,$A{r},{tl}!$L$4:$L$503,"<0")',
             "E": f'=IFERROR($C{r}/$B{r},"")',
             "F": f"=SUMIF({tl}!$B$4:$B$503,$A{r},{tl}!$I$4:$I$503)",
-            "G": f"=SUMIF({tl}!$B$4:$B$503,$A{r},{tl}!$K$4:$K$503)",
+            "G": f"=SUMIF({tl}!$B$4:$B$503,$A{r},{tl}!$L$4:$L$503)",
             "H": f'=IFERROR($G{r}/$B{r},"")',
-            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$K$4:$K$503,{tl}!$B$4:$B$503,$A{r}),"")',
-            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$K$4:$K$503,{tl}!$B$4:$B$503,$A{r}),"")',
+            "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$L$4:$L$503,{tl}!$B$4:$B$503,$A{r}),"")',
+            "J": f'=IFERROR(_xlfn.MINIFS({tl}!$L$4:$L$503,{tl}!$B$4:$B$503,$A{r}),"")',
         }
         for col_letter, formula in formulas.items():
             cell = ws[f"{col_letter}{r}"]
@@ -574,9 +722,229 @@ def build_company_stats(ws, trades: list[dict]) -> None:
     ws.freeze_panes = "A4"
 
 
+# ── Sheet 6: Charges ─────────────────────────────────────────────────────────
+# Per-trade breakdown of the real API charge categories (Brokerage/STT/
+# Exchange/SEBI/Stamp/GST, summed across entry+exit legs) plus DP/Pledge/MTF
+# Interest -- see dhan.charges.position_charge_breakdown(). Same "no
+# manual-entry padding" convention as Company Stats: purely a derived report,
+# one row per trade actually in Trade Log, in the same exit-date order.
+# Category values are synced Python numbers (real API data, like Trade Log's
+# own synced columns), NOT formulas -- there's nothing else in the workbook
+# to derive them FROM. Only Total Charges is a formula, so a manual tweak to
+# one category still recalculates the row's total live.
+
+CH_HEADERS = ["Trade ID", "Symbol", "Position", "Exit Date", "Brokerage", "STT",
+              "Exchange", "SEBI", "Stamp", "GST", "DP", "Pledge/Unpledge",
+              "MTF Interest", "Total Charges"]
+_CH_CATEGORY_KEYS = ["Brokerage", "STT", "Exchange", "SEBI", "Stamp", "GST"]
+
+
+def build_charges(ws, trades: list[dict] | None = None) -> None:
+    set_title_subtitle(
+        ws, "Charges",
+        "Real per-trade charge breakdown from Dhan's trade-book, by category -- synced from Trade Log.",
+        len(CH_HEADERS),
+    )
+
+    for col, header in enumerate(CH_HEADERS, start=1):
+        ws.cell(row=3, column=col, value=header)
+    style_header_row(ws, 3, len(CH_HEADERS))
+
+    widths = [26, 14, 10, 12, 12, 10, 12, 10, 10, 10, 10, 15, 13, 14]
+    for col, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    manual_fmts = {"D": DATE}
+    charge_fmts = {col_letter: INR for col_letter in "EFGHIJKLM"}
+
+    first_row = 4
+    trades = trades or []
+
+    for offset, trade in enumerate(trades):
+        r = first_row + offset
+        charges = trade.get("charges") or {}
+
+        row_vals = {
+            "A": trade["id"], "B": trade["symbol"], "C": trade["position"],
+            "D": trade["exit_date"] or "",
+            "E": charges.get("Brokerage", 0), "F": charges.get("STT", 0),
+            "G": charges.get("Exchange", 0), "H": charges.get("SEBI", 0),
+            "I": charges.get("Stamp", 0), "J": charges.get("GST", 0),
+            "K": charges.get("dp_charge", 0), "L": charges.get("pledge_charge", 0),
+            "M": charges.get("mtf_interest", 0),
+        }
+        for col_letter, val in row_vals.items():
+            cell = ws[f"{col_letter}{r}"]
+            cell.value = val
+            style_input(cell, manual_fmts.get(col_letter) or charge_fmts.get(col_letter))
+
+        cell_n = ws[f"N{r}"]
+        cell_n.value = f"=SUM(E{r}:M{r})"
+        style_formula(cell_n, INR)
+
+    if trades:
+        total_row = first_row + len(trades)
+        last_data_row = total_row - 1
+        ws[f"A{total_row}"] = "TOTAL"
+        ws[f"A{total_row}"].font = TOTAL_FONT
+
+        for col_letter in "EFGHIJKLMN":
+            cell = ws[f"{col_letter}{total_row}"]
+            cell.value = f"=SUM({col_letter}{first_row}:{col_letter}{last_data_row})"
+            cell.font = TOTAL_FONT
+            cell.number_format = INR
+
+    ws.freeze_panes = "C4"
+    if trades:
+        ws.auto_filter.ref = f"A3:N{first_row + len(trades) - 1}"
+
+
+# ── Sheet: Monthly & Weekly PnL ───────────────────────────────────────────────
+# Two tables, one sheet: month-wise then week-wise P&L, both attributed by
+# Exit Date like Day Wise PnL. The distinct month/week list isn't knowable in
+# advance (same reasoning as Company Stats' symbol list -- no UNIQUE()/
+# FILTER() for LibreOffice/Google Sheets compatibility), so it's computed
+# here in Python from the same `trades` list and written as literal date
+# bounds baked into each row's own SUMIFS/COUNTIFS -- there's no dependency
+# on the label cell itself, unlike Position/Bucket Stats' $A{r}-driven
+# formulas, since a month/week is a date RANGE, not a single matchable value.
+
+MW_HEADERS = ["Period", "Trades", "Wins", "Losses", "Win Rate", "Gross P&L",
+              "Net P&L", "Avg Net P&L / Trade", "Best Trade", "Worst Trade",
+              "Profit Factor"]
+
+
+def _month_bounds(y: int, m: int) -> tuple[str, str]:
+    start = f"DATE({y},{m},1)"
+    end = f"DATE({y+1},1,1)" if m == 12 else f"DATE({y},{m+1},1)"
+    return start, end
+
+
+def _week_bounds(monday: date) -> tuple[str, str]:
+    end = monday + timedelta(days=7)
+    start = f"DATE({monday.year},{monday.month},{monday.day})"
+    return start, f"DATE({end.year},{end.month},{end.day})"
+
+
+def _period_row_formulas(r: int, tl: str, start_expr: str, end_expr: str) -> dict:
+    date_cond = f'{tl}!$G$4:$G$503,">="&{start_expr},{tl}!$G$4:$G$503,"<"&{end_expr}'
+    return {
+        "B": f"=COUNTIFS({date_cond})",
+        "C": f'=COUNTIFS({date_cond},{tl}!$L$4:$L$503,">0")',
+        "D": f'=COUNTIFS({date_cond},{tl}!$L$4:$L$503,"<0")',
+        "E": f'=IFERROR($C{r}/$B{r},"")',
+        "F": f"=SUMIFS({tl}!$I$4:$I$503,{date_cond})",
+        "G": f"=SUMIFS({tl}!$L$4:$L$503,{date_cond})",
+        "H": f'=IFERROR($G{r}/$B{r},"")',
+        "I": f'=IFERROR(_xlfn.MAXIFS({tl}!$L$4:$L$503,{date_cond}),"")',
+        "J": f'=IFERROR(_xlfn.MINIFS({tl}!$L$4:$L$503,{date_cond}),"")',
+        "K": (f'=IFERROR(SUMIFS({tl}!$L$4:$L$503,{date_cond},{tl}!$L$4:$L$503,">0")/'
+              f'ABS(SUMIFS({tl}!$L$4:$L$503,{date_cond},{tl}!$L$4:$L$503,"<0")),"")'),
+    }
+
+
+def _write_period_table(ws, trades: list[dict], first_row: int, periods: list,
+                        label_fn, bounds_fn, col_fmt: dict, tl: str) -> int:
+    """Writes one table (month or week rows) starting at first_row. periods
+    is the sorted list of distinct period keys (month (y,m) tuples, or week
+    Monday dates) already computed by the caller. Returns the row right
+    after the TOTAL row, so the caller can place whatever comes next."""
+    for offset, period in enumerate(periods):
+        r = first_row + offset
+        label = label_fn(period)
+        cell_a = ws[f"A{r}"]; cell_a.value = label
+        style_formula(cell_a, DATE if isinstance(label, date) else None)
+        start_expr, end_expr = bounds_fn(period)
+        for col_letter, formula in _period_row_formulas(r, tl, start_expr, end_expr).items():
+            cell = ws[f"{col_letter}{r}"]
+            cell.value = formula
+            style_formula(cell, col_fmt[col_letter])
+
+    if not periods:
+        return first_row
+
+    total_row = first_row + len(periods)
+    last_data_row = total_row - 1
+    ws[f"A{total_row}"] = "TOTAL"
+    ws[f"A{total_row}"].font = TOTAL_FONT
+    total_formulas = {
+        "B": f"=SUM(B{first_row}:B{last_data_row})",
+        "C": f"=SUM(C{first_row}:C{last_data_row})",
+        "D": f"=SUM(D{first_row}:D{last_data_row})",
+        "E": f'=IFERROR(C{total_row}/B{total_row},"")',
+        "F": f"=SUM(F{first_row}:F{last_data_row})",
+        "G": f"=SUM(G{first_row}:G{last_data_row})",
+        "H": f'=IFERROR(G{total_row}/B{total_row},"")',
+        "K": (f'=IFERROR(SUMIF({tl}!$L$4:$L$503,">0")/'
+              f'ABS(SUMIF({tl}!$L$4:$L$503,"<0")),"")'),
+    }
+    for col_letter, formula in total_formulas.items():
+        cell = ws[f"{col_letter}{total_row}"]
+        cell.value = formula
+        cell.font = TOTAL_FONT
+        cell.number_format = col_fmt[col_letter]
+
+    return total_row + 1
+
+
+def build_monthly_weekly(ws, trades: list[dict] | None = None) -> None:
+    trades = trades or []
+    set_title_subtitle(
+        ws, "Monthly & Weekly PnL",
+        "Month-wise and week-wise performance, attributed by Exit Date -- computed straight from Trade Log.",
+        len(MW_HEADERS),
+    )
+
+    widths = [18, 10, 9, 10, 11, 14, 14, 16, 14, 14, 14]
+    for col, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    tl = "'Trade Log'"
+    col_fmt = {"B": NUM, "C": NUM, "D": NUM, "E": PCT, "F": INR, "G": INR,
+               "H": INR, "I": INR, "J": INR, "K": XMULT}
+
+    closed = [t for t in trades if t.get("exit_date")]
+    months = sorted({(t["exit_date"].year, t["exit_date"].month) for t in closed})
+    weeks  = sorted({t["exit_date"] - timedelta(days=t["exit_date"].weekday()) for t in closed})
+
+    row = 3
+    ws[f"A{row}"] = "MONTHLY PnL"
+    ws[f"A{row}"].font = LABEL_FONT
+    row += 1
+    for col, header in enumerate(MW_HEADERS, start=1):
+        ws.cell(row=row, column=col, value=header)
+    style_header_row(ws, row, len(MW_HEADERS))
+    row += 1
+
+    row = _write_period_table(
+        ws, trades, row, months,
+        label_fn=lambda ym: f"{ym[0]:04d}-{ym[1]:02d}",
+        bounds_fn=lambda ym: _month_bounds(*ym),
+        col_fmt=col_fmt, tl=tl,
+    )
+
+    row += 1  # spacer
+    ws[f"A{row}"] = "WEEKLY PnL"
+    ws[f"A{row}"].font = LABEL_FONT
+    row += 1
+    for col, header in enumerate(MW_HEADERS, start=1):
+        ws.cell(row=row, column=col, value=header)
+    style_header_row(ws, row, len(MW_HEADERS))
+    row += 1
+
+    _write_period_table(
+        ws, trades, row, weeks,
+        label_fn=lambda monday: monday,
+        bounds_fn=_week_bounds,
+        col_fmt=col_fmt, tl=tl,
+    )
+
+    ws.freeze_panes = "A4"
+
+
 # ── Sheet 1: Total PnL (dashboard) ──────────────────────────────────────────
 # Layout map (all formulas identical in substance to the original plain-list
-# version -- only cell *addresses* moved, to fit the card/table/chart grid):
+# version -- only cell *addresses* moved, to fit the card/table grid):
 #   Row 1     Title (A1:P1)
 #   Row 2     Subtitle (A2:P2)
 #   Row 3     Base Capital -- manual input (A3 label, B3 value)
@@ -587,11 +955,11 @@ def build_company_stats(ws, trades: list[dict]) -> None:
 #   Row 9     spacer
 #   Row 10    Band: DETAILED STATS
 #   Row 11    secondary table header (Metric / Value)
-#   Rows12-20 secondary stats (Total Trades ... Gross P&L %)
-#   Row 21    spacer
-#   Row 22    Band: VISUALS
-#   Row 23    spacer
-#   Row 24+   3 charts, side by side
+#   Rows12-22 secondary stats (Total Trades ... Max Drawdown %)
+#
+# The 3 charts (equity curve, win/loss pie, gross-vs-net bar) that used to
+# sit below this were removed 2026-09-28 at the user's request -- see git
+# history if they're ever wanted back.
 
 BC_ROW          = 3
 BAND_SNAPSHOT   = 4
@@ -601,9 +969,7 @@ CARD_NUM_BOTTOM = 8
 BAND_STATS      = 10
 STATS_HDR_ROW   = 11
 STATS_FIRST_ROW = 12
-STATS_LAST_ROW  = 20
-BAND_VISUALS    = 22
-CHART_ROW       = 24
+STATS_LAST_ROW  = 22
 DASHBOARD_COLS  = 16  # A..P
 
 BAND_FONT = Font(name=FONT_NAME, bold=True, size=11, color="FF1F3864")
@@ -622,25 +988,27 @@ CARD_PURPLE = "FF5B2C83"   # Profit Factor, static
 
 # (col_start, col_end, label, formula, number_format, base_fill_hex, conditional)
 CARD_DEFS = [
-    (2,  4,  "NET P&L (₹)",  "=SUM('Trade Log'!$K$4:$K$503)", INR,   CARD_NAVY,  True),
+    (2,  4,  "NET P&L (₹)",  "=SUM('Trade Log'!$L$4:$L$503)", INR,   CARD_NAVY,  True),
     (6,  8,  "NET P&L (%)",  '=IF($B$3=0,"",$B$6/$B$3)',      PCT,   CARD_TEAL,  True),
-    (10, 12, "WIN RATE",     '=IFERROR($C$13/$C$12,"")',      PCT1,  CARD_AMBER, False),
+    (10, 12, "WIN RATE",     '=IFERROR($C$13/$C$12,"")',      PCT,  CARD_AMBER, False),
     (14, 16, "PROFIT FACTOR",
-     '=IFERROR(SUMIF(\'Trade Log\'!$K$4:$K$503,">0")/'
-     'ABS(SUMIF(\'Trade Log\'!$K$4:$K$503,"<0")),"")', XMULT, CARD_PURPLE, False),
+     '=IFERROR(SUMIF(\'Trade Log\'!$L$4:$L$503,">0")/'
+     'ABS(SUMIF(\'Trade Log\'!$L$4:$L$503,"<0")),"")', XMULT, CARD_PURPLE, False),
 ]
 
 # (row, label, formula, number_format, databar)
 STATS_ROWS = [
-    (12, "Total Trades",      "=COUNT('Trade Log'!$K$4:$K$503)", NUM,  False),
-    (13, "Winning Trades",    '=COUNTIF(\'Trade Log\'!$K$4:$K$503,">0")', NUM, False),
-    (14, "Losing Trades",     '=COUNTIF(\'Trade Log\'!$K$4:$K$503,"<0")', NUM, False),
-    (15, "Average Win (₹)",  '=IFERROR(AVERAGEIF(\'Trade Log\'!$K$4:$K$503,">0"),"")', INR, True),
-    (16, "Average Loss (₹)", '=IFERROR(AVERAGEIF(\'Trade Log\'!$K$4:$K$503,"<0"),"")', INR, True),
-    (17, "Best Trade (₹)",   "=IFERROR(MAX('Trade Log'!$K$4:$K$503),\"\")", INR, True),
-    (18, "Worst Trade (₹)",  "=IFERROR(MIN('Trade Log'!$K$4:$K$503),\"\")", INR, True),
+    (12, "Total Trades",      "=COUNT('Trade Log'!$L$4:$L$503)", NUM,  False),
+    (13, "Winning Trades",    '=COUNTIF(\'Trade Log\'!$L$4:$L$503,">0")', NUM, False),
+    (14, "Losing Trades",     '=COUNTIF(\'Trade Log\'!$L$4:$L$503,"<0")', NUM, False),
+    (15, "Average Win (₹)",  '=IFERROR(AVERAGEIF(\'Trade Log\'!$L$4:$L$503,">0"),"")', INR, True),
+    (16, "Average Loss (₹)", '=IFERROR(AVERAGEIF(\'Trade Log\'!$L$4:$L$503,"<0"),"")', INR, True),
+    (17, "Best Trade (₹)",   "=IFERROR(MAX('Trade Log'!$L$4:$L$503),\"\")", INR, True),
+    (18, "Worst Trade (₹)",  "=IFERROR(MIN('Trade Log'!$L$4:$L$503),\"\")", INR, True),
     (19, "Gross P&L (₹)",    "=SUM('Trade Log'!$I$4:$I$503)", INR, False),
     (20, "Gross P&L (%)",    '=IF($B$3=0,"",$C$19/$B$3)', PCT, False),
+    (21, "Max Drawdown (₹)", "=IFERROR(MIN('Day Wise PnL'!$K$4:$K$403),\"\")", INR, False),
+    (22, "Max Drawdown (%)", "=IFERROR(MIN('Day Wise PnL'!$L$4:$L$403),\"\")", PCT, False),
 ]
 
 
@@ -695,7 +1063,7 @@ def _kpi_card(ws, col_start: int, col_end: int, label: str, formula: str,
     return num_cell.coordinate
 
 
-def build_total_pnl_dashboard(ws, ws_day) -> None:
+def build_total_pnl_dashboard(ws) -> None:
     set_title_subtitle(
         ws, "Total PnL",
         "Overall strategy performance -- set Base Capital below; everything "
@@ -748,58 +1116,6 @@ def build_total_pnl_dashboard(ws, ws_day) -> None:
                     color="638EC6"),
     )
 
-    # Section 3: charts.
-    _band(ws, BAND_VISUALS, "VISUALS")
-
-    # Chart 1 -- equity curve (Day Wise PnL cumulative net P&L).
-    line = LineChart()
-    line.title = "Equity Curve"
-    line.style = 2
-    line.y_axis.title = "Cumulative Net P&L (₹)"
-    line.x_axis.title = "Date"
-    line.width = 13
-    line.height = 8
-    data = Reference(ws_day, min_col=8, min_row=3, max_row=DW_LAST_ROW)
-    line.add_data(data, titles_from_data=True)
-    cats = Reference(ws_day, min_col=1, min_row=DW_FIRST_ROW, max_row=DW_LAST_ROW)
-    line.set_categories(cats)
-    line.series[0].smooth = True
-    line.series[0].graphicalProperties.line.solidFill = "1F3864"
-    line.series[0].graphicalProperties.line.width = 20000
-    line.y_axis.majorGridlines = ChartLines(
-        spPr=GraphicalProperties(ln=LineProperties(solidFill="D9D9D9"))
-    )
-    ws.add_chart(line, f"B{CHART_ROW}")
-
-    # Chart 2 -- Win / Loss split (pie), pulling live from the KPI table cells.
-    pie = PieChart()
-    pie.title = "Win / Loss Split"
-    pie.width = 13
-    pie.height = 8
-    pie_data = Reference(ws, min_col=3, min_row=13, max_row=14)  # C13:C14
-    pie.add_data(pie_data, titles_from_data=False)
-    pie_cats = Reference(ws, min_col=2, min_row=13, max_row=14)  # B13:B14
-    pie.set_categories(pie_cats)
-    pie.series[0].data_points = [
-        DataPoint(idx=0, spPr=GraphicalProperties(solidFill="2E7D32")),  # wins -- green
-        DataPoint(idx=1, spPr=GraphicalProperties(solidFill="C62828")),  # losses -- red
-    ]
-    ws.add_chart(pie, f"H{CHART_ROW}")
-
-    # Chart 3 -- Gross vs Net P&L (bar), from this sheet's own cells (C19, B6).
-    bar = BarChart()
-    bar.type = "col"
-    bar.title = "Gross vs Net P&L"
-    bar.width = 13
-    bar.height = 8
-    bar.add_data(Reference(ws, min_col=3, min_row=19, max_row=19), titles_from_data=False)  # Gross
-    bar.add_data(Reference(ws, min_col=2, min_row=6,  max_row=6),  titles_from_data=False)  # Net
-    bar.series[0].tx = SeriesLabel(v="Gross P&L")
-    bar.series[1].tx = SeriesLabel(v="Net P&L")
-    bar.series[0].graphicalProperties.solidFill = "4472C4"
-    bar.series[1].graphicalProperties.solidFill = "2E7D32"
-    ws.add_chart(bar, f"N{CHART_ROW}")
-
     # Keep title/subtitle/Base Capital/band/cards visible while scrolling.
     ws.freeze_panes = "A9"
 
@@ -816,13 +1132,19 @@ def main() -> None:
     ws_log      = wb.create_sheet("Trade Log")
     ws_day      = wb.create_sheet("Day Wise PnL")
     ws_stats    = wb.create_sheet("Position Type Stats")
+    ws_bucket   = wb.create_sheet("Bucket Stats")
     ws_company  = wb.create_sheet("Company Stats")
+    ws_charges  = wb.create_sheet("Charges")
+    ws_mw       = wb.create_sheet("Monthly & Weekly PnL")
 
     build_trade_log(ws_log, trades)
     build_day_wise(ws_day)
-    build_total_pnl_dashboard(ws_total, ws_day)
+    build_total_pnl_dashboard(ws_total)
     build_position_stats(ws_stats)
+    build_bucket_stats(ws_bucket)
     build_company_stats(ws_company, trades)
+    build_charges(ws_charges, trades)
+    build_monthly_weekly(ws_mw, trades)
 
     for ws in wb.worksheets:
         ws.sheet_view.showGridLines = False

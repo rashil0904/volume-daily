@@ -716,6 +716,51 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
     }
 
 
+def position_charge_breakdown(pos: dict, trade_index: dict[str, dict] | None = None,
+                              interest_index: dict[str, float] | None = None) -> dict:
+    """Like position_charge_summary(), but splits the entry+exit legs' real
+    API charges into their 6 individual categories (Brokerage/STT/Exchange/
+    SEBI/Stamp/GST -- see _CHARGE_FIELDS) instead of folding them into one
+    entry_charges/exit_charges figure. DP/pledge/MTF-interest/total reuse
+    position_charge_summary()'s own numbers verbatim (same rules, not
+    reimplemented here) -- only the 6-way category split is computed fresh,
+    straight from trade_index, to avoid two independently-maintained copies
+    of the DP/pledge/interest logic.
+
+    trade_index=None builds ONE index here (same [entry_date, today] range
+    as position_charge_summary's own default) and passes that SAME index
+    into position_charge_summary explicitly -- never leaves it to build a
+    second, independent index, which would be a second get_trades() call
+    per position (see position_charge_summary's own docstring on why two
+    back-to-back calls tripped Dhan's rate limit)."""
+    entry_date_str = pos.get("entry_date")
+    if trade_index is None:
+        trade_index = charges_index(entry_date_str) if entry_date_str else {}
+
+    summary = position_charge_summary(pos, trade_index, interest_index)
+
+    status     = pos.get("status", "")
+    entry_oid  = pos.get("entry_order_id")
+    exit_field = _EXIT_ORDER_ID_FIELD.get(status)
+    exit_oid   = pos.get(exit_field) if exit_field else None
+
+    categories = {label: 0.0 for _, label in _CHARGE_FIELDS}
+    for oid in (entry_oid, exit_oid):
+        trade = trade_index.get(oid) if oid else None
+        if trade is None:
+            continue
+        for field, label in _CHARGE_FIELDS:
+            categories[label] += trade.get(field, 0.0) or 0.0
+
+    return {
+        **{label: round(value, 2) for label, value in categories.items()},
+        "dp_charge":     summary["dp_charge"],
+        "pledge_charge": summary["pledge_charge"],
+        "mtf_interest":  summary["mtf_interest"],
+        "total_charges": summary["total_charges"],
+    }
+
+
 def print_mtf_interest_report(as_of: date | None = None) -> float:
     """Prints MTF interest accrued so far on every currently-open MTF
     position (always long -- shorts are always INTRADAY, never MTF), and
