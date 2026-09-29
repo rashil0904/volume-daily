@@ -18,7 +18,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623472+05:30",
     "realized_return_pct": 0.6605,
     "realized_pnl": 1650.92,
-    "exit_note": "9:25 no-data fallback sold 269 @ \u20b9466.2611; remainder 270 manually sold @ \u20b9467.2896 (order 221260819155809)"
+    "exit_note": "9:25 no-data fallback sold 269 @ ₹466.2611; remainder 270 manually sold @ ₹467.2896 (order 221260819155809)"
   },
   {
     "broker": "dhan",
@@ -39,7 +39,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623514+05:30",
     "realized_return_pct": 2.1309,
     "realized_pnl": 2660.3,
-    "exit_note": "9:25 no-data fallback sold 102 @ \u20b9624.6000; remainder 102 manually sold @ \u20b9625.4426 (order 241260819164809)"
+    "exit_note": "9:25 no-data fallback sold 102 @ ₹624.6000; remainder 102 manually sold @ ₹625.4426 (order 241260819164809)"
   },
   {
     "broker": "dhan",
@@ -60,7 +60,7 @@
     "exit_timestamp_925": "2026-08-19T18:06:09.199095+05:30",
     "realized_return_pct": -0.7024,
     "realized_pnl": -1755.86,
-    "exit_note": "9:25 no-data fallback sold 192 @ \u20b9656.5651; remainder 192 manually sold @ \u20b9636.2896 (order 321260819458209)"
+    "exit_note": "9:25 no-data fallback sold 192 @ ₹656.5651; remainder 192 manually sold @ ₹636.2896 (order 321260819458209)"
   },
   {
     "broker": "dhan",
@@ -100,7 +100,7 @@
     "exit_timestamp_925": "2026-08-19T10:06:50.623531+05:30",
     "realized_return_pct": 1.0596,
     "realized_pnl": 2644.35,
-    "exit_note": "9:25 no-data fallback sold 643 @ \u20b9195.2740; remainder 644 manually sold @ \u20b9196.6343 (order 33126081991909)"
+    "exit_note": "9:25 no-data fallback sold 643 @ ₹195.2740; remainder 644 manually sold @ ₹196.6343 (order 33126081991909)"
   },
   {
     "broker": "dhan",
@@ -2758,11 +2758,18 @@
       "221260928820609",
       "341260928157509"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-28T15:20:15.224193+05:30",
     "product": "MTF",
     "return_pct": 8.23,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "22126092941809",
+    "target_price": 93.91,
+    "exit_price_1159": 78.87,
+    "exit_order_id_1159": "321260929180509",
+    "exit_timestamp_1159": "2026-09-29T10:18:03.120342+05:30",
+    "realized_return_pct": -1.7359,
+    "realized_pnl": -5199.8
   },
   {
     "broker": "dhan",
@@ -2773,11 +2780,18 @@
     "actual_fill_price": 625.9431,
     "actual_fill_quantity": 479,
     "entry_order_id": "341260928158909",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-28T15:21:13.811862+05:30",
     "product": "MTF",
     "return_pct": 5.49,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "34126092911909",
+    "target_price": 732.35,
+    "exit_price_1159": 602.61,
+    "exit_order_id_1159": "221260929260509",
+    "exit_timestamp_1159": "2026-09-29T10:18:03.970070+05:30",
+    "realized_return_pct": -3.7277,
+    "realized_pnl": -11176.55
   },
   {
     "broker": "dhan",
@@ -2788,11 +2802,18 @@
     "actual_fill_price": 97.1964,
     "actual_fill_quantity": 3087,
     "entry_order_id": "341260928159209",
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-09-28T15:21:15.453680+05:30",
     "product": "MTF",
     "return_pct": 15.52,
-    "return_bucket": "15-20"
+    "return_bucket": "15-20",
+    "target_order_id": "34126092912109",
+    "target_price": 113.72,
+    "exit_price_1159": 92.37,
+    "exit_order_id_1159": "321260929256909",
+    "exit_timestamp_1159": "2026-09-29T11:41:02.957706+05:30",
+    "realized_return_pct": -4.9656,
+    "realized_pnl": -14899.1
   },
   {
     "broker": "dhan",
@@ -2803,11 +2824,18 @@
     "actual_fill_price": 22.1897,
     "actual_fill_quantity": 13513,
     "entry_order_id": "341260928159109",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-28T15:21:16.334669+05:30",
     "product": "MTF",
     "return_pct": 10.74,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "34126092912009",
+    "target_price": 25.96,
+    "exit_price_916": 22.65,
+    "exit_order_id_916": "34126092913109",
+    "exit_timestamp_916": "2026-09-29T09:18:02.916879+05:30",
+    "realized_return_pct": 2.0744,
+    "realized_pnl": 6220.03
   },
   {
     "broker": "dhan",
@@ -2818,10 +2846,136 @@
     "actual_fill_price": 282.74,
     "actual_fill_quantity": 1061,
     "entry_order_id": "reconciled_dup_buy_20260928",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-28T15:25:06+05:30",
     "product": "MTF",
     "return_pct": 17.83,
+    "return_bucket": "15-20",
+    "target_order_id": "22126092941909",
+    "target_price": 328.6,
+    "exit_price_916": 297.0,
+    "exit_order_id_916": "321260929122509",
+    "exit_timestamp_916": "2026-09-29T09:44:02.869931+05:30",
+    "realized_return_pct": 5.0435,
+    "realized_pnl": 15129.86
+  },
+  {
+    "broker": "dhan",
+    "symbol": "TCIEXP",
+    "entry_date": "2026-09-29",
+    "reference_price": 525.95,
+    "shares_intended": 407,
+    "actual_fill_price": 526.5716,
+    "actual_fill_quantity": 407,
+    "entry_order_id": [
+      "34126092973909",
+      "321260929416609",
+      "34126092974209",
+      "34126092974309",
+      "221260929647009",
+      "221260929647509",
+      "23126092975109",
+      "34126092974609",
+      "23126092975209",
+      "221260929648209",
+      "221260929648709",
+      "23126092975409",
+      "23126092975509",
+      "34126092974709"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:20:13.634006+05:30",
+    "product": "MTF",
+    "return_pct": 9.81,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "UNICHEMLAB",
+    "entry_date": "2026-09-29",
+    "reference_price": 571.2,
+    "shares_intended": 375,
+    "actual_fill_price": 571.4527,
+    "actual_fill_quantity": 375,
+    "entry_order_id": [
+      "321260929416409",
+      "34126092974109",
+      "23126092974809",
+      "34126092974409",
+      "321260929417209",
+      "221260929647409",
+      "321260929417509",
+      "321260929417709",
+      "23126092975309",
+      "321260929418309",
+      "221260929648809",
+      "321260929418709",
+      "34126092974809"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:20:15.697050+05:30",
+    "product": "MTF",
+    "return_pct": 6.24,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "ELECTCAST",
+    "entry_date": "2026-09-29",
+    "reference_price": 76.38,
+    "shares_intended": 2805,
+    "actual_fill_price": 76.3257,
+    "actual_fill_quantity": 2805,
+    "entry_order_id": "221260929652409",
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:21:14.064699+05:30",
+    "product": "MTF",
+    "return_pct": 5.76,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "INDOCO",
+    "entry_date": "2026-09-29",
+    "reference_price": 271.79,
+    "shares_intended": 788,
+    "actual_fill_price": 272.5066,
+    "actual_fill_quantity": 788,
+    "entry_order_id": "221260929652309",
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:21:14.965802+05:30",
+    "product": "MTF",
+    "return_pct": 6.7,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "RSYSTEMS",
+    "entry_date": "2026-09-29",
+    "reference_price": 298.38,
+    "shares_intended": 359,
+    "actual_fill_price": 298.4,
+    "actual_fill_quantity": 359,
+    "entry_order_id": "221260929652509",
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:21:15.814326+05:30",
+    "product": "CNC",
+    "return_pct": 8.14,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "SYNCOMF",
+    "entry_date": "2026-09-29",
+    "reference_price": 26.4,
+    "shares_intended": 4058,
+    "actual_fill_price": 26.45,
+    "actual_fill_quantity": 4058,
+    "entry_order_id": "321260929420709",
+    "status": "open",
+    "entry_timestamp": "2026-09-29T15:21:16.541816+05:30",
+    "product": "CNC",
+    "return_pct": 16.04,
     "return_bucket": "15-20"
   }
 ]

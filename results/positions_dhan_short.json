@@ -2577,5 +2577,29 @@
     "exit_timestamp_239": "2026-09-25T14:39:06.945031+05:30",
     "realized_return_pct": 0.4012,
     "realized_pnl": 1016.82
+  },
+  {
+    "broker": "dhan",
+    "symbol": "RSYSTEMS",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "916",
+    "return_bucket": "15-20",
+    "entry_date": "2026-09-29",
+    "entry_price": 297.01,
+    "quantity": 1061,
+    "entry_order_id": "23126092924109",
+    "cover_target_order_id": "23126092924209",
+    "cover_target_price": 282.16,
+    "stop_order_id": "321260929122709",
+    "stop_trigger_price": 328.6,
+    "stop_limit_price": 330.25,
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-29T09:44:04.698891+05:30",
+    "exit_price_239": 298.99,
+    "exit_order_id_239": "221260929581209",
+    "exit_timestamp_239": "2026-09-29T14:40:02.780648+05:30",
+    "realized_return_pct": -0.6666,
+    "realized_pnl": -2100.78
   }
 ]
