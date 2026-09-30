@@ -2601,5 +2601,29 @@
     "exit_timestamp_239": "2026-09-29T14:40:02.780648+05:30",
     "realized_return_pct": -0.6666,
     "realized_pnl": -2100.78
+  },
+  {
+    "broker": "dhan",
+    "symbol": "TCIEXP",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "916",
+    "return_bucket": "5-10",
+    "entry_date": "2026-09-30",
+    "entry_price": 547.72,
+    "quantity": 407,
+    "entry_order_id": "32126093049609",
+    "cover_target_order_id": "32126093050209",
+    "cover_target_price": 520.35,
+    "stop_order_id": "32126093050309",
+    "stop_trigger_price": 635.0,
+    "stop_limit_price": 638.2,
+    "status": "short_closed",
+    "entry_timestamp": "2026-09-30T09:16:05.872036+05:30",
+    "exit_price_239": 530.67,
+    "exit_order_id_239": "321260930357409",
+    "exit_timestamp_239": "2026-09-30T14:29:02.726312+05:30",
+    "realized_return_pct": 3.1129,
+    "realized_pnl": 6939.35
   }
 ]
