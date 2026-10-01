@@ -64,7 +64,7 @@ _RESULTS_DIR  = _ROOT / "results"
 _POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
 _POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
 _LOG_DIR      = _RESULTS_DIR / "trades"
-TOTAL_CAPITAL = 1_500_000
+TOTAL_CAPITAL = 1_200_000  # reduced from ₹15L, effective 2026-10-01
 
 # ── Batched-concurrent execution for check_exit_916 / force_exit_1159 /
 # _open_short / square_off_239 ──────────────────────────────────────────────
@@ -1844,21 +1844,37 @@ def _append_log(trade_date: date, row: dict) -> None:
 
 
 def _sync_pnl_workbook() -> None:
-    """Regenerates results/strategy_pnl_simple.xlsx from the latest
-    positions_dhan_long.json + positions_dhan_short.json. Takes ~60s (real
-    Dhan charges-API resync), so it runs ONCE a day via its own --sync-pnl
-    cron invocation after market close, not inline in any entry/exit stage.
-    Loaded by file path (not a package import, neither results/ nor the
-    repo root is one)."""
+    """Regenerates BOTH P&L workbooks from the latest positions_dhan_long.json
+    + positions_dhan_short.json. Takes ~60s each (real Dhan charges-API
+    resync), so it runs ONCE a day via its own --sync-pnl cron invocation
+    after market close, not inline in any entry/exit stage. Loaded by file
+    path (not a package import, neither results/ nor the repo root is one).
+
+    Two separate workbooks, not one, since capital was reduced ₹15L -> ₹12L
+    effective 2026-10-01 -- mixing both eras' trades under one Base Capital
+    figure would make Net P&L %/Gross P&L % misleading for whichever era
+    didn't match it (see build_pnl_simple.py's own module-level comment on
+    PNL_ERA_SPLIT_DATE). strategy_pnl_simple.xlsx stays frozen at the ₹15L
+    era (end_date=PNL_ERA_SPLIT_DATE -- never absorbs a later position even
+    if this runs for years); strategy_pnl_oct2026.xlsx starts fresh at the
+    ₹12L era and keeps growing forward. Each build is independent -- one
+    failing (e.g. a transient Dhan API error) doesn't block the other."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_build_pnl_simple", _RESULTS_DIR / "build_pnl_simple.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
     try:
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "_build_pnl_simple", _RESULTS_DIR / "build_pnl_simple.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.main()
+        module.main(end_date=module.PNL_ERA_SPLIT_DATE)
     except Exception as exc:
-        print(f"[dhan]   !! P&L workbook sync failed: {exc}", file=sys.stderr)
+        print(f"[dhan]   !! P&L workbook sync failed (legacy ₹15L era): {exc}", file=sys.stderr)
+
+    try:
+        module.main(out_path=module.OUT_PATH_CURRENT, start_date=module.PNL_START_DATE_CURRENT,
+                   base_capital=module.BASE_CAPITAL_CURRENT)
+    except Exception as exc:
+        print(f"[dhan]   !! P&L workbook sync failed (current ₹12L era): {exc}", file=sys.stderr)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

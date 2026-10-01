@@ -44,6 +44,22 @@ DHAN_POSITIONS_SHORT_PATH = RESULTS_DIR / "positions_dhan_short.json"
 # before it (from before this workbook existed) are out of scope, not missing data.
 PNL_START_DATE = "2026-08-19"
 
+# Capital was reduced ₹15L -> ₹12L effective 2026-10-01 (see matching
+# TOTAL_CAPITAL change in pipeline/main.py / pipeline/notify.py /
+# dhan/run_trades.py). Mixing both eras' trades under one Base Capital
+# figure would make Net P&L %/Gross P&L % misleading for whichever era
+# didn't match it, so this became TWO workbooks instead of one, both built
+# by the same main() (see its end_date param): OUT_PATH above stays frozen
+# at the ₹15L era (end_date=PNL_ERA_SPLIT_DATE, never absorbs a later
+# position even if re-run long after), OUT_PATH_CURRENT starts fresh at the
+# ₹12L era and keeps growing forward (end_date=None). See
+# dhan/run_trades.py's _sync_pnl_workbook, which calls main() twice.
+PNL_ERA_SPLIT_DATE   = "2026-09-30"   # last day of the ₹15L era, inclusive
+PNL_START_DATE_CURRENT = "2026-10-01"   # first day of the ₹12L era
+OUT_PATH_CURRENT     = RESULTS_DIR / "strategy_pnl_oct2026.xlsx"
+BASE_CAPITAL_LEGACY  = 1_500_000
+BASE_CAPITAL_CURRENT = 1_200_000
+
 # ── Number formats ──────────────────────────────────────────────────────────
 # Every non-integer figure in the workbook shows exactly 2 decimal places --
 # INR and PCT both round to 2 digits; NUM (trade/win/loss counts) stays a
@@ -151,10 +167,16 @@ def _extract_exit(position: dict) -> tuple[str | None, float | None]:
     return None, None
 
 
-def _position_to_trade_row(position: dict) -> dict | None:
+def _position_to_trade_row(position: dict, start_date: str = PNL_START_DATE,
+                           end_date: str | None = None) -> dict | None:
     """Maps one positions_dhan.json record (long or mirrored short) to a
     Trade Log row dict. Costs isn't set here -- see _live_cost, attached by
-    the caller (load_trades_from_positions)."""
+    the caller (load_trades_from_positions). end_date=None (the default)
+    means open-ended -- every position from start_date onward. A caller
+    building a capital-era-specific snapshot (e.g. the frozen pre-2026-10-01
+    ₹15L-capital workbook) passes an explicit end_date so it never silently
+    absorbs a later position sized under a DIFFERENT capital base, even if
+    this function runs again long after that era ended."""
     symbol = position.get("symbol")
     if not symbol:
         return None
@@ -166,7 +188,9 @@ def _position_to_trade_row(position: dict) -> dict | None:
         return None
 
     entry_date = position.get("entry_date") or (position.get("entry_timestamp") or "")[:10]
-    if not entry_date or entry_date < PNL_START_DATE:
+    if not entry_date or entry_date < start_date:
+        return None
+    if end_date is not None and entry_date > end_date:
         return None
 
     exit_date, exit_price = _extract_exit(position)
@@ -246,15 +270,16 @@ def _load_json_list(path: Path) -> list:
         return []
 
 
-def load_trades_from_positions() -> list[dict]:
+def load_trades_from_positions(start_date: str = PNL_START_DATE,
+                               end_date: str | None = None) -> list[dict]:
     """Reads positions_dhan_long.json + positions_dhan_short.json and
-    returns one Trade Log row dict per position dated PNL_START_DATE or
-    later (long or short) -- open positions come back with
-    exit_date/exit_price=None, matching Trade Log's own Open/Closed status
-    formula. Each row also carries a live "cost" (see _live_cost) so Costs
-    auto-updates every sync instead of staying purely manual. A missing/
-    unreadable/empty file on either side just contributes no rows from that
-    side, rather than failing the whole sync."""
+    returns one Trade Log row dict per position dated start_date..end_date
+    (end_date=None means open-ended, long or short) -- open positions come
+    back with exit_date/exit_price=None, matching Trade Log's own Open/
+    Closed status formula. Each row also carries a live "cost" (see
+    _live_cost) so Costs auto-updates every sync instead of staying purely
+    manual. A missing/unreadable/empty file on either side just contributes
+    no rows from that side, rather than failing the whole sync."""
     positions = _load_json_list(DHAN_POSITIONS_LONG_PATH) + _load_json_list(DHAN_POSITIONS_SHORT_PATH)
 
     # One trade-book fetch and one MTF-interest-allocation pass for the
@@ -264,17 +289,17 @@ def load_trades_from_positions() -> list[dict]:
     # on an outright API/auth failure rather than raising -- a workbook sync
     # shouldn't fail outright just because live charge data isn't reachable.
     try:
-        trade_index = dhan_charges.charges_index(PNL_START_DATE)
+        trade_index = dhan_charges.charges_index(start_date, end_date)
     except Exception:
         trade_index = {}
     try:
-        interest_index = dhan_charges.mtf_interest_allocation_index(positions, PNL_START_DATE)
+        interest_index = dhan_charges.mtf_interest_allocation_index(positions, start_date, end_date)
     except Exception:
         interest_index = {}
 
     trades = []
     for pos in positions:
-        row = _position_to_trade_row(pos)
+        row = _position_to_trade_row(pos, start_date, end_date)
         if row is None:
             continue
         row["cost"] = _live_cost(pos, trade_index, interest_index)
@@ -409,7 +434,7 @@ DW_HEADERS   = ["Date", "Long Gross P&L", "Short Gross P&L", "Total Gross P&L",
                 "Long Net P&L", "Short Net P&L", "Total Net P&L"]
 
 
-def build_day_wise(ws) -> None:
+def build_day_wise(ws, start_date: str = PNL_START_DATE) -> None:
     set_title_subtitle(
         ws, "Day Wise PnL",
         "One row per calendar date, attributed by Exit Date -- continues forward "
@@ -425,10 +450,11 @@ def build_day_wise(ws) -> None:
     for col, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
-    # First date is a manual anchor -- matches PNL_START_DATE (Trade Log's own
-    # sync cutoff), so the calendar doesn't run rows before real data exists.
+    # First date is a manual anchor -- matches this workbook's own start_date
+    # (Trade Log's own sync cutoff), so the calendar doesn't run rows before
+    # real data exists.
     a4 = ws["A4"]
-    a4.value = date.fromisoformat(PNL_START_DATE)
+    a4.value = date.fromisoformat(start_date)
     style_input(a4, DATE)
 
     tl = "'Trade Log'"
@@ -1046,7 +1072,7 @@ def _kpi_card(ws, col_start: int, col_end: int, label: str, formula: str,
     return num_cell.coordinate
 
 
-def build_total_pnl_dashboard(ws) -> None:
+def build_total_pnl_dashboard(ws, base_capital: float = BASE_CAPITAL_LEGACY) -> None:
     set_title_subtitle(
         ws, "Total PnL",
         "Overall strategy performance -- set Base Capital below; everything "
@@ -1062,11 +1088,11 @@ def build_total_pnl_dashboard(ws) -> None:
     for gap_col in (5, 9, 13):  # E, I, M
         ws.column_dimensions[get_column_letter(gap_col)].width = 8
 
-    # Base Capital -- manual input, unchanged from the original.
+    # Base Capital -- manual input, reset to this default on every regen.
     ws["A3"].value = "Base Capital (₹)"
     ws["A3"].font = LABEL_FONT
     style_input(ws["B3"], INR)
-    ws["B3"].value = 1_500_000
+    ws["B3"].value = base_capital
 
     # Section 1: KPI cards.
     _band(ws, BAND_SNAPSHOT, "STRATEGY SNAPSHOT")
@@ -1105,8 +1131,15 @@ def build_total_pnl_dashboard(ws) -> None:
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-def main() -> None:
-    trades = load_trades_from_positions()
+def main(out_path: Path = OUT_PATH, start_date: str = PNL_START_DATE,
+         end_date: str | None = None, base_capital: float = BASE_CAPITAL_LEGACY) -> None:
+    """end_date=None (the default) is open-ended -- every position from
+    start_date onward, the original single-workbook behavior. A caller
+    building a capital-era-specific snapshot (e.g. the pre-2026-10-01 ₹15L
+    era, frozen so it never absorbs a later ₹12L-era position) passes an
+    explicit end_date alongside its own out_path/base_capital -- see
+    dhan/run_trades.py's _sync_pnl_workbook, which calls this twice."""
+    trades = load_trades_from_positions(start_date, end_date)
 
     wb = Workbook()
 
@@ -1121,8 +1154,8 @@ def main() -> None:
     ws_mw       = wb.create_sheet("Monthly & Weekly PnL")
 
     build_trade_log(ws_log, trades)
-    build_day_wise(ws_day)
-    build_total_pnl_dashboard(ws_total)
+    build_day_wise(ws_day, start_date)
+    build_total_pnl_dashboard(ws_total, base_capital)
     build_position_stats(ws_stats)
     build_bucket_stats(ws_bucket)
     build_company_stats(ws_company, trades)
@@ -1132,10 +1165,16 @@ def main() -> None:
     for ws in wb.worksheets:
         ws.sheet_view.showGridLines = False
 
-    wb.save(OUT_PATH)
-    print(f"Wrote {OUT_PATH} ({len(trades)} synced trade(s) from Dhan positions, "
-          f"from {PNL_START_DATE} onward)" if trades else f"Wrote {OUT_PATH} (no synced trades yet -- examples shown)")
+    wb.save(out_path)
+    range_desc = f"{start_date} to {end_date}" if end_date else f"{start_date} onward"
+    print(f"Wrote {out_path} ({len(trades)} synced trade(s) from Dhan positions, "
+          f"{range_desc})" if trades else f"Wrote {out_path} (no synced trades yet -- examples shown)")
 
 
 if __name__ == "__main__":
-    main()
+    # The frozen ₹15L era (through 2026-09-30) -- every other arg stays at
+    # main()'s own default (OUT_PATH, PNL_START_DATE, BASE_CAPITAL_LEGACY).
+    main(end_date=PNL_ERA_SPLIT_DATE)
+    # The live ₹12L era (2026-10-01 onward) -- its own file, keeps growing.
+    main(out_path=OUT_PATH_CURRENT, start_date=PNL_START_DATE_CURRENT,
+         base_capital=BASE_CAPITAL_CURRENT)

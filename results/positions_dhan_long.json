@@ -3045,7 +3045,9 @@
     "entry_timestamp": "2026-09-30T15:20:00.943644+05:30",
     "product": "MTF",
     "return_pct": 6.14,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "22126100145909",
+    "target_price": 1301.5
   },
   {
     "broker": "dhan",
@@ -3056,10 +3058,17 @@
     "actual_fill_price": 1772.0,
     "actual_fill_quantity": 105,
     "entry_order_id": "221260930623409",
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-09-30T15:21:00.349689+05:30",
     "product": "CNC",
     "return_pct": 6.48,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "32126100145909",
+    "target_price": 2073.2,
+    "exit_price_916": 1775.08,
+    "exit_order_id_916": "23126100113609",
+    "exit_timestamp_916": "2026-10-01T09:16:03.118107+05:30",
+    "realized_return_pct": 0.1738,
+    "realized_pnl": 323.4
   }
 ]
