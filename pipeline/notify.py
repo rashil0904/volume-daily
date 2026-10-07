@@ -229,7 +229,7 @@ def send_scan_preview(date_str: str, as_of_hhmm: int, rows: list) -> None:
 # ── Trade execution notifications (Stages 1 / 2 / 3) ─────────────────────────
 
 def send_entry(broker: str, symbol: str, fill_price: float, shares: int,
-               order_id: str, bucket: str, dry_run: bool = False) -> None:
+               bucket: str, dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
         f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
@@ -237,7 +237,6 @@ def send_entry(broker: str, symbol: str, fill_price: float, shares: int,
         f"<b>Bucket:</b> {html_lib.escape(str(bucket))}",
         f"<b>Buy price:</b> &#8377;{fill_price:,.2f}",
         f"<b>Shares:</b> {shares}",
-        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
     _send(text, topic="entries_exits")
 
@@ -303,7 +302,7 @@ def send_force_exit_1159(broker: str, symbol: str, exit_price: float,
 
 
 def send_short_open(broker: str, symbol: str, entry_price: float, shares: int,
-                    source_exit_stage: str, order_id: str, dry_run: bool = False) -> None:
+                    source_exit_stage: str, dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
         f"<b>&#128721; SHORT OPEN — {html_lib.escape(symbol)}{tag}</b>",
@@ -312,7 +311,6 @@ def send_short_open(broker: str, symbol: str, entry_price: float, shares: int,
         f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
         f"<b>Shares:</b> {shares}",
         "Squares off at 2:39pm.",
-        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
     ])
     _send(text, topic="entries_exits")
 
@@ -509,17 +507,6 @@ def send_token_renewal_succeeded(message: str) -> None:
     text = "\n".join([
         "<b>&#9989; Dhan Token Renewed</b>",
         html_lib.escape(str(message)),
-    ])
-    _send(text, topic="errors")
-
-
-def send_zerodha_token_renewal_needed(reason: str) -> None:
-    text = "\n".join([
-        "<b>&#128308; Zerodha Token Renewal NEEDED</b>",
-        f"<b>Reason:</b> {html_lib.escape(str(reason))}",
-        "Zerodha has no automated renewal (unlike Dhan) — run "
-        "<code>python -m zerodha.auth</code> to log in manually before the "
-        "next scheduled stage needs it.",
     ])
     _send(text, topic="errors")
 

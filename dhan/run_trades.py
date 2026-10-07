@@ -1658,7 +1658,7 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
         print(f"[dhan]   SHORT OPENED — {sym}  ₹{ep:,.2f} × {eq}  (from {source_stage} exit)")
         try:
             notify.send_short_open(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]", entry_price=ep,
-                                   shares=eq, source_exit_stage=source_stage, order_id=oid,
+                                   shares=eq, source_exit_stage=source_stage,
                                    dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
@@ -2295,7 +2295,7 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         })
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", fill_price=fill_price,
-                              shares=fill_qty, order_id=order_id,
+                              shares=fill_qty,
                               bucket=res.get("return_bucket"), dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry failed: {exc}", file=sys.stderr)
@@ -4217,7 +4217,7 @@ def run_entry_limit(
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{st.product}]",
                               fill_price=avg_price, shares=fill_qty,
-                              order_id=oid_display, bucket=st.return_bucket, dry_run=dry_run)
+                              bucket=st.return_bucket, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry notify failed: {exc}", file=sys.stderr)
 
