@@ -2295,7 +2295,8 @@ def run_entry_321(trade_date: date | None = None, dry_run: bool = False,
         })
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{product}]", fill_price=fill_price,
-                              shares=fill_qty, order_id=order_id, dry_run=dry_run)
+                              shares=fill_qty, order_id=order_id,
+                              bucket=res.get("return_bucket"), dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry failed: {exc}", file=sys.stderr)
 
@@ -2424,12 +2425,6 @@ def place_targets_915(dry_run: bool = False) -> None:
         pos["target_price"]    = res["target_price"]
         dirty = True
         print(f"[dhan]   target placed — order {res['order_id']}")
-        try:
-            notify.send_target_placed(broker=_BROKER, symbol=f"{sym} [{product}]",
-                                      target_price=res["target_price"], order_id=res["order_id"],
-                                      dry_run=dry_run)
-        except Exception as exc:
-            print(f"  [notify] target_placed failed: {exc}", file=sys.stderr)
         n_placed += 1
 
     if not dry_run and dirty:
@@ -2561,7 +2556,8 @@ def check_exit_916(dry_run: bool = False, bucket: str = None) -> None:
                 print(f"[dhan]   TARGET HIT — exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="916",
-                                           exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                           exit_price=ep, return_pct=ret, pnl=pnl,
+                                           bucket=bucket, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
                 # No mirrored short here -- a stock that just ran +17% to hit its
@@ -2748,7 +2744,7 @@ def check_exit_916(dry_run: bool = False, bucket: str = None) -> None:
             try:
                 notify.send_exit_916_nodata(broker=_BROKER, symbol=f"{sym} [{product}]",
                                             shares_exited=eq, shares_remaining=remain,
-                                            exit_price=ep, dry_run=dry_run)
+                                            exit_price=ep, bucket=bucket, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_916_nodata failed: {exc}", file=sys.stderr)
         else:
@@ -2765,7 +2761,7 @@ def check_exit_916(dry_run: bool = False, bucket: str = None) -> None:
             print(f"[dhan]   exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
             try:
                 notify.send_exit_916(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
-                                     return_pct=ret_act, pnl=pnl, dry_run=dry_run)
+                                     return_pct=ret_act, pnl=pnl, bucket=bucket, dry_run=dry_run)
             except Exception as exc:
                 print(f"  [notify] exit_916 failed: {exc}", file=sys.stderr)
 
@@ -2941,7 +2937,8 @@ def force_exit_1159(dry_run: bool = False, bucket: str = None) -> None:
                 print(f"[dhan]   TARGET HIT — closed ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
                 try:
                     notify.send_target_hit(broker=_BROKER, symbol=f"{sym} [{product}]", stage="1159",
-                                           exit_price=ep, return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                           exit_price=ep, return_pct=ret, pnl=pnl,
+                                           bucket=bucket, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] target_hit failed: {exc}", file=sys.stderr)
                 # No mirrored short here -- see the matching comment in check_exit_916.
@@ -3068,7 +3065,7 @@ def force_exit_1159(dry_run: bool = False, bucket: str = None) -> None:
         print(f"[dhan]   force-exited ₹{ep:,.2f}  P&L ₹{pnl:+,.2f}")
         try:
             notify.send_force_exit_1159(broker=_BROKER, symbol=f"{sym} [{product}]", exit_price=ep,
-                                        return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                        return_pct=ret, pnl=pnl, bucket=bucket, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] force_exit_1159 failed: {exc}", file=sys.stderr)
         n_force += 1
@@ -3408,7 +3405,8 @@ def square_off_239(dry_run: bool = False, bucket: str = None) -> None:
                 try:
                     notify.send_cover_target_hit(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
                                                  entry_price=entry_price, exit_price=ep,
-                                                 return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                                 return_pct=ret, pnl=pnl,
+                                                 bucket=bucket_label, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] cover_target_hit failed: {exc}", file=sys.stderr)
             elif kind == "stop_loss_hit":
@@ -3416,7 +3414,8 @@ def square_off_239(dry_run: bool = False, bucket: str = None) -> None:
                 try:
                     notify.send_short_stoploss_hit(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
                                                    entry_price=entry_price, exit_price=ep,
-                                                   return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                                   return_pct=ret, pnl=pnl,
+                                                   bucket=bucket_label, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] short_stoploss_hit failed: {exc}", file=sys.stderr)
             else:  # force_cover
@@ -3424,7 +3423,8 @@ def square_off_239(dry_run: bool = False, bucket: str = None) -> None:
                 try:
                     notify.send_square_off_239(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
                                                entry_price=entry_price, exit_price=ep,
-                                               return_pct=ret, pnl=pnl, dry_run=dry_run)
+                                               return_pct=ret, pnl=pnl,
+                                               bucket=bucket_label, dry_run=dry_run)
                 except Exception as exc:
                     print(f"  [notify] square_off_239 failed: {exc}", file=sys.stderr)
 
@@ -4217,7 +4217,7 @@ def run_entry_limit(
         try:
             notify.send_entry(broker=_BROKER, symbol=f"{sym} [{st.product}]",
                               fill_price=avg_price, shares=fill_qty,
-                              order_id=oid_display, dry_run=dry_run)
+                              order_id=oid_display, bucket=st.return_bucket, dry_run=dry_run)
         except Exception as exc:
             print(f"  [notify] entry notify failed: {exc}", file=sys.stderr)
 

@@ -229,11 +229,12 @@ def send_scan_preview(date_str: str, as_of_hhmm: int, rows: list) -> None:
 # ── Trade execution notifications (Stages 1 / 2 / 3) ─────────────────────────
 
 def send_entry(broker: str, symbol: str, fill_price: float, shares: int,
-               order_id: str, dry_run: bool = False) -> None:
+               order_id: str, bucket: str, dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
         f"<b>ENTRY — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
+        f"<b>Bucket:</b> {html_lib.escape(str(bucket))}",
         f"<b>Buy price:</b> &#8377;{fill_price:,.2f}",
         f"<b>Shares:</b> {shares}",
         f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
@@ -255,11 +256,12 @@ def send_entry_failed(broker: str, symbol: str, error_msg: str,
 
 
 def send_exit_916(broker: str, symbol: str, exit_price: float,
-                  return_pct: float, pnl: float, dry_run: bool = False) -> None:
+                  return_pct: float, pnl: float, bucket: str,
+                  dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} EXIT 9:16am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} EXIT [{html_lib.escape(str(bucket))}] — {html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -269,27 +271,29 @@ def send_exit_916(broker: str, symbol: str, exit_price: float,
 
 
 def send_exit_916_nodata(broker: str, symbol: str, shares_exited: int,
-                         shares_remaining: int, exit_price: float,
+                         shares_remaining: int, exit_price: float, bucket: str,
                          dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#9888; NO-DATA FALLBACK 9:16am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#9888; NO-DATA FALLBACK [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         "Live price unavailable from broker — sold half position as precaution.",
         f"<b>Shares sold:</b> {shares_exited}  |  <b>Still open:</b> {shares_remaining}",
         f"<b>Partial fill price:</b> &#8377;{exit_price:,.2f}",
-        "Remaining shares will be force-exited at 11:59am.",
+        "Remaining shares will be force-exited at this bucket's forced-exit time.",
     ])
     _send(text, topic="entries_exits")
 
 
 def send_force_exit_1159(broker: str, symbol: str, exit_price: float,
-                         return_pct: float, pnl: float,
+                         return_pct: float, pnl: float, bucket: str,
                          dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} FORCE EXIT 11:59am — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} FORCE EXIT [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -314,11 +318,13 @@ def send_short_open(broker: str, symbol: str, entry_price: float, shares: int,
 
 
 def send_square_off_239(broker: str, symbol: str, entry_price: float, exit_price: float,
-                        return_pct: float, pnl: float, dry_run: bool = False) -> None:
+                        return_pct: float, pnl: float, bucket: str,
+                        dry_run: bool = False) -> None:
     tag   = "  [DRY RUN]" if dry_run else ""
     arrow = "▲" if return_pct >= 0 else "▼"
     text  = "\n".join([
-        f"<b>{arrow} SHORT SQUARE-OFF 2:39pm — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>{arrow} SHORT SQUARE-OFF [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
         f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
@@ -328,23 +334,13 @@ def send_square_off_239(broker: str, symbol: str, entry_price: float, exit_price
     _send(text, topic="entries_exits")
 
 
-def send_target_placed(broker: str, symbol: str, target_price: float,
-                       order_id: str, dry_run: bool = False) -> None:
-    tag  = "  [DRY RUN]" if dry_run else ""
-    text = "\n".join([
-        f"<b>&#127919; TARGET PLACED — {html_lib.escape(symbol)}{tag}</b>",
-        f"<b>Broker:</b> {html_lib.escape(broker)}",
-        f"<b>Target price:</b> &#8377;{target_price:,.2f}",
-        f"<b>Order submitted:</b> {html_lib.escape(str(order_id))}",
-    ])
-    _send(text, topic="entries_exits")
-
-
 def send_target_hit(broker: str, symbol: str, stage: str, exit_price: float,
-                    return_pct: float, pnl: float, dry_run: bool = False) -> None:
+                    return_pct: float, pnl: float, bucket: str,
+                    dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#127919; TARGET HIT ({html_lib.escape(stage)}) — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#127919; TARGET HIT ({html_lib.escape(stage)}) [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Exit price:</b> &#8377;{exit_price:,.2f}",
         f"<b>Return:</b> {return_pct:+.2f}%",
@@ -354,10 +350,12 @@ def send_target_hit(broker: str, symbol: str, stage: str, exit_price: float,
 
 
 def send_cover_target_hit(broker: str, symbol: str, entry_price: float, exit_price: float,
-                          return_pct: float, pnl: float, dry_run: bool = False) -> None:
+                          return_pct: float, pnl: float, bucket: str,
+                          dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#127919; COVER TARGET HIT — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#127919; COVER TARGET HIT [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
         f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
@@ -368,10 +366,12 @@ def send_cover_target_hit(broker: str, symbol: str, entry_price: float, exit_pri
 
 
 def send_short_stoploss_hit(broker: str, symbol: str, entry_price: float, exit_price: float,
-                            return_pct: float, pnl: float, dry_run: bool = False) -> None:
+                            return_pct: float, pnl: float, bucket: str,
+                            dry_run: bool = False) -> None:
     tag  = "  [DRY RUN]" if dry_run else ""
     text = "\n".join([
-        f"<b>&#128721; STOP-LOSS HIT — {html_lib.escape(symbol)}{tag}</b>",
+        f"<b>&#128721; STOP-LOSS HIT [{html_lib.escape(str(bucket))}] — "
+        f"{html_lib.escape(symbol)}{tag}</b>",
         f"<b>Broker:</b> {html_lib.escape(broker)}",
         f"<b>Short price:</b> &#8377;{entry_price:,.2f}",
         f"<b>Cover price:</b> &#8377;{exit_price:,.2f}",
@@ -422,12 +422,12 @@ def send_daily_summary(broker: str, n_opened: int, n_exited_916: int,
 # ── Live monitor notifications ────────────────────────────────────────────────
 
 def send_monitor_qualified(symbol: str, ts_str: str, cum_vol: int, threshold: int,
-                           vol_ratio: float, ltp: float, prev_vwap: float,
+                           ltp: float, prev_vwap: float,
                            vwap_target: float) -> None:
     text = "\n".join([
         f"<b>&#9989; QUALIFIED — {html_lib.escape(symbol)}</b>",
         f"<b>Time:</b> {html_lib.escape(ts_str)} IST",
-        f"<b>Volume:</b> {cum_vol:,} / {threshold:,} ({vol_ratio:.2f}&times; avg)",
+        f"<b>Volume:</b> {cum_vol:,} / {threshold:,}",
         f"<b>LTP:</b> &#8377;{ltp:,.2f}",
         f"<b>VWAP target (prev+5%):</b> &#8377;{vwap_target:,.2f}",
         f"<b>Prev-day VWAP:</b> &#8377;{prev_vwap:,.2f}",

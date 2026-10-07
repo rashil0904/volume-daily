@@ -440,7 +440,6 @@ class LiveMonitor:
                 ts_str      = ts,
                 cum_vol     = int(state.cum_vol),
                 threshold   = int(state.vol_threshold),
-                vol_ratio   = vol_ratio,
                 ltp         = state.ltp,
                 prev_vwap   = state.prev_vwap,
                 vwap_target = vwap_target,

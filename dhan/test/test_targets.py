@@ -172,8 +172,7 @@ def fake_sell_a(symbol, exch, qty, **kw):
 with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_save_long_pos", store.save), \
      patch.object(rt, "sell", fake_sell_a), \
-     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
-     patch.object(rt.notify, "send_target_placed", MagicMock()):
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}):
     rt.place_targets_915(dry_run=False)
 
 check("(a) ALPHA (no target yet) gets a target order placed",
@@ -210,8 +209,7 @@ def fake_sell_a2(symbol, exch, qty, **kw):
 with patch.object(rt, "_load_long_pos", store_a2.load), \
      patch.object(rt, "_save_long_pos", store_a2.save), \
      patch.object(rt, "sell", fake_sell_a2), \
-     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {"OMICRON": 110.0}), \
-     patch.object(rt.notify, "send_target_placed", MagicMock()):
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {"OMICRON": 110.0}):
     rt.place_targets_915(dry_run=False)
 
 check("(a2) target capped to 109.45 (110 * 0.995), NOT the uncapped 117.0",
@@ -232,8 +230,7 @@ def fake_sell_a3(symbol, exch, qty, **kw):
 with patch.object(rt, "_load_long_pos", store_a3.load), \
      patch.object(rt, "_save_long_pos", store_a3.save), \
      patch.object(rt, "sell", fake_sell_a3), \
-     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
-     patch.object(rt.notify, "send_target_placed", MagicMock()):
+     patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}):
     rt.place_targets_915(dry_run=False)
 
 check("(a3) UC unavailable -> falls back to uncapped 17% target (117.0)",
@@ -352,8 +349,7 @@ with patch.object(rt, "_load_long_pos", store.load), \
      patch.object(rt, "_fetch_upper_circuit_batch", lambda syms: {}), \
      patch.object(rt, "_available_balance", lambda: 10_000_000.0), \
      patch.object(rt.time, "sleep", lambda secs: None), \
-     patch.object(rt.notify, "send_exit_916_nodata", MagicMock()), \
-     patch.object(rt.notify, "send_target_placed", MagicMock()):
+     patch.object(rt.notify, "send_exit_916_nodata", MagicMock()):
     rt.check_exit_916(dry_run=False, bucket="5-10")
 
 check("(c) cancel_order was called for the stale target", cancel_calls_c == ["TGT-DELTA"])
