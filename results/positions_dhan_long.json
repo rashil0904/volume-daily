@@ -3138,13 +3138,19 @@
       "221261005676309",
       "34126100567709"
     ],
-    "status": "open",
+    "status": "exited_manual",
     "entry_timestamp": "2026-10-05T15:19:51.079278+05:30",
     "product": "CNC",
     "return_pct": 12.08,
     "return_bucket": "10-15",
     "target_order_id": "23126100611309",
-    "target_price": 2331.8
+    "target_price": 2331.8,
+    "exit_price_manual": 1945.5,
+    "exit_order_id_manual": "33126100676109",
+    "exit_timestamp_manual": "2026-10-06T09:35:21+05:30",
+    "exit_note": "Sold manually (not placed by the bot -- no matching 'Order placed' entry anywhere in dhan_trades.log). Exact fill/time confirmed via Dhan's /trades trade-book API. Bot's own resting target (23126100611309) never filled and was later found cancelled/stale; the 10-15 bucket's 2026-10-06 09:18 check saw live P&L still negative and correctly held rather than selling, so this exit predates that check.",
+    "realized_return_pct": -7.7455,
+    "realized_pnl": -11597.1
   },
   {
     "broker": "dhan",
@@ -3215,13 +3221,19 @@
       "221261006577209",
       "34126100672509"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-06T15:20:12.015679+05:30",
     "product": "MTF",
     "return_pct": 10.23,
     "return_bucket": "10-15",
     "target_order_id": "34126100711409",
-    "target_price": 1448.9
+    "target_price": 1448.9,
+    "exit_price_916": 1238.1025,
+    "exit_order_id_916": "32126100759909",
+    "exit_timestamp_916": "2026-10-07T10:06:49+05:30",
+    "exit_note": "Bot-placed sell (2026-10-07 09:18 check_exit_916[10-15], P&L-positive branch) partially filled (50/242) within the 12s confirmation poll and timed out -- correctly not recorded as filled per the no-phantom-fill rule. The same order then fully filled on its own at 10:06:49 (confirmed via the order-update-feed cache and the Order Book), but nothing re-checked it until the 11:59 force-exit run found local=242/broker=0 and flagged it for manual review. Not a manual trade.",
+    "realized_return_pct": -0.0223,
+    "realized_pnl": -66.89
   },
   {
     "broker": "dhan",
