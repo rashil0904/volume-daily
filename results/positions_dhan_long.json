@@ -3441,13 +3441,19 @@
       "34126100866109",
       "23126100860509"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-08T15:20:16.312739+05:30",
     "product": "CNC",
     "return_pct": 9.45,
     "return_bucket": "5-10",
     "target_order_id": "23126100911409",
-    "target_price": 183.71
+    "target_price": 183.71,
+    "exit_price_916": 158.01,
+    "exit_order_id_916": "32126100945409",
+    "exit_timestamp_916": "2026-10-09T09:16:57+05:30",
+    "exit_note": "Bot-placed sell (2026-10-09 09:16 check_exit_916[5-10], P&L-positive branch) partially filled within the 12s confirmation poll and timed out -- correctly not recorded as filled per the no-phantom-fill rule. Fully filled moments later (confirmed via Dhan's /trades API, exchangeTime 09:16:57), but nothing re-checked it until manual review. Not a manual trade.",
+    "realized_return_pct": 0.6336,
+    "realized_pnl": 853.62
   },
   {
     "broker": "dhan",
@@ -3549,13 +3555,19 @@
       "321261009663809",
       "231261009118209"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-09T15:20:14.853761+05:30",
     "product": "CNC",
     "return_pct": 6.68,
     "return_bucket": "5-10",
     "target_order_id": "34126101211309",
-    "target_price": 23.02
+    "target_price": 23.02,
+    "exit_price_916": 21.55,
+    "exit_order_id_916": "22126101248009",
+    "exit_timestamp_916": "2026-10-12T09:16:47+05:30",
+    "exit_note": "Entered Fri 2026-10-09; first real exit chance was Mon 2026-10-12 (weekend between). Bot-placed sell (09:16 check_exit_916[5-10], P&L-positive branch) partially filled within the 12s confirmation poll and timed out -- correctly not recorded as filled per the no-phantom-fill rule. Fully filled moments later (confirmed via the order-update-feed cache, 09:16:47), but nothing re-checked it until manual review found broker=0. Not a manual trade.",
+    "realized_return_pct": 2.6767,
+    "realized_pnl": 2016.3
   },
   {
     "broker": "dhan",
@@ -3691,13 +3703,19 @@
       "231261009118009",
       "231261009118109"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-09T15:20:17.834454+05:30",
     "product": "MTF",
     "return_pct": 10.68,
     "return_bucket": "10-15",
     "target_order_id": "23126101211209",
-    "target_price": 1436.9
+    "target_price": 1436.9,
+    "exit_price_1159": 1195.11,
+    "exit_order_id_1159": "23126101245809",
+    "exit_timestamp_1159": "2026-10-12T12:03:30+05:30",
+    "exit_note": "Entered Fri 2026-10-09; first real exit chance was Mon 2026-10-12 (weekend between). Bot-placed sell (11:59 force_exit_1159[10-15]) polled for 12s with no confirmed fill, logged as 'force-exit sell rejected' (a misnomer -- not an actual broker rejection) and left as-is per the no-phantom-fill rule. The same order actually filled almost 4 minutes later (confirmed via the order-update-feed cache, 12:03:30), but nothing re-checked it until manual review found broker=0. Not a manual trade.",
+    "realized_return_pct": -2.6857,
+    "realized_pnl": -5409.16
   },
   {
     "broker": "dhan",
