@@ -36,6 +36,7 @@ import json
 import math
 import os
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -1875,6 +1876,22 @@ def _sync_pnl_workbook() -> None:
                    base_capital=module.BASE_CAPITAL_CURRENT)
     except Exception as exc:
         print(f"[dhan]   !! P&L workbook sync failed (current ₹12L era): {exc}", file=sys.stderr)
+        return
+
+    # Google Drive push lives HERE (not a separate cron line) so it can never
+    # drift from the workbook it's supposed to reflect -- any --sync-pnl run,
+    # cron or manual, pushes the file it just wrote. rclone's Drive backend
+    # does a true in-place overwrite (same file ID/link) when the destination
+    # name already matches -- confirmed live 2026-10-01. Only runs if the
+    # current-era build above actually succeeded (an upload of a stale/missing
+    # file on a build failure would be worse than no upload).
+    try:
+        subprocess.run(
+            ["/usr/bin/rclone", "copy", str(module.OUT_PATH_CURRENT), "gdrive:Strategy PnL/"],
+            check=True, capture_output=True, text=True, timeout=60,
+        )
+    except Exception as exc:
+        print(f"[dhan]   !! Google Drive push failed: {exc}", file=sys.stderr)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
