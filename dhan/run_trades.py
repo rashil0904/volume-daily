@@ -2450,6 +2450,125 @@ def place_targets_915(dry_run: bool = False) -> None:
     print(f"\n[dhan] Place targets complete. Placed: {n_placed}  Skipped: {n_skipped}.")
 
 
+# ── Stale-exit reconciliation ───────────────────────────────────────────────────
+# Added 2026-10-19 after the SAME underlying bug closed out YUKEN, KOTIC, MMWL
+# (twice), SUNCLAY, INDOKEM, and SIMPLEXINF without this process ever noticing:
+# a sell order places fine and partially fills within the ~15s WS+REST
+# confirmation window (_poll_fill_ws_first/_poll_fill_safe), times out, then
+# fully fills on its own anywhere from seconds to ~5 minutes later. The
+# position sits at status="open" forever after that -- nothing was ever
+# re-checking it. This cannot be fixed by waiting longer synchronously (orders
+# have taken up to 5 minutes to fill; blocking a whole exit-stage batch that
+# long defeats the point of polling at all).
+#
+# Deliberately its OWN CLI entry point (--reconcile) and its own cron line
+# (9:12am, 3 min before place_targets_915) rather than being called inline
+# from place_targets_915/check_exit_916/force_exit_1159:
+#   1. Hooking it into place_targets_915 directly broke that function's own
+#      test suite -- test_targets.py deliberately constructs many
+#      local-qty != broker-qty fixtures to test the PRE-EXISTING mismatch
+#      detection in check_exit_916/force_exit_1159, none of which mock
+#      security_id()/dhan.charges.get_trades() (this function's own real
+#      broker-trade lookups), so every one of those fixtures fired a real,
+#      unmocked network call -- confirmed live: test_targets.py jumped from
+#      ~9s to ~190s.
+#   2. check_exit_916/force_exit_1159 each run once PER BUCKET (up to 3x/day
+#      each) -- inlining it there would redundantly re-sweep the exact same
+#      full open-position list up to 9x/day for no benefit.
+#   3. place_targets_915 is timing-sensitive (profit targets must land at
+#      9:15 sharp -- NSE rejects regular orders before then, see this
+#      file's own notes elsewhere); an unbounded number of real broker/
+#      trade-lookup calls ahead of it risks delaying that.
+# A same-day timeout is therefore caught by TOMORROW morning's 9:12
+# reconciliation run, not same-day -- acceptable, since the broker side is
+# already correctly resolved either way; only our own bookkeeping lags by at
+# most one trading day, same as every instance found so far.
+def _reconcile_stale_exits(positions: list, dry_run: bool = False) -> list:
+    """For every open long position, compares local qty against the broker's
+    REAL current holding (_broker_qty). Equal -> genuinely still open, left
+    untouched. Broker lower -> already sold at some point; the real fill is
+    pulled from Dhan's own historical /trades API (never guessed/estimated),
+    matched by securityId + SELL across [entry_date, today]. Closed out as
+    status="exited_reconciled" -- deliberately distinct from exited_916/1159/
+    manual, since which cron stage actually placed the original sell was lost
+    the moment its order id got discarded on timeout; honest that this is an
+    auto-recovered fill, not a label guess. A sold quantity that doesn't
+    exactly match the broker-vs-local delta, or a broker qty HIGHER than
+    local, is left alone and flagged for manual review instead of guessed --
+    same "don't guess" rule as every other defensive check in this file.
+    Long-side only -- squaring off a mirrored short (square_off_239) uses a
+    different schema (positions_dhan_short.json) and hasn't shown this bug;
+    not touched here."""
+    dirty = False
+    for p in _open_pos(positions):
+        sym       = p["symbol"]
+        product   = p.get("product", "CNC")
+        local_qty = p.get("actual_fill_quantity", 0)
+        try:
+            bqty, _ = _broker_qty(sym, product)
+        except Exception as exc:
+            print(f"[dhan]   !! reconcile: broker qty check failed for {sym}: {exc}")
+            continue
+
+        if bqty == local_qty:
+            continue
+        if bqty > local_qty:
+            print(f"[dhan]   !! reconcile: {sym} broker={bqty} > local={local_qty} -- "
+                  f"unexpected, leaving as-is, manual review required.")
+            continue
+
+        try:
+            import dhan.charges as _dhan_charges
+            sid       = str(security_id(sym))
+            today_str = datetime.now(_IST).strftime("%Y-%m-%d")
+            trades    = _dhan_charges.get_trades(p["entry_date"], today_str)
+            sells     = [t for t in trades if str(t.get("securityId")) == sid
+                        and t.get("transactionType") == "SELL"]
+        except Exception as exc:
+            print(f"[dhan]   !! reconcile: trade lookup failed for {sym}: {exc} -- "
+                  f"manual review required.")
+            continue
+
+        sold_qty = sum(int(t["tradedQuantity"]) for t in sells)
+        if sold_qty != local_qty - bqty:
+            print(f"[dhan]   !! reconcile: {sym} broker delta={local_qty - bqty} but "
+                  f"/trades shows {sold_qty} sold -- mismatch, manual review required.")
+            continue
+
+        total_value = sum(t["tradedQuantity"] * t["tradedPrice"] for t in sells)
+        exit_price  = total_value / sold_qty
+        last_trade  = max(sells, key=lambda t: t["exchangeTime"])
+        fill_price  = p["actual_fill_price"]
+        pnl         = (exit_price - fill_price) * sold_qty
+        ret_pct     = (exit_price - fill_price) / fill_price * 100 if fill_price else 0
+
+        print(f"[dhan]   RECONCILED — {sym} was already sold at the broker "
+              f"({sold_qty}@₹{exit_price:,.2f}, last fill {last_trade['exchangeTime']}) "
+              f"but was never confirmed here. Closing out as exited_reconciled.")
+
+        if not dry_run:
+            p.update({
+                "status":                    "exited_reconciled",
+                "exit_price_reconciled":     round(exit_price, 4),
+                "exit_order_ids_reconciled": [t["orderId"] for t in sells],
+                "exit_timestamp_reconciled": f"{last_trade['exchangeTime']}+05:30",
+                "exit_note": ("Auto-reconciled: broker showed fewer shares than our "
+                               "records; real fill recovered from Dhan's /trades API, "
+                               "not guessed. The original exit stage is unknown -- a "
+                               "sell this bot placed filled after our confirmation poll "
+                               "gave up, same as YUKEN/KOTIC/MMWL/SUNCLAY/INDOKEM/"
+                               "SIMPLEXINF before it -- but which cron stage placed it "
+                               "was lost when the timeout discarded the order id."),
+                "realized_return_pct":       round(ret_pct, 4),
+                "realized_pnl":              round(pnl, 2),
+            })
+            dirty = True
+
+    if dirty and not dry_run:
+        _save_long_pos(positions)
+    return positions
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # EXIT — mirrors zerodha/run_trades_mtf.py's check_exit_916_mtf / force_exit_1159_mtf
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4280,6 +4399,11 @@ if __name__ == "__main__":
                      help="Square off shorts opened from 916/1159 exits (unconditional, 2:39pm)")
     grp.add_argument("--place-targets", action="store_true",
                      help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
+    grp.add_argument("--reconcile",     action="store_true",
+                     help="Close out any open long whose broker holding is already lower than "
+                          "our records (a sell that filled after our confirmation poll gave up "
+                          "-- see _reconcile_stale_exits' own comment). Run once/day, 9:12am, "
+                          "before --place-targets.")
     grp.add_argument("--sync-pnl",      action="store_true",
                      help="Regenerate results/strategy_pnl_simple.xlsx from the latest "
                           "position files. Run once after market close (~3:45pm), not "
@@ -4407,6 +4531,8 @@ if __name__ == "__main__":
             square_off_239(dry_run=args.dry_run, bucket=args.bucket)
         elif args.sync_pnl:
             _sync_pnl_workbook()
+        elif args.reconcile:
+            _reconcile_stale_exits(_load_long_pos(), dry_run=args.dry_run)
         else:
             place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:

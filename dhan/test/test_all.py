@@ -45,6 +45,7 @@ TEST_FILES = [
     "test_entry_limit_subset.py",
     "test_return_buckets.py",
     "test_charges.py",
+    "test_reconcile_stale_exits.py",
 ]
 
 PASS = "\033[32mPASS\033[0m"
