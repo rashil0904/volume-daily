@@ -3812,13 +3812,19 @@
       "321261012630809",
       "221261012643209"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-12T15:20:16.531930+05:30",
     "product": "CNC",
     "return_pct": 8.74,
     "return_bucket": "5-10",
     "target_order_id": "23126101311009",
-    "target_price": 23.94
+    "target_price": 23.94,
+    "exit_price_916": 23.18,
+    "exit_order_id_916": "23126101312309",
+    "exit_timestamp_916": "2026-10-13T09:17:55+05:30",
+    "exit_note": "Same poll-timeout-then-late-fill bug as YUKEN/KOTIC/SUNCLAY/INDOKEM/SIMPLEXINF. Fixed by hand rather than via the new --reconcile flag because this symbol's lookup window overlapped the already-fixed MMWL (2026-10-09 entry)'s own sell trade -- --reconcile correctly refused to guess (7331 sold vs 3742 expected) rather than compute a wrong blended price. Confirmed via Dhan's /trades API.",
+    "realized_return_pct": 1.2231,
+    "realized_pnl": 1048.13
   },
   {
     "broker": "dhan",
@@ -4028,13 +4034,21 @@
       "221261013599309",
       "321261013576809"
     ],
-    "status": "open",
+    "status": "exited_reconciled",
     "entry_timestamp": "2026-10-13T15:20:02.980803+05:30",
     "product": "CNC",
     "return_pct": 11.35,
     "return_bucket": "10-15",
     "target_order_id": "22126101438509",
-    "target_price": 793.25
+    "target_price": 793.25,
+    "exit_price_reconciled": 654.8135,
+    "exit_order_ids_reconciled": [
+      "221261014412609"
+    ],
+    "exit_timestamp_reconciled": "2026-10-14T12:04:34+05:30",
+    "exit_note": "Auto-reconciled: broker showed fewer shares than our records; real fill recovered from Dhan's /trades API, not guessed. The original exit stage is unknown -- a sell this bot placed filled after our confirmation poll gave up, same as YUKEN/KOTIC/MMWL/SUNCLAY/INDOKEM/SIMPLEXINF before it -- but which cron stage placed it was lost when the timeout discarded the order id.",
+    "realized_return_pct": -3.4177,
+    "realized_pnl": -2919.65
   },
   {
     "broker": "dhan",
@@ -4314,13 +4328,21 @@
       "321261014667309",
       "341261014130909"
     ],
-    "status": "open",
+    "status": "exited_reconciled",
     "entry_timestamp": "2026-10-14T15:20:16.953944+05:30",
     "product": "MTF",
     "return_pct": 7.02,
     "return_bucket": "5-10",
     "target_order_id": "32126101547209",
-    "target_price": 312.16
+    "target_price": 312.16,
+    "exit_price_reconciled": 265.57,
+    "exit_order_ids_reconciled": [
+      "32126101554009"
+    ],
+    "exit_timestamp_reconciled": "2026-10-15T09:19:21+05:30",
+    "exit_note": "Auto-reconciled: broker showed fewer shares than our records; real fill recovered from Dhan's /trades API, not guessed. The original exit stage is unknown -- a sell this bot placed filled after our confirmation poll gave up, same as YUKEN/KOTIC/MMWL/SUNCLAY/INDOKEM/SIMPLEXINF before it -- but which cron stage placed it was lost when the timeout discarded the order id.",
+    "realized_return_pct": -0.4614,
+    "realized_pnl": -922.02
   },
   {
     "broker": "dhan",
