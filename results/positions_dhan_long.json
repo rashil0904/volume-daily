@@ -4683,11 +4683,18 @@
       "34126101987809",
       "221261019601409"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-19T15:19:30.006338+05:30",
     "product": "MTF",
     "return_pct": 6.78,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "22126102139809",
+    "target_price": 115.57,
+    "exit_price_1159": 97.3,
+    "exit_order_id_1159": "321261021266809",
+    "exit_timestamp_1159": "2026-10-21T10:18:02.883591+05:30",
+    "realized_return_pct": -1.4932,
+    "realized_pnl": -4477.8
   },
   {
     "broker": "dhan",
@@ -4709,11 +4716,18 @@
       "221261019600309",
       "321261019583209"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-19T15:19:31.107606+05:30",
     "product": "MTF",
     "return_pct": 10.5,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "23126102111809",
+    "target_price": 350.05,
+    "exit_price_1159": 282.49,
+    "exit_order_id_1159": "221261021417609",
+    "exit_timestamp_1159": "2026-10-21T11:59:02.909425+05:30",
+    "realized_return_pct": -5.5786,
+    "realized_pnl": -16690.0
   },
   {
     "broker": "dhan",
@@ -4739,10 +4753,18 @@
       "23126101992509",
       "221261019602009"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-19T15:19:31.793491+05:30",
     "product": "CNC",
     "return_pct": 9.82,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "32126102142009",
+    "target_price": 78.1,
+    "exit_price_916": 66.8359,
+    "exit_order_id_916": "23126102112709",
+    "exit_timestamp_916": "2026-10-21T09:16:35.483768+05:30",
+    "realized_return_pct": 0.123,
+    "realized_pnl": 184.36,
+    "exit_note": "Corrected 2026-10-21: WS-first confirmation path recorded the order-update feed's rounded avg_price (66.84); Dhan's own REST order-detail endpoint (GET /orders/23126102112709) shows the true averageTradedPrice as 66.835884. realized_pnl/realized_return_pct recomputed off the precise figure."
   }
 ]
