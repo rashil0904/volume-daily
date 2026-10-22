@@ -1,0 +1,2 @@
+timestamp,symbol,quantity,ref_price,fill_price,leverage,margin_required,order_id,status,product,capital_base
+2026-10-22T15:21:12.951486+05:30,BETA,75,1997.6,,1.0,149820.0,341261022113209,not_filled,CNC,600000.0
