@@ -1,8 +1,8 @@
 {
-  "date": "2026-10-22",
+  "date": "2026-10-23",
   "status": "fresh",
-  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-10-22.csv",
-  "rows": 516,
+  "file": "/root/volume-daily/data/market_cap_daily/market_cap_2026-10-23.csv",
+  "rows": 515,
   "fallback_date": null,
-  "message": "Already fetched today (516 rows) \u2014 skipping."
+  "message": "Already fetched today (515 rows) \u2014 skipping."
 }

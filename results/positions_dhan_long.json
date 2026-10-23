@@ -4766,5 +4766,63 @@
     "realized_return_pct": 0.123,
     "realized_pnl": 184.36,
     "exit_note": "Corrected 2026-10-21: WS-first confirmation path recorded the order-update feed's rounded avg_price (66.84); Dhan's own REST order-detail endpoint (GET /orders/23126102112709) shows the true averageTradedPrice as 66.835884. realized_pnl/realized_return_pct recomputed off the precise figure."
+  },
+  {
+    "broker": "dhan",
+    "symbol": "FISCHER",
+    "entry_date": "2026-10-23",
+    "reference_price": 24.97,
+    "shares_intended": 6007,
+    "actual_fill_price": 24.9837,
+    "actual_fill_quantity": 6007,
+    "entry_order_id": [
+      "341261023126009",
+      "321261023756709",
+      "231261023120709",
+      "221261023808609",
+      "341261023126109",
+      "231261023120809",
+      "231261023121009",
+      "321261023759509",
+      "321261023759709",
+      "221261023810109",
+      "341261023126409",
+      "321261023760109",
+      "341261023126709"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-23T15:19:20.017914+05:30",
+    "product": "CNC",
+    "return_pct": 5.19,
+    "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JINDALPOLY",
+    "entry_date": "2026-10-23",
+    "reference_price": 730.0,
+    "shares_intended": 410,
+    "actual_fill_price": 726.0981,
+    "actual_fill_quantity": 410,
+    "entry_order_id": [
+      "221261023807609",
+      "321261023756809",
+      "231261023120609",
+      "221261023808709",
+      "221261023809309",
+      "231261023120909",
+      "221261023809609",
+      "231261023121109",
+      "341261023126209",
+      "341261023126309",
+      "341261023126509",
+      "341261023126609",
+      "321261023760409"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-23T15:19:21.082754+05:30",
+    "product": "MTF",
+    "return_pct": 13.76,
+    "return_bucket": "10-15"
   }
 ]
