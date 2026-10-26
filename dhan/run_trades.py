@@ -15,6 +15,9 @@ Positions   : results/positions_dhan_long.json + results/positions_dhan_short.js
               a same-day mirrored short can never block a fresh same-day long entry
               on the same symbol; see the "Positions JSON" section below for why.
               Independent from positions_zerodha_long.json/positions_zerodha_short.json.
+              results/pending_short_verifications.json holds short-open order_ids
+              whose confirmation poll gave up without a TRADED/REJECTED verdict --
+              see _reconcile_pending_shorts.
 
 Mirrors zerodha/run_trades_mtf.py's shape exactly: live per-symbol leverage
 check before every entry -> product="MTF" when leverage is actually available
@@ -62,8 +65,9 @@ import notify
 _IST          = ZoneInfo("Asia/Kolkata")
 _BROKER       = "dhan"
 _RESULTS_DIR  = _ROOT / "results"
-_POS_FILE_LONG  = _RESULTS_DIR / "positions_dhan_long.json"
-_POS_FILE_SHORT = _RESULTS_DIR / "positions_dhan_short.json"
+_POS_FILE_LONG    = _RESULTS_DIR / "positions_dhan_long.json"
+_POS_FILE_SHORT   = _RESULTS_DIR / "positions_dhan_short.json"
+_PENDING_SHORT_FILE = _RESULTS_DIR / "pending_short_verifications.json"
 _LOG_DIR      = _RESULTS_DIR / "trades"
 TOTAL_CAPITAL = 1_200_000  # reduced from ₹15L, effective 2026-10-01
 
@@ -1178,6 +1182,42 @@ def _save_short_pos(positions: list) -> None:
     _save_json_positions(_POS_FILE_SHORT, positions)
 
 
+def _load_pending_shorts() -> list:
+    return _load_json_positions(_PENDING_SHORT_FILE)
+
+
+def _save_pending_shorts(entries: list) -> None:
+    _save_json_positions(_PENDING_SHORT_FILE, entries)
+
+
+def _record_pending_short_verification(sym: str, oid: str, source_stage: str,
+                                        return_bucket: str | None) -> None:
+    """Called whenever _open_short_place's poll gives up on a short-open SELL
+    without a confirmed TRADED/REJECTED -- see that timeout's own comment
+    (_poll_fill_safe) on why the order's real fate is genuinely unknown at
+    that point, not a confirmed rejection. Previously the order_id was
+    simply discarded here, which is exactly what let FISCHER's 2026-10-26
+    short-open (order 23126102637609, filled 6007@25.74 eighteen seconds
+    after placement -- eight seconds past our ~15s poll budget) sit as a
+    completely untracked naked short for the rest of the day: no position
+    record, no cover-target, no stop-loss, no square-off, no notification.
+    It was eventually auto-covered by Dhan's own RMS at 15:11 (NSE doesn't
+    allow carrying a naked equity short overnight) at ₹26.50, a ₹4,584 loss
+    we had no say in. Persisting the order_id here means
+    _reconcile_pending_shorts can still recover it later the same day --
+    see that function for the other half of this fix."""
+    pending = _load_pending_shorts()
+    pending.append({
+        "symbol":            sym,
+        "order_id":          oid,
+        "source_exit_stage": source_stage,
+        "return_bucket":     return_bucket,
+        "entry_date":        date.today().isoformat(),
+        "recorded_at":       _ts(),
+    })
+    _save_pending_shorts(pending)
+
+
 def _open_pos(positions: list) -> list:
     """positions must already be from _load_long_pos() -- the long file never
     contains a short-direction row, so no direction filter is needed here."""
@@ -1653,7 +1693,12 @@ def _open_short_place(sym: str, qty: int, source_stage: str, dry_run: bool,
 
         ep, eq = (ltp, qty) if dry_run else _poll_fill_ws_first(oid, ltp, qty)
         if eq == 0:
-            print(f"[dhan]   SHORT NOT FILLED — {sym} short order rejected.")
+            print(f"[dhan]   SHORT NOT FILLED — {sym} short order rejected "
+                  f"(order {oid} preserved for later verification by "
+                  f"_reconcile_pending_shorts, in case this was a late fill our poll "
+                  f"just didn't catch in time).")
+            if not dry_run:
+                _record_pending_short_verification(sym, oid, source_stage, return_bucket)
             return None
 
         print(f"[dhan]   SHORT OPENED — {sym}  ₹{ep:,.2f} × {eq}  (from {source_stage} exit)")
@@ -3276,6 +3321,117 @@ def _daily_summary(positions: list, n_force: int, dry_run: bool) -> None:
         print(f"  [notify] daily_summary failed: {exc}", file=sys.stderr)
 
 
+def _reconcile_pending_shorts(dry_run: bool = False) -> None:
+    """Resolves every order_id _record_pending_short_verification() stashed
+    away when a short-open SELL's poll gave up without a confirmed
+    TRADED/REJECTED (see that function's own comment for the full FISCHER
+    2026-10-26 history this exists to stop recurring). Checks each pending
+    order's REAL status via GET /orders/{id} -- the same authoritative
+    source _reconcile_stale_exits uses for long positions -- and:
+
+      * REJECTED/CANCELLED/EXPIRED -> genuinely never filled. Discarded,
+        nothing more to do.
+      * still PENDING/TRANSIT/PART_TRADED -> order's fate is still
+        unresolved. Left in the pending file for the next call (this
+        function is called from every square_off_239 bucket run, 3x/day,
+        plus the 9:12am --reconcile slot -- so nothing waits more than a
+        few hours).
+      * TRADED -> the late-fill bug: this order DID fill after our poll
+        gave up, with nobody ever creating a position for it. Builds the
+        missing short row from the order's own real avg_price/filled_qty
+        (never guessed), immediately places its cover-target + stop-loss
+        via _open_short_protect (same protection a normal short-open gets,
+        just late), sends the entry notification that never went out the
+        first time, and saves it into positions_dhan_short.json with
+        status "short_open" -- so the NEXT step in whichever function
+        called this (square_off_239 re-loading _load_short_pos() right
+        after) picks it up and squares it off through the existing,
+        unmodified square-off machinery like any other short.
+
+    Call this BEFORE _load_short_pos() wherever a short position list is
+    about to be read, not after -- a recovered row needs to already be on
+    disk for that read to see it.
+
+    Safe to call when the pending file is empty or missing (the overwhelmingly
+    common case -- most short-open polls confirm fine): returns immediately,
+    zero API calls."""
+    pending = _load_pending_shorts()
+    if not pending:
+        return
+
+    still_pending: list = []
+    recovered: list = []
+    for entry in pending:
+        sym, oid = entry["symbol"], entry["order_id"]
+        try:
+            status = _dhan_order_status(oid)
+        except Exception as exc:
+            print(f"[dhan]   !! reconcile-short: order status check failed for {sym} "
+                  f"({oid}): {exc} -- leaving pending.")
+            still_pending.append(entry)
+            continue
+
+        ostatus = (status.get("orderStatus") or "").upper()
+        if ostatus in ("REJECTED", "CANCELLED", "EXPIRED"):
+            print(f"[dhan]   reconcile-short: {sym} order {oid} confirmed {ostatus} -- "
+                  f"genuinely never filled, discarding.")
+            continue
+        if ostatus != "TRADED":
+            print(f"[dhan]   reconcile-short: {sym} order {oid} still "
+                  f"{ostatus or 'unknown'} -- leaving pending for next check.")
+            still_pending.append(entry)
+            continue
+
+        ep = float(status.get("averageTradedPrice") or 0)
+        eq = int(status.get("filledQty") or 0)
+        print(f"[dhan]   RECONCILE-SHORT — {sym} order {oid} actually filled "
+              f"({eq}@₹{ep:,.2f}) after our poll gave up -- same poll-timeout-then-"
+              f"late-fill bug as the long-exit history, now recovered on the "
+              f"short-open side. Placing protective cover-target + stop-loss now.")
+        row = {
+            "broker":                _BROKER,
+            "symbol":                sym,
+            "direction":             "short",
+            "product":               "INTRADAY",
+            "source_exit_stage":     entry.get("source_exit_stage"),
+            "return_bucket":         entry.get("return_bucket"),
+            "entry_date":            entry.get("entry_date"),
+            "entry_price":           round(ep, 4),
+            "quantity":              eq,
+            "entry_order_id":        oid,
+            "cover_target_order_id": None,
+            "cover_target_price":    None,
+            "stop_order_id":         None,
+            "stop_trigger_price":    None,
+            "stop_limit_price":      None,
+            "status":                "short_open",
+            "entry_timestamp":       _ts(),
+            "entry_note": ("Recovered by _reconcile_pending_shorts: this short's own "
+                            "poll timed out and was originally logged as rejected, but "
+                            "Dhan's order book confirms it filled -- same bug class as "
+                            "FISCHER on 2026-10-26."),
+        }
+        if dry_run:
+            print(f"[dhan]   DRY RUN — would recover {sym} as a live short, not writing.")
+            continue
+        row = _open_short_protect(row, dry_run=False)
+        recovered.append(row)
+        try:
+            notify.send_short_open(broker=_BROKER, symbol=f"{sym} [SHORT INTRADAY]",
+                                   entry_price=ep, shares=eq,
+                                   source_exit_stage=entry.get("source_exit_stage"),
+                                   dry_run=False)
+        except Exception as exc:
+            print(f"  [notify] short_open failed: {exc}", file=sys.stderr)
+
+    if recovered:
+        short_positions = _load_short_pos()
+        short_positions.extend(recovered)
+        _save_short_pos(short_positions)
+    if not dry_run:
+        _save_pending_shorts(still_pending)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SHORT SQUARE-OFF 2:39pm — unconditional buy-to-cover for every short opened by
 # _open_short() from either the 916 or 1159 long-exit stages (see module docstring).
@@ -3293,6 +3449,13 @@ def square_off_239(dry_run: bool = False, bucket: str = None) -> None:
     print(f"{'='*60}")
 
     _hold_until(*sched["squareoff_prep"], f"square_off_239[{bucket_label}] prep")
+
+    # Recover any short-open order that filled after its own poll gave up
+    # (see _reconcile_pending_shorts) BEFORE loading positions below, so a
+    # just-recovered row is already on disk for _load_short_pos() to see.
+    # Runs for every bucket (not just this one) since the pending list isn't
+    # bucket-filtered -- cheap no-op when empty, which is the common case.
+    _reconcile_pending_shorts(dry_run=dry_run)
 
     # ── Prep step, pinned to this bucket's own prep instant: position load
     # + Order Book snapshot + classification
@@ -4401,9 +4564,11 @@ if __name__ == "__main__":
                      help="Place 17%% profit-target LIMIT sells for open longs (9:15am)")
     grp.add_argument("--reconcile",     action="store_true",
                      help="Close out any open long whose broker holding is already lower than "
-                          "our records (a sell that filled after our confirmation poll gave up "
-                          "-- see _reconcile_stale_exits' own comment). Run once/day, 9:12am, "
-                          "before --place-targets.")
+                          "our records, AND recover any short-open order that filled after its "
+                          "own confirmation poll gave up (see _reconcile_stale_exits and "
+                          "_reconcile_pending_shorts' own comments). Run once/day, 9:12am, "
+                          "before --place-targets -- square_off_239 also calls the short-side "
+                          "reconcile itself, 3x/day, so this is a same-day backstop.")
     grp.add_argument("--sync-pnl",      action="store_true",
                      help="Regenerate results/strategy_pnl_simple.xlsx from the latest "
                           "position files. Run once after market close (~3:45pm), not "
@@ -4533,6 +4698,7 @@ if __name__ == "__main__":
             _sync_pnl_workbook()
         elif args.reconcile:
             _reconcile_stale_exits(_load_long_pos(), dry_run=args.dry_run)
+            _reconcile_pending_shorts(dry_run=args.dry_run)
         else:
             place_targets_915(dry_run=args.dry_run)
     except (EnvironmentError, RuntimeError, ValueError) as exc:

@@ -2673,5 +2673,30 @@
     "exit_timestamp_239": "2026-10-14T14:57:01.953543+05:30",
     "realized_return_pct": 4.9997,
     "realized_pnl": 9209.28
+  },
+  {
+    "broker": "dhan",
+    "symbol": "FISCHER",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "1159",
+    "return_bucket": "5-10",
+    "entry_date": "2026-10-26",
+    "entry_price": 25.7414,
+    "quantity": 6007,
+    "entry_order_id": "23126102637609",
+    "cover_target_order_id": null,
+    "cover_target_price": null,
+    "stop_order_id": null,
+    "stop_trigger_price": null,
+    "stop_limit_price": null,
+    "status": "short_closed_reconciled",
+    "entry_timestamp": "2026-10-26T10:18:32+05:30",
+    "exit_price_reconciled": 26.5045,
+    "exit_order_id_reconciled": "321261026623009",
+    "exit_timestamp_reconciled": "2026-10-26T15:11:21+05:30",
+    "realized_return_pct": -2.9645,
+    "realized_pnl": -4584.0,
+    "exit_note": "Recovered 2026-10-26 after the fact: this short-open SELL (order 23126102637609, placed 10:18:14) filled completely (6007@25.74142) eighteen seconds after placement -- eight seconds past our confirmation poll's budget -- so _open_short_place treated it as rejected and never created a position record. No cover-target or stop-loss was ever placed as a result. The naked short sat unmanaged until Dhan's own RMS auto-covered it at 15:11:21 (order 321261026623009, BUY 6007@26.50453) -- NSE does not allow carrying a naked equity short overnight -- crystallizing this -₹4,584 loss at a price we had no control over. Both fill prices confirmed directly via GET /orders/{id}, never guessed. Root cause fixed same day: _record_pending_short_verification + _reconcile_pending_shorts (dhan/run_trades.py) now preserve and re-check any short-open order whose poll times out, same pattern as the long-exit _reconcile_stale_exits fix."
   }
 ]

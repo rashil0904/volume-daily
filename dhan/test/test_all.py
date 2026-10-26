@@ -46,6 +46,7 @@ TEST_FILES = [
     "test_return_buckets.py",
     "test_charges.py",
     "test_reconcile_stale_exits.py",
+    "test_reconcile_pending_shorts.py",
 ]
 
 PASS = "\033[32mPASS\033[0m"
