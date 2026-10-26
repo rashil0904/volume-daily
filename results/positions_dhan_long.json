@@ -4790,11 +4790,18 @@
       "321261023760109",
       "341261023126709"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-23T15:19:20.017914+05:30",
     "product": "CNC",
     "return_pct": 5.19,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "34126102611809",
+    "target_price": 29.23,
+    "exit_price_1159": 25.7571,
+    "exit_order_id_1159": "23126102637409",
+    "exit_timestamp_1159": "2026-10-26T10:18:13.245673+05:30",
+    "realized_return_pct": 3.0957,
+    "realized_pnl": 4645.89
   },
   {
     "broker": "dhan",
@@ -4819,10 +4826,45 @@
       "341261023126609",
       "321261023760409"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-23T15:19:21.082754+05:30",
     "product": "MTF",
     "return_pct": 13.76,
+    "return_bucket": "10-15",
+    "target_order_id": "32126102641309",
+    "target_price": 849.55,
+    "exit_price_1159": 696.0,
+    "exit_order_id_1159": "321261026388909",
+    "exit_timestamp_1159": "2026-10-26T11:59:02.874924+05:30",
+    "realized_return_pct": -4.1452,
+    "realized_pnl": -12340.22
+  },
+  {
+    "broker": "dhan",
+    "symbol": "INDOSTAR",
+    "entry_date": "2026-10-26",
+    "reference_price": 183.38,
+    "shares_intended": 1635,
+    "actual_fill_price": 183.525,
+    "actual_fill_quantity": 1635,
+    "entry_order_id": [
+      "23126102699709",
+      "221261026669809",
+      "321261026636409",
+      "321261026636909",
+      "23126102699809",
+      "34126102699309",
+      "221261026670609",
+      "221261026671109",
+      "231261026100009",
+      "231261026100109",
+      "34126102699609",
+      "34126102699709"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-26T15:19:10.008694+05:30",
+    "product": "MTF",
+    "return_pct": 12.28,
     "return_bucket": "10-15"
   }
 ]
