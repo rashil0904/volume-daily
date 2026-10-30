@@ -5216,11 +5216,18 @@
       "231261029110409",
       "231261029110609"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-29T15:19:20.015844+05:30",
     "product": "MTF",
     "return_pct": 13.19,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "22126103044909",
+    "target_price": 644.95,
+    "exit_price_1159": 516.63,
+    "exit_order_id_1159": "321261030385709",
+    "exit_timestamp_1159": "2026-10-30T11:59:03.302679+05:30",
+    "realized_return_pct": -6.2795,
+    "realized_pnl": -15057.74
   },
   {
     "broker": "dhan",
@@ -5244,11 +5251,18 @@
       "221261029733009",
       "341261029103009"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-29T15:19:21.130396+05:30",
     "product": "CNC",
     "return_pct": 11.23,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "22126103045009",
+    "target_price": 1421.1,
+    "exit_price_916": 1231.05,
+    "exit_order_id_916": "34126103017109",
+    "exit_timestamp_916": "2026-10-30T09:18:03.393734+05:30",
+    "realized_return_pct": 1.3562,
+    "realized_pnl": 1614.3
   },
   {
     "broker": "dhan",
@@ -5272,11 +5286,18 @@
       "341261029102909",
       "341261029103109"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-10-29T15:19:21.830164+05:30",
     "product": "MTF",
     "return_pct": 7.89,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "32126103043409",
+    "target_price": 213.39,
+    "exit_price_916": 188.42,
+    "exit_order_id_916": "32126103050309",
+    "exit_timestamp_916": "2026-10-30T09:16:03.475496+05:30",
+    "realized_return_pct": 3.3094,
+    "realized_pnl": 7979.33
   },
   {
     "broker": "dhan",
@@ -5300,11 +5321,18 @@
       "231261029110309",
       "321261029716709"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-29T15:19:22.552366+05:30",
     "product": "MTF",
     "return_pct": 13.83,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "32126103043509",
+    "target_price": 2346.5,
+    "exit_price_1159": 1955.18,
+    "exit_order_id_1159": "221261030414209",
+    "exit_timestamp_1159": "2026-10-30T11:59:04.181328+05:30",
+    "realized_return_pct": -2.513,
+    "realized_pnl": -5997.58
   },
   {
     "broker": "dhan",
@@ -5329,10 +5357,120 @@
       "231261029110509",
       "321261029716909"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-10-29T15:19:23.254511+05:30",
     "product": "MTF",
     "return_pct": 9.79,
+    "return_bucket": "5-10",
+    "target_order_id": "23126103013009",
+    "target_price": 293.51,
+    "exit_price_1159": 237.47,
+    "exit_order_id_1159": "221261030262409",
+    "exit_timestamp_1159": "2026-10-30T10:18:02.876302+05:30",
+    "realized_return_pct": -5.3388,
+    "realized_pnl": -12803.9
+  },
+  {
+    "broker": "dhan",
+    "symbol": "DHANUKA",
+    "entry_date": "2026-10-30",
+    "reference_price": 975.1,
+    "shares_intended": 246,
+    "actual_fill_price": 974.2136,
+    "actual_fill_quantity": 246,
+    "entry_order_id": [
+      "221261030639109",
+      "231261030110409",
+      "321261030624409",
+      "221261030640409",
+      "341261030103309",
+      "341261030103509",
+      "321261030625509",
+      "221261030641609",
+      "231261030111009",
+      "221261030642209",
+      "341261030103909",
+      "341261030104009"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-30T15:26:16.547146+05:30",
+    "product": "MTF",
+    "return_pct": 10.24,
+    "return_bucket": "10-15"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "GREAVESCOT",
+    "entry_date": "2026-10-30",
+    "reference_price": 199.82,
+    "shares_intended": 1201,
+    "actual_fill_price": 199.451,
+    "actual_fill_quantity": 1201,
+    "entry_order_id": [
+      "231261030110209",
+      "221261030639609",
+      "231261030110509",
+      "221261030640509",
+      "231261030110709",
+      "231261030110809",
+      "231261030110909",
+      "221261030641709",
+      "341261030103709",
+      "321261030626409",
+      "221261030643009"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-30T15:26:17.846120+05:30",
+    "product": "MTF",
+    "return_pct": 7.07,
     "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "JISLJALEQS",
+    "entry_date": "2026-10-30",
+    "reference_price": 28.5,
+    "shares_intended": 8421,
+    "actual_fill_price": 28.4477,
+    "actual_fill_quantity": 8421,
+    "entry_order_id": [
+      "221261030639209",
+      "341261030103109",
+      "221261030639909",
+      "231261030110609",
+      "341261030103409",
+      "321261030625109",
+      "341261030103609",
+      "231261030111109",
+      "231261030111209",
+      "221261030643109",
+      "221261030643409",
+      "221261030643809",
+      "321261030628009",
+      "221261030644509"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-30T15:26:18.551903+05:30",
+    "product": "MTF",
+    "return_pct": 19.84,
+    "return_bucket": "15-20"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "MARSONS",
+    "entry_date": "2026-10-30",
+    "reference_price": 148.86,
+    "shares_intended": 1612,
+    "actual_fill_price": 148.86,
+    "actual_fill_quantity": 1612,
+    "entry_order_id": [
+      "321261030623709",
+      "341261030104109"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-10-30T15:26:19.300003+05:30",
+    "product": "MTF",
+    "return_pct": 19.5,
+    "return_bucket": "15-20"
   }
 ]
