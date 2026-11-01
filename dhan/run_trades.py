@@ -69,7 +69,7 @@ _POS_FILE_LONG    = _RESULTS_DIR / "positions_dhan_long.json"
 _POS_FILE_SHORT   = _RESULTS_DIR / "positions_dhan_short.json"
 _PENDING_SHORT_FILE = _RESULTS_DIR / "pending_short_verifications.json"
 _LOG_DIR      = _RESULTS_DIR / "trades"
-TOTAL_CAPITAL = 1_200_000  # reduced from ₹15L, effective 2026-10-01
+TOTAL_CAPITAL = 1_100_000  # reduced from ₹12L, effective 2026-11-01
 
 # ── Batched-concurrent execution for check_exit_916 / force_exit_1159 /
 # _open_short / square_off_239 ──────────────────────────────────────────────
@@ -1890,21 +1890,24 @@ def _append_log(trade_date: date, row: dict) -> None:
 
 
 def _sync_pnl_workbook() -> None:
-    """Regenerates BOTH P&L workbooks from the latest positions_dhan_long.json
-    + positions_dhan_short.json. Takes ~60s each (real Dhan charges-API
-    resync), so it runs ONCE a day via its own --sync-pnl cron invocation
-    after market close, not inline in any entry/exit stage. Loaded by file
-    path (not a package import, neither results/ nor the repo root is one).
+    """Regenerates all THREE P&L workbooks from the latest
+    positions_dhan_long.json + positions_dhan_short.json. Takes ~60s each
+    (real Dhan charges-API resync), so it runs ONCE a day via its own
+    --sync-pnl cron invocation after market close, not inline in any
+    entry/exit stage. Loaded by file path (not a package import, neither
+    results/ nor the repo root is one).
 
-    Two separate workbooks, not one, since capital was reduced ₹15L -> ₹12L
-    effective 2026-10-01 -- mixing both eras' trades under one Base Capital
-    figure would make Net P&L %/Gross P&L % misleading for whichever era
-    didn't match it (see build_pnl_simple.py's own module-level comment on
+    Three separate workbooks, not one, since capital was reduced ₹15L ->
+    ₹12L effective 2026-10-01, then ₹12L -> ₹11L effective 2026-11-01 --
+    mixing multiple eras' trades under one Base Capital figure would make
+    Net P&L %/Gross P&L % misleading for whichever era didn't match it
+    (see build_pnl_simple.py's own module-level comment on
     PNL_ERA_SPLIT_DATE). strategy_pnl_simple.xlsx stays frozen at the ₹15L
-    era (end_date=PNL_ERA_SPLIT_DATE -- never absorbs a later position even
-    if this runs for years); strategy_pnl_oct2026.xlsx starts fresh at the
-    ₹12L era and keeps growing forward. Each build is independent -- one
-    failing (e.g. a transient Dhan API error) doesn't block the other."""
+    era; strategy_pnl_oct2026.xlsx is now ALSO frozen, at the ₹12L era
+    (end_date=PNL_ERA_SPLIT_DATE_OCT -- never absorbs a later position even
+    if this runs for years); strategy_pnl_nov2026.xlsx starts fresh at the
+    ₹11L era and keeps growing forward. Each build is independent -- one
+    failing (e.g. a transient Dhan API error) doesn't block the others."""
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "_build_pnl_simple", _RESULTS_DIR / "build_pnl_simple.py")
@@ -1917,10 +1920,16 @@ def _sync_pnl_workbook() -> None:
         print(f"[dhan]   !! P&L workbook sync failed (legacy ₹15L era): {exc}", file=sys.stderr)
 
     try:
+        module.main(out_path=module.OUT_PATH_OCT2026, start_date=module.PNL_START_DATE_OCT2026,
+                   end_date=module.PNL_ERA_SPLIT_DATE_OCT, base_capital=module.BASE_CAPITAL_OCT2026)
+    except Exception as exc:
+        print(f"[dhan]   !! P&L workbook sync failed (frozen ₹12L era): {exc}", file=sys.stderr)
+
+    try:
         module.main(out_path=module.OUT_PATH_CURRENT, start_date=module.PNL_START_DATE_CURRENT,
                    base_capital=module.BASE_CAPITAL_CURRENT)
     except Exception as exc:
-        print(f"[dhan]   !! P&L workbook sync failed (current ₹12L era): {exc}", file=sys.stderr)
+        print(f"[dhan]   !! P&L workbook sync failed (current ₹11L era): {exc}", file=sys.stderr)
         return
 
     # Google Drive push lives HERE (not a separate cron line) so it can never

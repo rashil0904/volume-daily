@@ -44,21 +44,29 @@ DHAN_POSITIONS_SHORT_PATH = RESULTS_DIR / "positions_dhan_short.json"
 # before it (from before this workbook existed) are out of scope, not missing data.
 PNL_START_DATE = "2026-08-19"
 
-# Capital was reduced ₹15L -> ₹12L effective 2026-10-01 (see matching
-# TOTAL_CAPITAL change in pipeline/main.py / pipeline/notify.py /
-# dhan/run_trades.py). Mixing both eras' trades under one Base Capital
-# figure would make Net P&L %/Gross P&L % misleading for whichever era
-# didn't match it, so this became TWO workbooks instead of one, both built
-# by the same main() (see its end_date param): OUT_PATH above stays frozen
-# at the ₹15L era (end_date=PNL_ERA_SPLIT_DATE, never absorbs a later
-# position even if re-run long after), OUT_PATH_CURRENT starts fresh at the
-# ₹12L era and keeps growing forward (end_date=None). See
-# dhan/run_trades.py's _sync_pnl_workbook, which calls main() twice.
-PNL_ERA_SPLIT_DATE   = "2026-09-30"   # last day of the ₹15L era, inclusive
-PNL_START_DATE_CURRENT = "2026-10-01"   # first day of the ₹12L era
-OUT_PATH_CURRENT     = RESULTS_DIR / "strategy_pnl_oct2026.xlsx"
+# Capital was reduced ₹15L -> ₹12L effective 2026-10-01, then ₹12L -> ₹11L
+# effective 2026-11-01 (see matching TOTAL_CAPITAL changes in
+# pipeline/main.py / pipeline/notify.py / dhan/run_trades.py). Mixing
+# multiple eras' trades under one Base Capital figure would make Net P&L
+# %/Gross P&L % misleading for whichever era didn't match it, so this is
+# THREE workbooks, not one, each built by the same main() (see its
+# end_date param): OUT_PATH stays frozen at the ₹15L era (end_date=
+# PNL_ERA_SPLIT_DATE, never absorbs a later position even if re-run long
+# after); OUT_PATH_OCT2026 was the live ₹12L-era file through 2026-10-31
+# and is now frozen the same way (end_date=PNL_ERA_SPLIT_DATE_OCT -- kept
+# its original filename rather than renamed, so the existing Google Sheet
+# link for that era still resolves); OUT_PATH_CURRENT starts fresh at the
+# ₹11L era and keeps growing forward (end_date=None). See
+# dhan/run_trades.py's _sync_pnl_workbook, which calls main() three times.
+PNL_ERA_SPLIT_DATE      = "2026-09-30"   # last day of the ₹15L era, inclusive
+PNL_START_DATE_OCT2026  = "2026-10-01"   # first day of the ₹12L era
+PNL_ERA_SPLIT_DATE_OCT  = "2026-10-31"   # last day of the ₹12L era, inclusive
+PNL_START_DATE_CURRENT  = "2026-11-01"   # first day of the ₹11L era
+OUT_PATH_OCT2026     = RESULTS_DIR / "strategy_pnl_oct2026.xlsx"
+OUT_PATH_CURRENT     = RESULTS_DIR / "strategy_pnl_nov2026.xlsx"
 BASE_CAPITAL_LEGACY  = 1_500_000
-BASE_CAPITAL_CURRENT = 1_200_000
+BASE_CAPITAL_OCT2026 = 1_200_000
+BASE_CAPITAL_CURRENT = 1_100_000
 
 # ── Number formats ──────────────────────────────────────────────────────────
 # Every non-integer figure in the workbook shows exactly 2 decimal places --
@@ -1175,6 +1183,9 @@ if __name__ == "__main__":
     # The frozen ₹15L era (through 2026-09-30) -- every other arg stays at
     # main()'s own default (OUT_PATH, PNL_START_DATE, BASE_CAPITAL_LEGACY).
     main(end_date=PNL_ERA_SPLIT_DATE)
-    # The live ₹12L era (2026-10-01 onward) -- its own file, keeps growing.
+    # The now-frozen ₹12L era (2026-10-01 through 2026-10-31).
+    main(out_path=OUT_PATH_OCT2026, start_date=PNL_START_DATE_OCT2026,
+         end_date=PNL_ERA_SPLIT_DATE_OCT, base_capital=BASE_CAPITAL_OCT2026)
+    # The live ₹11L era (2026-11-01 onward) -- its own file, keeps growing.
     main(out_path=OUT_PATH_CURRENT, start_date=PNL_START_DATE_CURRENT,
          base_capital=BASE_CAPITAL_CURRENT)

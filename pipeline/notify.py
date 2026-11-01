@@ -80,7 +80,7 @@ def _count_signals(trade_list_path: Path) -> int:
         return sum(1 for _ in csv.DictReader(f))
 
 
-_TOTAL_CAPITAL = 1_200_000  # reduced from ₹15L, effective 2026-10-01
+_TOTAL_CAPITAL = 1_100_000  # reduced from ₹12L, effective 2026-11-01
 
 
 def _text_trade_table(path: Path) -> str:
