@@ -568,6 +568,22 @@ def mtf_interest_allocation_index(positions: list[dict], from_date: str,
                 rate   = mtf_daily_rate_pct(funded)
             except (RuntimeError, EnvironmentError):
                 continue
+            except ValueError as exc:
+                # A delisted/renamed symbol (confirmed live 2026-11-02:
+                # VERANDA) fails security_id() lookup inside funded_amount.
+                # Previously uncaught here -- one such position crashed
+                # this WHOLE function (ValueError propagates out of
+                # mtf_interest_allocation_index, caught by
+                # load_trades_from_positions' blanket except, which then
+                # sets interest_index = {} for the ENTIRE run) -- silently
+                # degrading EVERY MTF position to the formula-estimate
+                # fallback in position_charge_summary, not just this one.
+                # Skipping just this position (same as the funded_amount
+                # API-outage case above) keeps every other position on the
+                # real-ledger allocation.
+                print(f"[dhan]   !! mtf_interest_allocation_index: skipping {pos.get('symbol')} "
+                      f"({exc}) -- its own interest falls back to the formula estimate.")
+                continue
             weights[_oid_key(pos["entry_order_id"])] = funded * (rate / 100) * overlap_days
 
         total_weight = sum(weights.values())
@@ -764,6 +780,16 @@ def position_charge_summary(pos: dict, trade_index: dict[str, dict] | None = Non
                     interest_source = "estimated"
                 except (RuntimeError, EnvironmentError):
                     interest = 0.0  # non-fatal -- see docstring
+                except ValueError:
+                    # Delisted/renamed symbol (security_id lookup inside
+                    # funded_amount) -- same fix as
+                    # mtf_interest_allocation_index above. Only the
+                    # interest leg is unknowable without a valid security
+                    # id; entry_charges/exit_charges/dp/pledge computed
+                    # above don't depend on this lookup and must not be
+                    # thrown away too, so this stays scoped to just
+                    # zeroing interest, not re-raising.
+                    interest = 0.0
 
     total = entry_charges + exit_charges + dp + pledge + interest
     return {

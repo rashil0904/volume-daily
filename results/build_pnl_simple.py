@@ -33,7 +33,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.formatting.rule import CellIsRule, FormulaRule, DataBarRule
 
 RESULTS_DIR = Path(__file__).resolve().parent
-OUT_PATH    = RESULTS_DIR / "strategy_pnl_simple.xlsx"
+OUT_PATH    = RESULTS_DIR / "volume-daily-btst-pnl.xlsx"
 # Long and short positions live in separate files (see dhan/run_trades.py's
 # "Positions JSON" section for why) -- merged back together here since the
 # Trade Log sheet shows both long and short trades in one list.
@@ -46,27 +46,33 @@ PNL_START_DATE = "2026-08-19"
 
 # Capital was reduced ₹15L -> ₹12L effective 2026-10-01, then ₹12L -> ₹11L
 # effective 2026-11-01 (see matching TOTAL_CAPITAL changes in
-# pipeline/main.py / pipeline/notify.py / dhan/run_trades.py). Mixing
-# multiple eras' trades under one Base Capital figure would make Net P&L
-# %/Gross P&L % misleading for whichever era didn't match it, so this is
-# THREE workbooks, not one, each built by the same main() (see its
-# end_date param): OUT_PATH stays frozen at the ₹15L era (end_date=
-# PNL_ERA_SPLIT_DATE, never absorbs a later position even if re-run long
-# after); OUT_PATH_OCT2026 was the live ₹12L-era file through 2026-10-31
-# and is now frozen the same way (end_date=PNL_ERA_SPLIT_DATE_OCT -- kept
-# its original filename rather than renamed, so the existing Google Sheet
-# link for that era still resolves); OUT_PATH_CURRENT starts fresh at the
-# ₹11L era and keeps growing forward (end_date=None). See
-# dhan/run_trades.py's _sync_pnl_workbook, which calls main() three times.
-PNL_ERA_SPLIT_DATE      = "2026-09-30"   # last day of the ₹15L era, inclusive
-PNL_START_DATE_OCT2026  = "2026-10-01"   # first day of the ₹12L era
-PNL_ERA_SPLIT_DATE_OCT  = "2026-10-31"   # last day of the ₹12L era, inclusive
-PNL_START_DATE_CURRENT  = "2026-11-01"   # first day of the ₹11L era
-OUT_PATH_OCT2026     = RESULTS_DIR / "strategy_pnl_oct2026.xlsx"
-OUT_PATH_CURRENT     = RESULTS_DIR / "strategy_pnl_nov2026.xlsx"
-BASE_CAPITAL_LEGACY  = 1_500_000
-BASE_CAPITAL_OCT2026 = 1_200_000
-BASE_CAPITAL_CURRENT = 1_100_000
+# pipeline/main.py / pipeline/notify.py / dhan/run_trades.py). This used to
+# mean THREE separate workbooks (one frozen per era) rather than one, since
+# mixing every era's trades under a single Base Capital figure would make
+# Net P&L %/Gross P&L % misleading for whichever era didn't match it.
+# Consolidated 2026-11-02 into ONE workbook (OUT_PATH) covering every trade
+# since PNL_START_DATE, per user request -- the %-of-capital problem is
+# solved differently now: Trade Log/Day Wise/Position Stats/Bucket
+# Stats/Company Stats/Charges/Monthly&Weekly are all capital-independent
+# (they never referenced Base Capital in the first place -- only the Total
+# PnL dashboard's two %-of-capital cards did), so only that one sheet needs
+# era-awareness. See CAPITAL_ERAS and build_total_pnl_dashboard: the
+# all-time KPI cards there show only ₹/count metrics (honest at any capital
+# level), and a separate "By Capital Era" table breaks out %-of-capital
+# per era, each against its own correct base.
+BASE_CAPITAL_LEGACY  = 1_500_000   # ₹15L, 2026-08-19 through 2026-09-30
+BASE_CAPITAL_OCT2026 = 1_200_000   # ₹12L, 2026-10-01 through 2026-10-31
+BASE_CAPITAL_CURRENT = 1_100_000   # ₹11L, 2026-11-01 onward
+
+# (label, start_date, end_date-or-None, base_capital) -- end_date=None means
+# open-ended (the live era). Used only by the "By Capital Era" table; every
+# other sheet ignores this entirely and just shows every trade since
+# PNL_START_DATE.
+CAPITAL_ERAS = [
+    ("₹15L  (Aug 19 – Sep 30)", "2026-08-19", "2026-09-30", BASE_CAPITAL_LEGACY),
+    ("₹12L  (Oct 1 – Oct 31)",  "2026-10-01", "2026-10-31", BASE_CAPITAL_OCT2026),
+    ("₹11L  (Nov 1 – onward)",  "2026-11-01", None,          BASE_CAPITAL_CURRENT),
+]
 
 # ── Number formats ──────────────────────────────────────────────────────────
 # Every non-integer figure in the workbook shows exactly 2 decimal places --
@@ -980,7 +986,7 @@ def build_monthly_weekly(ws, trades: list[dict] | None = None) -> None:
 # sit below this were removed 2026-09-28 at the user's request -- see git
 # history if they're ever wanted back.
 
-BC_ROW          = 3
+NOTE_ROW        = 3
 BAND_SNAPSHOT   = 4
 CARD_LABEL_ROW  = 5
 CARD_NUM_TOP    = 6
@@ -988,7 +994,10 @@ CARD_NUM_BOTTOM = 8
 BAND_STATS      = 10
 STATS_HDR_ROW   = 11
 STATS_FIRST_ROW = 12
-STATS_LAST_ROW  = 20
+STATS_LAST_ROW  = 19
+BAND_ERA        = 21
+ERA_HDR_ROW     = 22
+ERA_FIRST_ROW   = 23
 DASHBOARD_COLS  = 16  # A..P
 
 BAND_FONT = Font(name=FONT_NAME, bold=True, size=11, color="FF1F3864")
@@ -1001,15 +1010,19 @@ GREEN_FILL = PatternFill(start_color="FF2E7D32", end_color="FF2E7D32", fill_type
 RED_FILL   = PatternFill(start_color="FFC62828", end_color="FFC62828", fill_type="solid")
 
 CARD_NAVY   = "FF1F3864"   # Net P&L (₹) base, before conditional flip
-CARD_TEAL   = "FF1B7A75"   # Net P&L (%) base, before conditional flip
+CARD_TEAL   = "FF1B7A75"   # Total Trades, static
 CARD_AMBER  = "FFC77D02"   # Win Rate, static
 CARD_PURPLE = "FF5B2C83"   # Profit Factor, static
 
+# All-time cards -- deliberately ₹/count metrics only, never %-of-capital
+# (capital changed 3x across this history; see CAPITAL_ERAS and the "By
+# Capital Era" table below for the %-of-capital breakdown, each against
+# its own correct base, instead of one blended/misleading figure here).
 # (col_start, col_end, label, formula, number_format, base_fill_hex, conditional)
 CARD_DEFS = [
-    (2,  4,  "NET P&L (₹)",  "=SUM('Trade Log'!$L$4:$L$503)", INR,   CARD_NAVY,  True),
-    (6,  8,  "NET P&L (%)",  '=IF($B$3=0,"",$B$6/$B$3)',      PCT,   CARD_TEAL,  True),
-    (10, 12, "WIN RATE",     '=IFERROR($C$13/$C$12,"")',      PCT,  CARD_AMBER, False),
+    (2,  4,  "NET P&L (₹)",   "=SUM('Trade Log'!$L$4:$L$503)",   INR, CARD_NAVY,  True),
+    (6,  8,  "TOTAL TRADES",  "=COUNT('Trade Log'!$L$4:$L$503)", NUM, CARD_TEAL,  False),
+    (10, 12, "WIN RATE",      '=IFERROR($C$13/$C$12,"")',        PCT, CARD_AMBER, False),
     (14, 16, "PROFIT FACTOR",
      '=IFERROR(SUMIF(\'Trade Log\'!$L$4:$L$503,">0")/'
      'ABS(SUMIF(\'Trade Log\'!$L$4:$L$503,"<0")),"")', XMULT, CARD_PURPLE, False),
@@ -1025,8 +1038,10 @@ STATS_ROWS = [
     (17, "Best Trade (₹)",   "=IFERROR(MAX('Trade Log'!$L$4:$L$503),\"\")", INR, True),
     (18, "Worst Trade (₹)",  "=IFERROR(MIN('Trade Log'!$L$4:$L$503),\"\")", INR, True),
     (19, "Gross P&L (₹)",    "=SUM('Trade Log'!$I$4:$I$503)", INR, False),
-    (20, "Gross P&L (%)",    '=IF($B$3=0,"",$C$19/$B$3)', PCT, False),
 ]
+
+ERA_HEADERS = ["Capital Era", "Start Date", "End Date", "Base Capital (₹)",
+               "Net P&L (₹)", "Net P&L (%)", "Gross P&L (%)", "Trades"]
 
 
 def _band(ws, row: int, text: str) -> None:
@@ -1080,11 +1095,68 @@ def _kpi_card(ws, col_start: int, col_end: int, label: str, formula: str,
     return num_cell.coordinate
 
 
-def build_total_pnl_dashboard(ws, base_capital: float = BASE_CAPITAL_LEGACY) -> None:
+def build_capital_era_table(ws, eras: list[tuple]) -> None:
+    """One row per capital era (see CAPITAL_ERAS), each with its OWN
+    Base Capital and %-of-capital figures computed only from that era's own
+    trades (filtered by Trade Log's Entry Date column, D) -- never blended
+    across eras, since a single % against a capital figure that didn't
+    apply for most of the history would be misleading (see the module-level
+    comment on CAPITAL_ERAS). Net P&L (₹)/Trades ARE real per-era totals
+    (not estimates); Base Capital stays a manual input per row so a future
+    capital change just needs a new row, same editable-input convention as
+    every other manual field in this workbook."""
+    ws[f"B{ERA_HDR_ROW}"].value = None  # band already drawn by caller
+    for col, header in enumerate(ERA_HEADERS, start=2):  # starts at B
+        cell = ws.cell(row=ERA_HDR_ROW, column=col, value=header)
+        cell.font = HEADER_FONT
+        cell.fill = HEADER_FILL
+        cell.alignment = CENTER
+
+    tl_entry = "'Trade Log'!$D$4:$D$503"
+    tl_net   = "'Trade Log'!$L$4:$L$503"
+    tl_gross = "'Trade Log'!$I$4:$I$503"
+
+    for offset, (label, start, end, capital) in enumerate(eras):
+        r = ERA_FIRST_ROW + offset
+        ws[f"B{r}"].value = label
+        ws[f"B{r}"].font = LABEL_FONT
+
+        ws[f"C{r}"].value = date.fromisoformat(start)
+        style_formula(ws[f"C{r}"], DATE)
+        if end:
+            ws[f"D{r}"].value = date.fromisoformat(end)
+            style_formula(ws[f"D{r}"], DATE)
+            date_crit = f'">="&$C{r},{tl_entry},"<="&$D{r}'
+        else:
+            ws[f"D{r}"].value = "(ongoing)"
+            style_formula(ws[f"D{r}"])
+            date_crit = f'">="&$C{r}'
+
+        style_input(ws[f"E{r}"], INR)
+        ws[f"E{r}"].value = capital
+
+        ws[f"F{r}"].value = f"=SUMIFS({tl_net},{tl_entry},{date_crit})"
+        style_formula(ws[f"F{r}"], INR)
+
+        ws[f"G{r}"].value = f'=IF($E{r}=0,"",$F{r}/$E{r})'
+        style_formula(ws[f"G{r}"], PCT)
+
+        ws[f"H{r}"].value = f'=IF($E{r}=0,"",SUMIFS({tl_gross},{tl_entry},{date_crit})/$E{r})'
+        style_formula(ws[f"H{r}"], PCT)
+
+        ws[f"I{r}"].value = f"=COUNTIFS({tl_entry},{date_crit})"
+        style_formula(ws[f"I{r}"], NUM)
+
+    widths = {"B": 24, "C": 12, "D": 12, "E": 15, "F": 14, "G": 12, "H": 12, "I": 9}
+    for col, w in widths.items():
+        ws.column_dimensions[col].width = w
+
+
+def build_total_pnl_dashboard(ws, eras: list[tuple] = CAPITAL_ERAS) -> None:
     set_title_subtitle(
         ws, "Total PnL",
-        "Overall strategy performance -- set Base Capital below; everything "
-        "else calculates automatically from Trade Log.",
+        "All-time cards below are ₹/count only (honest at any capital level) -- "
+        "see 'By Capital Era' further down for %-of-capital, each against its own era's base.",
         DASHBOARD_COLS,
     )
 
@@ -1096,22 +1168,23 @@ def build_total_pnl_dashboard(ws, base_capital: float = BASE_CAPITAL_LEGACY) -> 
     for gap_col in (5, 9, 13):  # E, I, M
         ws.column_dimensions[get_column_letter(gap_col)].width = 8
 
-    # Base Capital -- manual input, reset to this default on every regen.
-    ws["A3"].value = "Base Capital (₹)"
-    ws["A3"].font = LABEL_FONT
-    style_input(ws["B3"], INR)
-    ws["B3"].value = base_capital
+    # Note row -- replaces the old single global Base Capital input, which
+    # stopped being a single honest number once capital changed 3x.
+    ws[f"A{NOTE_ROW}"].value = ("Trade Log covers every trade since " + PNL_START_DATE +
+                                 " across 3 capital eras -- Base Capital lives per-era "
+                                 "in the 'By Capital Era' table below, not here.")
+    ws[f"A{NOTE_ROW}"].font = Font(name=FONT_NAME, italic=True, size=9, color="FF666666")
 
-    # Section 1: KPI cards.
-    _band(ws, BAND_SNAPSHOT, "STRATEGY SNAPSHOT")
+    # Section 1: KPI cards -- all-time, ₹/count only (see CARD_DEFS comment).
+    _band(ws, BAND_SNAPSHOT, "STRATEGY SNAPSHOT (ALL-TIME)")
     for col_start, col_end, label, formula, fmt, fill_hex, conditional in CARD_DEFS:
         _kpi_card(ws, col_start, col_end, label, formula, fmt, fill_hex, conditional)
 
     # Section 2: secondary stats table (plain, compact, 2 columns).
-    _band(ws, BAND_STATS, "DETAILED STATS")
-    ws["B11"].value = "Metric"
-    ws["C11"].value = "Value"
-    for addr in ("B11", "C11"):
+    _band(ws, BAND_STATS, "DETAILED STATS (ALL-TIME)")
+    ws[f"B{STATS_HDR_ROW}"].value = "Metric"
+    ws[f"C{STATS_HDR_ROW}"].value = "Value"
+    for addr in (f"B{STATS_HDR_ROW}", f"C{STATS_HDR_ROW}"):
         ws[addr].font = HEADER_FONT
         ws[addr].fill = HEADER_FILL
         ws[addr].alignment = CENTER
@@ -1133,21 +1206,23 @@ def build_total_pnl_dashboard(ws, base_capital: float = BASE_CAPITAL_LEGACY) -> 
                     color="638EC6"),
     )
 
-    # Keep title/subtitle/Base Capital/band/cards visible while scrolling.
+    # Section 3: by-era %-of-capital table (see build_capital_era_table).
+    _band(ws, BAND_ERA, "BY CAPITAL ERA")
+    build_capital_era_table(ws, eras)
+
+    # Keep title/subtitle/note/band/cards visible while scrolling.
     ws.freeze_panes = "A9"
 
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
-def main(out_path: Path = OUT_PATH, start_date: str = PNL_START_DATE,
-         end_date: str | None = None, base_capital: float = BASE_CAPITAL_LEGACY) -> None:
-    """end_date=None (the default) is open-ended -- every position from
-    start_date onward, the original single-workbook behavior. A caller
-    building a capital-era-specific snapshot (e.g. the pre-2026-10-01 ₹15L
-    era, frozen so it never absorbs a later ₹12L-era position) passes an
-    explicit end_date alongside its own out_path/base_capital -- see
-    dhan/run_trades.py's _sync_pnl_workbook, which calls this twice."""
-    trades = load_trades_from_positions(start_date, end_date)
+def main(out_path: Path = OUT_PATH, eras: list[tuple] = CAPITAL_ERAS) -> None:
+    """ONE workbook, every trade since PNL_START_DATE onward (no end_date
+    cutoff -- see the module-level comment on CAPITAL_ERAS for why the old
+    3-separate-frozen-workbook split is no longer needed). eras only
+    affects the Total PnL sheet's "By Capital Era" table; every other sheet
+    just uses the full trade list, unaffected by capital changes."""
+    trades = load_trades_from_positions(PNL_START_DATE, None)
 
     wb = Workbook()
 
@@ -1162,8 +1237,8 @@ def main(out_path: Path = OUT_PATH, start_date: str = PNL_START_DATE,
     ws_mw       = wb.create_sheet("Monthly & Weekly PnL")
 
     build_trade_log(ws_log, trades)
-    build_day_wise(ws_day, start_date)
-    build_total_pnl_dashboard(ws_total, base_capital)
+    build_day_wise(ws_day, PNL_START_DATE)
+    build_total_pnl_dashboard(ws_total, eras)
     build_position_stats(ws_stats)
     build_bucket_stats(ws_bucket)
     build_company_stats(ws_company, trades)
@@ -1174,18 +1249,10 @@ def main(out_path: Path = OUT_PATH, start_date: str = PNL_START_DATE,
         ws.sheet_view.showGridLines = False
 
     wb.save(out_path)
-    range_desc = f"{start_date} to {end_date}" if end_date else f"{start_date} onward"
     print(f"Wrote {out_path} ({len(trades)} synced trade(s) from Dhan positions, "
-          f"{range_desc})" if trades else f"Wrote {out_path} (no synced trades yet -- examples shown)")
+          f"{PNL_START_DATE} onward)" if trades else
+          f"Wrote {out_path} (no synced trades yet -- examples shown)")
 
 
 if __name__ == "__main__":
-    # The frozen ₹15L era (through 2026-09-30) -- every other arg stays at
-    # main()'s own default (OUT_PATH, PNL_START_DATE, BASE_CAPITAL_LEGACY).
-    main(end_date=PNL_ERA_SPLIT_DATE)
-    # The now-frozen ₹12L era (2026-10-01 through 2026-10-31).
-    main(out_path=OUT_PATH_OCT2026, start_date=PNL_START_DATE_OCT2026,
-         end_date=PNL_ERA_SPLIT_DATE_OCT, base_capital=BASE_CAPITAL_OCT2026)
-    # The live ₹11L era (2026-11-01 onward) -- its own file, keeps growing.
-    main(out_path=OUT_PATH_CURRENT, start_date=PNL_START_DATE_CURRENT,
-         base_capital=BASE_CAPITAL_CURRENT)
+    main()
