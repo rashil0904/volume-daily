@@ -3785,6 +3785,12 @@ LIMIT_ENTRY_RECAL_SECS      = 10   # seconds between recalibrations — easy to 
 LIMIT_ENTRY_CUTOFF_HHMM     = 1520 # HHMM: at/after this → cancel all + MARKET sweep
 LIMIT_ENTRY_TRANCHE_DIVISOR = 10   # tranche = initial_desired // this
 
+# Retries after a cancel, re-checking order status before trusting it --
+# see _cancel_then_confirm's own docstring for why a single immediate
+# re-check isn't reliable enough here.
+_CANCEL_CONFIRM_RETRIES = 3
+_CANCEL_CONFIRM_DELAY   = 0.4   # seconds between re-checks
+
 
 def _now_hhmm() -> int:
     """Current time as HHMM integer (IST), e.g. 15:06 → 1506."""
@@ -4137,6 +4143,52 @@ def run_entry_limit(
 
     # ── Inner helpers ─────────────────────────────────────────────────────────
 
+    def _cancel_then_confirm(oid: str) -> dict | None:
+        """Cancels oid, then re-checks its status -- retrying up to
+        _CANCEL_CONFIRM_RETRIES times, _CANCEL_CONFIRM_DELAY apart, until a
+        TERMINAL status (TRADED/REJECTED/CANCELLED/EXPIRED) comes back,
+        rather than trusting a single immediate re-check.
+
+        Confirmed live why this matters: Dhan's cancel and order-status
+        endpoints aren't perfectly synchronized. BAJEL (2026-10-27): a
+        cancel attempt failed with DH-906 "Order Status Is Changed" --
+        meaning the order had ALREADY fully traded -- but the very next
+        GET /orders/{id} call, made milliseconds later, still returned a
+        stale filledQty crediting only 20 of the 50 shares that tranche
+        actually filled. The coordinator loop clears active_oid right
+        after this check and never revisits that order id again, so a
+        stale snapshot here permanently undercounts filled_total -- the
+        broker genuinely ends up holding more shares than the position
+        record saves. Confirmed on two separate live entries before this
+        retry was added (BAJEL short 30 of 537; FUSION short 29 of 1548,
+        same signature but without an explicit cancel-API error that
+        time -- just the status read lagging the fill) -- both only
+        surfaced days later, as a broker-qty mismatch at exit time, and
+        both had to be manually corrected from Dhan's real trade-book.
+
+        A cancel call's own success/failure is never trusted as the
+        signal -- only the re-checked order status is. Returns whatever
+        the last attempt saw (terminal or not) if every retry is
+        exhausted, same as the no-retry behavior before this fix -- never
+        worse, just more likely to be right."""
+        try:
+            _dhan_cancel_order(oid)
+        except Exception as exc:
+            print(f"[dhan]   {oid}: cancel failed (may already be filled -- rechecking): {exc}")
+
+        status: dict | None = None
+        for attempt in range(_CANCEL_CONFIRM_RETRIES + 1):
+            try:
+                status = _dhan_order_status(oid)
+            except Exception:
+                status = None
+            if status and (status.get("orderStatus") or "").upper() in (
+                    "TRADED", "REJECTED", "CANCELLED", "EXPIRED"):
+                break
+            if attempt < _CANCEL_CONFIRM_RETRIES:
+                time.sleep(_CANCEL_CONFIRM_DELAY)
+        return status
+
     def _credit_status(st: _LimitSymState, o: dict) -> None:
         """Credit newly-filled qty from an order-status dict into st,
         avoiding double-counting via st.active_oid_credited.  Safe to call
@@ -4181,15 +4233,7 @@ def run_entry_limit(
                 st = states[sym]
                 if st.active_oid is None:
                     return sym, None
-                try:
-                    _dhan_cancel_order(st.active_oid)
-                except Exception as exc:
-                    print(f"[dhan]   {sym}: cancel failed (may have just traded): {exc}")
-                # Always re-check to capture fills that landed during cancel
-                try:
-                    return sym, _dhan_order_status(st.active_oid)
-                except Exception:
-                    return sym, None
+                return sym, _cancel_then_confirm(st.active_oid)
 
             syms_with_orders = [s for s in active if states[s].active_oid]
             if syms_with_orders:
@@ -4352,15 +4396,7 @@ def run_entry_limit(
         # Step 4: execute cancels (parallel)
         def _do_cancel(sym: str) -> tuple[str, dict | None]:
             st = states[sym]
-            try:
-                _dhan_cancel_order(st.active_oid)
-            except Exception as exc:
-                print(f"[dhan]   {sym}: cancel failed: {exc}")
-            # Re-check to get any fills between our last status check and cancel
-            try:
-                return sym, _dhan_order_status(st.active_oid)
-            except Exception:
-                return sym, None
+            return sym, _cancel_then_confirm(st.active_oid)
 
         if to_cancel_rebid:
             with ThreadPoolExecutor(max_workers=MAX_ORDER_CALLS_PER_SECOND) as ex:

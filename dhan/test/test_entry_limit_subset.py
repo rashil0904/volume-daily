@@ -641,6 +641,126 @@ check("prep_at=None, fire_at=None (default) -> _hold_until never called at all",
       hold_calls14b == [], str(hold_calls14b))
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nScenario 15 -- _cancel_then_confirm: a cancel-vs-fill race (BAJEL/FUSION, "
+      "2026-10-27/11-03) must not silently undercount filled_total\n")
+# ═════════════════════════════════════════════════════════════════════════════
+# Reproduces the exact live incident: a tranche's bid gets outbid (triggering
+# cancel+rebid), the cancel call itself raises (Dhan's real DH-906 "Order
+# Status Is Changed" -- meaning the order had ALREADY fully traded), and the
+# FIRST status re-check right after still returns a stale PART_TRADED
+# snapshot (lower filledQty than the real final fill). Before the fix, a
+# single re-check would accept that stale snapshot and `_clear_active`
+# would then abandon the order id forever, permanently losing the
+# difference -- confirmed live as BAJEL short 30 of 537 and FUSION short 29
+# of 1548. The fix (_cancel_then_confirm) retries the status re-check until
+# a TERMINAL status (TRADED here) comes back, so the raced tranche's FULL
+# fill gets credited instead of the stale partial one.
+
+TD15 = date(2026, 9, 23)
+tmp15 = fresh_tmp_root()
+write_trade_list(tmp15 / "trades", TD15, ["RACED"])
+store15 = FakeStore()
+
+order_qty15: dict[str, tuple[int, float]] = {}
+call_count15: dict[str, int] = {}
+counter15 = {"n": 0}
+
+
+total_real_qty_placed15 = {"n": 0}
+
+
+def fake_buy15(symbol, exch, qty, order_type=None, price=None, product=None,
+               dry_run=False, **kw):
+    counter15["n"] += 1
+    oid = f"ORD{counter15['n']}"
+    order_qty15[oid] = (qty, price or 100.0)
+    total_real_qty_placed15["n"] += qty
+    return oid
+
+
+def fake_order_status15(oid):
+    call_count15[oid] = call_count15.get(oid, 0) + 1
+    qty, price = order_qty15[oid]
+    if oid == "ORD1":
+        # The raced tranche: first 2 checks (the main-loop snapshot, then
+        # _cancel_then_confirm's own first re-check) return a stale
+        # PART_TRADED -- only the 3rd check (after one retry) reveals the
+        # real, full TRADED fill.
+        if call_count15[oid] <= 2:
+            return {"orderStatus": "PART_TRADED", "filledQty": 4, "averageTradedPrice": price}
+        return {"orderStatus": "TRADED", "filledQty": qty, "averageTradedPrice": price}
+    # Every other tranche: plain immediate full fill, nothing racy.
+    return {"orderStatus": "TRADED", "filledQty": qty, "averageTradedPrice": price}
+
+
+def fake_cancel_order15(oid):
+    if oid == "ORD1" and call_count15.get(oid, 0) <= 1:
+        # Simulates Dhan's real DH-906 "Order Status Is Changed" -- the
+        # cancel itself fails because the order had already traded.
+        raise RuntimeError("Order Status Is Changed")
+    return None
+
+
+# Bid improves after tick 1 (100.0 -> 101.0), forcing exactly one
+# cancel+rebid decision on ORD1 -- then holds steady so later re-placed
+# tranches aren't raced again.
+quote_tick15 = {"n": 0}
+
+
+def fake_quote_batch15(syms):
+    quote_tick15["n"] += 1
+    bid = 100.0 if quote_tick15["n"] == 1 else 101.0
+    return {s: {"best_bid": bid, "last_price": bid, "upper_circuit": None} for s in syms}
+
+
+fakes15 = entry_limit_fakes()
+fakes15["buy"] = fake_buy15
+fakes15["_dhan_order_status"] = fake_order_status15
+fakes15["_dhan_cancel_order"] = fake_cancel_order15
+fakes15["_get_quote_batch"] = fake_quote_batch15
+
+patches15 = [
+    patch.object(rt, "_RESULTS_DIR", tmp15),
+    patch.object(rt, "_LOG_DIR", tmp15 / "trades"),
+    patch.object(rt, "_load_long_pos", store15.load),
+    patch.object(rt, "_save_long_pos", store15.save),
+    patch.object(rt.time, "sleep", lambda s: None),
+    patch.object(rt, "_sync_pnl_workbook", lambda: None),
+    patch.object(rt.notify, "send_entry", MagicMock()),
+    patch.object(rt.notify, "send_entry_failed", MagicMock()),
+    # Pin well before the 1520 cutoff -- without this, a test run outside
+    # real trading hours falls straight into the cutoff/MARKET-sweep
+    # branch (which polls fills via a totally different function,
+    # _poll_fill_strict) and never exercises the normal-tick cancel+rebid
+    # path (_do_cancel/_cancel_then_confirm) this scenario exists to test.
+    patch.object(rt, "_now_hhmm", lambda: 1517),
+] + [patch.object(rt, name, fn) for name, fn in fakes15.items()]
+
+from contextlib import ExitStack
+with ExitStack() as stack15:
+    for p in patches15:
+        stack15.enter_context(p)
+    rt.run_entry_limit(trade_date=TD15, dry_run=False, capital=40_000.0, symbols=["RACED"])
+
+check("ORD1's cancel was actually raced (raised) at least once, not a no-op test",
+      call_count15.get("ORD1", 0) >= 3, str(call_count15.get("ORD1")))
+check("RACED entered with its FULL real fill (100), not short by the raced "
+      "tranche's stale partial credit",
+      len(store15.positions) == 1 and store15.positions[0]["actual_fill_quantity"] == 100,
+      str(store15.positions))
+# The discriminating check: the loop re-sizes each new tranche off
+# st.remaining (initial_desired - filled_total), so an undercounted credit
+# doesn't just under-report -- it makes the loop place EXTRA real orders to
+# "catch up" to initial_desired, silently over-buying at the broker while
+# still recording exactly 100. This is exactly what happened live (BAJEL
+# recorded 507 but the broker held 537): total REAL quantity sent to buy()
+# must equal the recorded 100 exactly, not exceed it.
+check("no silent over-buying to compensate for an undercounted credit -- "
+      "total real quantity placed at the broker equals the recorded 100, not more",
+      total_real_qty_placed15["n"] == 100, str(total_real_qty_placed15["n"]))
+
+
 print()
 if failures:
     print(f"{failures} check(s) FAILED.")

@@ -4917,8 +4917,8 @@
     "entry_date": "2026-10-27",
     "reference_price": 169.02,
     "shares_intended": 507,
-    "actual_fill_price": 168.7027,
-    "actual_fill_quantity": 507,
+    "actual_fill_price": 168.6953,
+    "actual_fill_quantity": 537,
     "entry_order_id": [
       "23126102780509",
       "34126102781309",
@@ -4934,13 +4934,19 @@
       "23126102782809",
       "34126102783609"
     ],
-    "status": "open",
+    "status": "exited_manual",
     "entry_timestamp": "2026-10-27T15:19:31.119471+05:30",
     "product": "CNC",
     "return_pct": 7.49,
     "return_bucket": "5-10",
     "target_order_id": "22126102868309",
-    "target_price": 197.38
+    "target_price": 197.38,
+    "exit_price_manual": 164.3089,
+    "exit_order_id_manual": "211261029165609",
+    "exit_timestamp_manual": "2026-10-29T10:10:49+05:30",
+    "realized_return_pct": -2.6002,
+    "realized_pnl": -2355.48,
+    "exit_note": "Sold manually (not placed by the bot). Exact fill confirmed via Dhan trade-book (order 211261029165609, SELL 537@164.3089, CNC, 2026-10-29T10:10:49). Also corrected actual_fill_quantity/price here: originally recorded as 507@168.7027, but Dhan's real trade-book shows all 13 entry tranches summed to 537 shares (VWAP 168.6953), not 507 -- a tranched-entry fill-crediting undercount, same bug class flagged on FUSION the same week. Bot's own resting 17% target (22126102868309) never filled and became stale/unqueryable from a later day's Order Book, which is why automated exit checks kept flagging \"manual review required\" instead of silently guessing."
   },
   {
     "broker": "dhan",
@@ -5730,8 +5736,8 @@
     "entry_date": "2026-11-03",
     "reference_price": 144.77,
     "shares_intended": 1519,
-    "actual_fill_price": 144.7698,
-    "actual_fill_quantity": 1519,
+    "actual_fill_price": 144.7673,
+    "actual_fill_quantity": 1548,
     "entry_order_id": [
       "34126110389509",
       "321261103683609",
@@ -5746,13 +5752,19 @@
       "23126110391609",
       "321261103686109"
     ],
-    "status": "open",
+    "status": "exited_manual",
     "entry_timestamp": "2026-11-03T15:20:25.337143+05:30",
     "product": "MTF",
     "return_pct": 8.88,
     "return_bucket": "5-10",
     "target_order_id": "34126110413209",
-    "target_price": 169.38
+    "target_price": 169.38,
+    "exit_price_manual": 148.4371,
+    "exit_order_id_manual": "35126110432309",
+    "exit_timestamp_manual": "2026-11-04T09:18:25+05:30",
+    "realized_return_pct": 2.5349,
+    "realized_pnl": 5680.74,
+    "exit_note": "Sold manually (not placed by the bot). Exact fill confirmed directly via Dhan order detail (order 35126110432309, SELL MARKET 1548@148.43706, MTF, 2026-11-04 09:18:25). Also corrected actual_fill_quantity/price here: originally recorded as 1519@144.7698, but Dhan's real trade-book shows 11 of the 12 entry tranches filled, summing to 1548 shares (VWAP 144.7673) -- order 321261103684909 never actually filled despite being counted. Same tranched-entry fill-crediting undercount bug class as BAJEL. The automated 9:16 exit check correctly refused to guess once it saw broker=1548 vs local=1519 and flagged for manual review instead."
   },
   {
     "broker": "dhan",
