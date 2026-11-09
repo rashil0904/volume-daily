@@ -1218,7 +1218,7 @@
     "exit_timestamp_239": "2026-09-09T10:35:16.467749+05:30",
     "realized_return_pct": -8.9258,
     "realized_pnl": -9554.49,
-    "exit_note": "UC-based stop-loss triggered mid-day, not at square-off: NOVARTIND ran to its upper circuit (₹2,186.40) by 10:35am, ~70 minutes after the short opened. The resting stop order (321260909103709, trigger ₹2,175.50) fired and filled as a separate broker order id (321260909315209, avg ₹2,159.2258, confirmed via the Order Update feed at 10:35:16) -- the original trigger order itself shows CANCELLED in the final order book, a known Dhan quirk where a triggered SL order surfaces under a new order id rather than updating the original. At 2:39pm square-off, both the cover target and this stop-loss showed as already-cancelled, and the real broker short quantity read back as 0 against a local record of 54 -- square_off_239 correctly refused to guess and skipped it for manual review instead of double-processing an already-closed position. Reconciled by hand 2026-09-09 evening from dhan_trades.log + dhan_live_monitor.log order-update timestamps."
+    "exit_note": "UC-based stop-loss triggered mid-day, not at square-off: NOVARTIND ran to its upper circuit (\u20b92,186.40) by 10:35am, ~70 minutes after the short opened. The resting stop order (321260909103709, trigger \u20b92,175.50) fired and filled as a separate broker order id (321260909315209, avg \u20b92,159.2258, confirmed via the Order Update feed at 10:35:16) -- the original trigger order itself shows CANCELLED in the final order book, a known Dhan quirk where a triggered SL order surfaces under a new order id rather than updating the original. At 2:39pm square-off, both the cover target and this stop-loss showed as already-cancelled, and the real broker short quantity read back as 0 against a local record of 54 -- square_off_239 correctly refused to guess and skipped it for manual review instead of double-processing an already-closed position. Reconciled by hand 2026-09-09 evening from dhan_trades.log + dhan_live_monitor.log order-update timestamps."
   },
   {
     "broker": "dhan",
@@ -2697,7 +2697,7 @@
     "exit_timestamp_reconciled": "2026-10-26T15:11:21+05:30",
     "realized_return_pct": -2.9645,
     "realized_pnl": -4584.0,
-    "exit_note": "Recovered 2026-10-26 after the fact: this short-open SELL (order 23126102637609, placed 10:18:14) filled completely (6007@25.74142) eighteen seconds after placement -- eight seconds past our confirmation poll's budget -- so _open_short_place treated it as rejected and never created a position record. No cover-target or stop-loss was ever placed as a result. The naked short sat unmanaged until Dhan's own RMS auto-covered it at 15:11:21 (order 321261026623009, BUY 6007@26.50453) -- NSE does not allow carrying a naked equity short overnight -- crystallizing this -₹4,584 loss at a price we had no control over. Both fill prices confirmed directly via GET /orders/{id}, never guessed. Root cause fixed same day: _record_pending_short_verification + _reconcile_pending_shorts (dhan/run_trades.py) now preserve and re-check any short-open order whose poll times out, same pattern as the long-exit _reconcile_stale_exits fix."
+    "exit_note": "Recovered 2026-10-26 after the fact: this short-open SELL (order 23126102637609, placed 10:18:14) filled completely (6007@25.74142) eighteen seconds after placement -- eight seconds past our confirmation poll's budget -- so _open_short_place treated it as rejected and never created a position record. No cover-target or stop-loss was ever placed as a result. The naked short sat unmanaged until Dhan's own RMS auto-covered it at 15:11:21 (order 321261026623009, BUY 6007@26.50453) -- NSE does not allow carrying a naked equity short overnight -- crystallizing this -\u20b94,584 loss at a price we had no control over. Both fill prices confirmed directly via GET /orders/{id}, never guessed. Root cause fixed same day: _record_pending_short_verification + _reconcile_pending_shorts (dhan/run_trades.py) now preserve and re-check any short-open order whose poll times out, same pattern as the long-exit _reconcile_stale_exits fix."
   },
   {
     "broker": "dhan",
@@ -2835,7 +2835,13 @@
     "stop_order_id": "221261106427309",
     "stop_trigger_price": 386.56,
     "stop_limit_price": 388.5,
-    "status": "short_open",
-    "entry_timestamp": "2026-11-06T11:59:37.324949+05:30"
+    "status": "short_closed_manual",
+    "entry_timestamp": "2026-11-06T11:59:37.324949+05:30",
+    "exit_price_manual": 326.4654,
+    "exit_order_id_manual": "311261106603909",
+    "exit_timestamp_manual": "2026-11-06T14:40:30+05:30",
+    "realized_return_pct": 3.0109,
+    "realized_pnl": 4266.67,
+    "exit_note": "Covered manually (not placed by the bot) on 2026-11-06, the same day as entry -- confirmed via Dhan's real trade-book (order 311261106603909, BUY 421@326.4654, 2026-11-06T14:40:30). Both the bot's own cover-target (34126110660709 @319.77) and stop-loss (221261106427309 @388.5 trigger) were found CANCELLED, not filled, when the 14:57 square_off_239[10-15] sweep ran -- it correctly detected local=421 vs broker_short=0 and flagged \"manual review required\" (dhan_trades.log 2026-11-06 14:57) instead of guessing, exactly as designed. This record closes that manual review: no estimate, exact fill confirmed via dhan.charges.get_trades."
   }
 ]
