@@ -6734,13 +6734,21 @@
       "321261111695909",
       "221261111733309"
     ],
-    "status": "open",
+    "status": "exited_reconciled",
     "entry_timestamp": "2026-11-11T15:20:03.006234+05:30",
     "product": "MTF",
     "return_pct": 6.83,
     "return_bucket": "5-10",
     "target_order_id": "22126111245709",
-    "target_price": 1216.45
+    "target_price": 1216.45,
+    "exit_price_reconciled": 1046.8,
+    "exit_order_ids_reconciled": [
+      "23126111216709"
+    ],
+    "exit_timestamp_reconciled": "2026-11-12T09:17:07+05:30",
+    "exit_note": "Auto-reconciled: broker showed fewer shares than our records; real fill recovered from Dhan's /trades API, not guessed. The original exit stage is unknown -- a sell this bot placed filled after our confirmation poll gave up, same as YUKEN/KOTIC/MMWL/SUNCLAY/INDOKEM/SIMPLEXINF before it -- but which cron stage placed it was lost when the timeout discarded the order id.",
+    "realized_return_pct": 0.6813,
+    "realized_pnl": 828.8
   },
   {
     "broker": "dhan",
@@ -6941,11 +6949,18 @@
       "221261112694209",
       "221261112694709"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-12T15:19:30.010495+05:30",
     "product": "MTF",
     "return_pct": 8.53,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111313209",
+    "target_price": 187.92,
+    "exit_price_1159": 158.05,
+    "exit_order_id_1159": "23126111335609",
+    "exit_timestamp_1159": "2026-11-13T10:18:02.985057+05:30",
+    "realized_return_pct": -1.5948,
+    "realized_pnl": -3529.75
   },
   {
     "broker": "dhan",
@@ -6971,11 +6986,18 @@
       "221261112695509",
       "231261112105609"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-12T15:19:31.069103+05:30",
     "product": "MTF",
     "return_pct": 9.11,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111313109",
+    "target_price": 221.82,
+    "exit_price_1159": 189.84,
+    "exit_order_id_1159": "23126111335709",
+    "exit_timestamp_1159": "2026-11-13T10:18:04.133852+05:30",
+    "realized_return_pct": 0.1336,
+    "realized_pnl": 295.35
   },
   {
     "broker": "dhan",
@@ -6999,11 +7021,18 @@
       "221261112694809",
       "321261112683509"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-12T15:19:31.753622+05:30",
     "product": "MTF",
     "return_pct": 6.87,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "32126111350709",
+    "target_price": 207.79,
+    "exit_price_1159": 177.21,
+    "exit_order_id_1159": "34126111332609",
+    "exit_timestamp_1159": "2026-11-13T10:18:04.815676+05:30",
+    "realized_return_pct": -0.2175,
+    "realized_pnl": -478.24
   },
   {
     "broker": "dhan",
@@ -7027,11 +7056,18 @@
       "321261112683109",
       "221261112695109"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-12T15:19:32.459371+05:30",
     "product": "MTF",
     "return_pct": 7.16,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111313309",
+    "target_price": 1932.0,
+    "exit_price_916": 1668.16,
+    "exit_order_id_916": "23126111314109",
+    "exit_timestamp_916": "2026-11-13T09:16:33.162928+05:30",
+    "realized_return_pct": 1.0242,
+    "realized_pnl": 2249.28
   },
   {
     "broker": "dhan",
@@ -7054,10 +7090,78 @@
       "221261112694109",
       "221261112694609"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-12T15:19:33.126596+05:30",
     "product": "MTF",
     "return_pct": 8.6,
+    "return_bucket": "5-10",
+    "target_order_id": "34126111312709",
+    "target_price": 12737.5,
+    "exit_price_916": 11033.0,
+    "exit_order_id_916": "32126111370809",
+    "exit_timestamp_916": "2026-11-13T09:16:34.242394+05:30",
+    "realized_return_pct": 1.3415,
+    "realized_pnl": 2921.0
+  },
+  {
+    "broker": "dhan",
+    "symbol": "AUTOAXLES",
+    "entry_date": "2026-11-13",
+    "reference_price": 1815.0,
+    "shares_intended": 151,
+    "actual_fill_price": 1819.4941,
+    "actual_fill_quantity": 136,
+    "entry_order_id": [
+      "321261113687709",
+      "23126111381409",
+      "23126111381509",
+      "321261113688709",
+      "321261113689309",
+      "34126111374009",
+      "23126111381709",
+      "321261113690309",
+      "34126111374309",
+      "34126111374409",
+      "34126111374509",
+      "34126111374609",
+      "34126111374709",
+      "321261113692209",
+      "23126111382309",
+      "34126111375009",
+      "23126111382509"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-13T15:20:14.499166+05:30",
+    "product": "MTF",
+    "return_pct": 9.71,
     "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "BFUTILITIE",
+    "entry_date": "2026-11-13",
+    "reference_price": 500.45,
+    "shares_intended": 549,
+    "actual_fill_price": 500.7796,
+    "actual_fill_quantity": 549,
+    "entry_order_id": [
+      "23126111381309",
+      "34126111373809",
+      "321261113688309",
+      "23126111381609",
+      "34126111373909",
+      "321261113689609",
+      "34126111374109",
+      "23126111381809",
+      "321261113690509",
+      "34126111374209",
+      "23126111382009",
+      "321261113691109"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-13T15:20:15.550324+05:30",
+    "product": "MTF",
+    "return_pct": 10.28,
+    "return_bucket": "10-15"
   }
 ]
