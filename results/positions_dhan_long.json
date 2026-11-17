@@ -7202,11 +7202,18 @@
       "34126111658309",
       "23126111660509"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-16T15:20:00.518664+05:30",
     "product": "CNC",
     "return_pct": 6.06,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111712409",
+    "target_price": 553.95,
+    "exit_price_916": 480.47,
+    "exit_order_id_916": "23126111713009",
+    "exit_timestamp_916": "2026-11-17T09:16:03.269886+05:30",
+    "realized_return_pct": 1.477,
+    "realized_pnl": 1160.87
   },
   {
     "broker": "dhan",
@@ -7229,11 +7236,18 @@
       "221261116642809",
       "221261116643109"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-16T15:20:01.580874+05:30",
     "product": "MTF",
     "return_pct": 6.14,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111712709",
+    "target_price": 50.13,
+    "exit_price_1159": 43.21,
+    "exit_order_id_1159": "221261117239809",
+    "exit_timestamp_1159": "2026-11-17T10:18:03.224920+05:30",
+    "realized_return_pct": 0.8585,
+    "realized_pnl": 1349.09
   },
   {
     "broker": "dhan",
@@ -7256,11 +7270,18 @@
       "23126111660109",
       "221261116643309"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-16T15:20:02.554653+05:30",
     "product": "MTF",
     "return_pct": 10.95,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "23126111712609",
+    "target_price": 246.57,
+    "exit_price_1159": 206.5,
+    "exit_order_id_1159": "23126111743809",
+    "exit_timestamp_1159": "2026-11-17T11:59:03.024186+05:30",
+    "realized_return_pct": -2.0149,
+    "realized_pnl": -3159.32
   },
   {
     "broker": "dhan",
@@ -7284,11 +7305,18 @@
       "34126111657909",
       "34126111658109"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-16T15:20:04.152348+05:30",
     "product": "MTF",
     "return_pct": 6.91,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "32126111739909",
+    "target_price": 413.6,
+    "exit_price_916": 360.2,
+    "exit_order_id_916": "23126111713109",
+    "exit_timestamp_916": "2026-11-17T09:16:04.378695+05:30",
+    "realized_return_pct": 1.8961,
+    "realized_pnl": 2975.95
   },
   {
     "broker": "dhan",
@@ -7312,11 +7340,18 @@
       "34126111657809",
       "221261116643809"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-16T15:20:04.890174+05:30",
     "product": "MTF",
     "return_pct": 10.63,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "32126111740009",
+    "target_price": 191.78,
+    "exit_price_916": 166.34,
+    "exit_order_id_916": "23126111713709",
+    "exit_timestamp_916": "2026-11-17T09:18:05.574475+05:30",
+    "realized_return_pct": 1.4799,
+    "realized_pnl": 2326.34
   },
   {
     "broker": "dhan",
@@ -7339,11 +7374,18 @@
       "34126111657309",
       "321261116663809"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-16T15:20:05.609566+05:30",
     "product": "MTF",
     "return_pct": 12.55,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "23126111712509",
+    "target_price": 152.99,
+    "exit_price_916": 130.82,
+    "exit_order_id_916": "23126111713609",
+    "exit_timestamp_916": "2026-11-17T09:18:06.569000+05:30",
+    "realized_return_pct": 0.0483,
+    "realized_pnl": 75.22
   },
   {
     "broker": "dhan",
@@ -7374,10 +7416,104 @@
       "34126111658509",
       "23126111660609"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-16T15:20:09.486196+05:30",
     "product": "MTF",
     "return_pct": 7.09,
+    "return_bucket": "5-10",
+    "target_order_id": "22126111737409",
+    "target_price": 5444.6,
+    "exit_price_1159": 4626.64,
+    "exit_order_id_1159": "321261117246409",
+    "exit_timestamp_1159": "2026-11-17T10:18:04.340871+05:30",
+    "realized_return_pct": -0.5771,
+    "realized_pnl": -886.18
+  },
+  {
+    "broker": "dhan",
+    "symbol": "FILATEX",
+    "entry_date": "2026-11-17",
+    "reference_price": 108.81,
+    "shares_intended": 1263,
+    "actual_fill_price": 108.7892,
+    "actual_fill_quantity": 1263,
+    "entry_order_id": [
+      "23126111761109",
+      "34126111758109",
+      "23126111761609",
+      "321261117591609",
+      "34126111758309",
+      "321261117592009",
+      "23126111761909",
+      "34126111758509",
+      "221261117611209",
+      "221261117611709",
+      "34126111758809",
+      "23126111762009",
+      "34126111759009"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-17T15:19:30.011787+05:30",
+    "product": "CNC",
+    "return_pct": 5.0,
     "return_bucket": "5-10"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KDDL",
+    "entry_date": "2026-11-17",
+    "reference_price": 4573.5,
+    "shares_intended": 60,
+    "actual_fill_price": 4588.26,
+    "actual_fill_quantity": 60,
+    "entry_order_id": [
+      "321261117591209",
+      "221261117608709",
+      "23126111761509",
+      "23126111761809",
+      "221261117609409",
+      "221261117609809",
+      "34126111758409",
+      "221261117610709",
+      "221261117611109",
+      "321261117593609",
+      "321261117593809",
+      "321261117594109"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-17T15:19:31.102939+05:30",
+    "product": "MTF",
+    "return_pct": 15.01,
+    "return_bucket": "15-20"
+  },
+  {
+    "broker": "dhan",
+    "symbol": "KMCSHIL",
+    "entry_date": "2026-11-17",
+    "reference_price": 194.15,
+    "shares_intended": 708,
+    "actual_fill_price": 194.9121,
+    "actual_fill_quantity": 708,
+    "entry_order_id": [
+      "23126111761209",
+      "34126111758209",
+      "23126111761409",
+      "23126111761709",
+      "321261117591809",
+      "321261117591909",
+      "321261117592609",
+      "34126111758609",
+      "34126111758709",
+      "221261117611609",
+      "321261117593909",
+      "34126111758909",
+      "221261117612609",
+      "321261117594309"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-17T15:19:31.833210+05:30",
+    "product": "CNC",
+    "return_pct": 15.84,
+    "return_bucket": "15-20"
   }
 ]
