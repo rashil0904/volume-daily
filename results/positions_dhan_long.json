@@ -7560,11 +7560,18 @@
       "321261118570909",
       "321261118571409"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-18T15:20:00.015691+05:30",
     "product": "MTF",
     "return_pct": 6.82,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "34126111911809",
+    "target_price": 135.02,
+    "exit_price_1159": 113.24,
+    "exit_order_id_1159": "321261119226909",
+    "exit_timestamp_1159": "2026-11-19T10:18:03.605344+05:30",
+    "realized_return_pct": -1.8739,
+    "realized_pnl": -3436.21
   },
   {
     "broker": "dhan",
@@ -7587,11 +7594,18 @@
       "34126111856509",
       "321261118570609"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-18T15:20:01.227821+05:30",
     "product": "MTF",
     "return_pct": 8.78,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "22126111937609",
+    "target_price": 7.53,
+    "exit_price_1159": 6.3,
+    "exit_order_id_1159": "321261119226809",
+    "exit_timestamp_1159": "2026-11-19T10:18:04.729967+05:30",
+    "realized_return_pct": -2.0522,
+    "realized_pnl": -3763.58
   },
   {
     "broker": "dhan",
@@ -7614,11 +7628,18 @@
       "221261118585709",
       "321261118570709"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-18T15:20:01.953894+05:30",
     "product": "MTF",
     "return_pct": 6.86,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111913709",
+    "target_price": 282.35,
+    "exit_price_1159": 233.5,
+    "exit_order_id_1159": "221261119230609",
+    "exit_timestamp_1159": "2026-11-19T10:18:05.398610+05:30",
+    "realized_return_pct": -3.2421,
+    "realized_pnl": -5930.52
   },
   {
     "broker": "dhan",
@@ -7644,11 +7665,18 @@
       "321261118571309",
       "34126111856709"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-18T15:20:03.001441+05:30",
     "product": "MTF",
     "return_pct": 8.64,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "23126111913609",
+    "target_price": 911.1,
+    "exit_price_1159": 764.3,
+    "exit_order_id_1159": "321261119227009",
+    "exit_timestamp_1159": "2026-11-19T10:18:06.074780+05:30",
+    "realized_return_pct": -1.8517,
+    "realized_pnl": -3374.21
   },
   {
     "broker": "dhan",
@@ -7674,11 +7702,18 @@
       "321261118571809",
       "221261118588309"
     ],
-    "status": "open",
+    "status": "exited_916",
     "entry_timestamp": "2026-11-18T15:20:06.041579+05:30",
     "product": "MTF",
     "return_pct": 6.48,
-    "return_bucket": "5-10"
+    "return_bucket": "5-10",
+    "target_order_id": "22126111937309",
+    "target_price": 797.6,
+    "exit_price_916": 687.35,
+    "exit_order_id_916": "22126111953109",
+    "exit_timestamp_916": "2026-11-19T09:16:02.999113+05:30",
+    "realized_return_pct": 0.8249,
+    "realized_pnl": 1507.15
   },
   {
     "broker": "dhan",
@@ -7702,10 +7737,45 @@
       "221261118586209",
       "23126111851409"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-18T15:20:06.755236+05:30",
     "product": "MTF",
     "return_pct": 14.29,
+    "return_bucket": "10-15",
+    "target_order_id": "34126111911909",
+    "target_price": 793.9,
+    "exit_price_1159": 659.32,
+    "exit_order_id_1159": "221261119353409",
+    "exit_timestamp_1159": "2026-11-19T11:59:03.053533+05:30",
+    "realized_return_pct": -2.8344,
+    "realized_pnl": -5212.09
+  },
+  {
+    "broker": "dhan",
+    "symbol": "GLOBUSSPR",
+    "entry_date": "2026-11-19",
+    "reference_price": 807.0,
+    "shares_intended": 340,
+    "actual_fill_price": 808.05,
+    "actual_fill_quantity": 340,
+    "entry_order_id": [
+      "23126111960709",
+      "34126111958209",
+      "221261119573209",
+      "221261119573509",
+      "221261119574009",
+      "34126111958809",
+      "221261119574609",
+      "321261119567609",
+      "23126111960909",
+      "23126111961009",
+      "221261119576009",
+      "34126111959209"
+    ],
+    "status": "open",
+    "entry_timestamp": "2026-11-19T15:19:10.008410+05:30",
+    "product": "MTF",
+    "return_pct": 14.23,
     "return_bucket": "10-15"
   }
 ]
