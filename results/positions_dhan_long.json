@@ -7772,10 +7772,17 @@
       "221261119576009",
       "34126111959209"
     ],
-    "status": "open",
+    "status": "exited_1159",
     "entry_timestamp": "2026-11-19T15:19:10.008410+05:30",
     "product": "MTF",
     "return_pct": 14.23,
-    "return_bucket": "10-15"
+    "return_bucket": "10-15",
+    "target_order_id": "34126112012909",
+    "target_price": 945.4,
+    "exit_price_1159": 785.12,
+    "exit_order_id_1159": "221261120395209",
+    "exit_timestamp_1159": "2026-11-20T11:59:02.792816+05:30",
+    "realized_return_pct": -2.8377,
+    "realized_pnl": -7796.2
   }
 ]
