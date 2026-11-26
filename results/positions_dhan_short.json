@@ -2867,5 +2867,29 @@
     "exit_timestamp_239": "2026-11-16T14:29:02.234508+05:30",
     "realized_return_pct": 2.2978,
     "realized_pnl": 5875.2
+  },
+  {
+    "broker": "dhan",
+    "symbol": "HUBTOWN",
+    "direction": "short",
+    "product": "INTRADAY",
+    "source_exit_stage": "1159",
+    "return_bucket": "10-15",
+    "entry_date": "2026-11-26",
+    "entry_price": 204.06,
+    "quantity": 1413,
+    "entry_order_id": "23126112638709",
+    "cover_target_order_id": "23126112638809",
+    "cover_target_price": 193.86,
+    "stop_order_id": "321261126360209",
+    "stop_trigger_price": 231.87,
+    "stop_limit_price": 233.04,
+    "status": "short_closed",
+    "entry_timestamp": "2026-11-26T11:59:05.338545+05:30",
+    "exit_price_239": 211.21,
+    "exit_order_id_239": "221261126524409",
+    "exit_timestamp_239": "2026-11-26T14:57:02.587718+05:30",
+    "realized_return_pct": -3.5039,
+    "realized_pnl": -10102.95
   }
 ]
